@@ -569,6 +569,14 @@ interface SavedWorkflowBlock {
   edges: SavedWorkflowBlockEdge[];
 }
 
+interface SavedWorkflowFile {
+  format: string;
+  version: number;
+  lastUpdated: string;
+  nodes: SavedWorkflowBlockNode[];
+  edges: SavedWorkflowBlockEdge[];
+}
+
 interface WorkflowGroupBoundary {
   wrapperPortId: string;
   nodeId: string;
@@ -591,6 +599,8 @@ interface WorkflowContextMenuState {
 }
 
 const workflowNodeTypes = { workflow: WorkflowNode };
+const savedWorkflowJsonFormat = "video-analysis.workflow";
+const savedWorkflowJsonVersion = 1;
 const savedWorkflowBlocksStorageKey = "video-analysis.workflowBlocks.v1";
 const savedWorkflowBlocksJsonFormat = "video-analysis.workflowBlocks";
 
@@ -833,6 +843,7 @@ function ComponentFlow() {
   const [blockName, setBlockName] = useState("");
   const [blockLibraryMessage, setBlockLibraryMessage] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<WorkflowContextMenuState | null>(null);
+  const workflowFileInputRef = useRef<HTMLInputElement | null>(null);
   const blockFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const isValidConnection = useCallback(
@@ -984,6 +995,33 @@ function ComponentFlow() {
       setBlockLibraryMessage(error instanceof Error ? error.message : "Could not load building blocks");
     }
   }, []);
+
+  const exportWorkflow = useCallback(() => {
+    downloadWorkflowJson(nodes, edges);
+    setBlockLibraryMessage(`Saved workflow with ${nodes.length} node${nodes.length === 1 ? "" : "s"}`);
+  }, [edges, nodes]);
+
+  const importWorkflow = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (!file) {
+        return;
+      }
+
+      try {
+        const workflow = parseWorkflowJson(await file.text());
+        setNodes(workflow.nodes);
+        setEdges(workflow.edges);
+        setSelectedNodeIds([]);
+        setContextMenu(null);
+        setBlockLibraryMessage(`Loaded workflow updated ${formatWorkflowTimestamp(workflow.lastUpdated)}`);
+      } catch (error) {
+        setBlockLibraryMessage(error instanceof Error ? error.message : "Could not load workflow");
+      }
+    },
+    [setEdges, setNodes],
+  );
 
   const contextNodes = useMemo(
     () => (contextMenu ? nodes.filter((node) => contextMenu.nodeIds.includes(node.id)) : []),
@@ -1140,6 +1178,29 @@ function ComponentFlow() {
             </div>
           </FlowPanel>
           <FlowPanel position="top-right" className="flex gap-2">
+            <button
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+              onClick={exportWorkflow}
+              title="Save workflow as JSON"
+            >
+              <SaveIcon className="h-4 w-4" />
+              Save Workflow
+            </button>
+            <button
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+              onClick={() => workflowFileInputRef.current?.click()}
+              title="Load workflow from JSON"
+            >
+              <UploadIcon className="h-4 w-4" />
+              Load Workflow
+            </button>
+            <input
+              ref={workflowFileInputRef}
+              className="hidden"
+              type="file"
+              accept="application/json,.json"
+              onChange={importWorkflow}
+            />
             <button
               className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
               onClick={() => {
@@ -1589,6 +1650,125 @@ function defaultWorkflowBlockName(nodes: WorkflowNodeModel[]): string {
   return `${firstNode.data.title} + ${nodes.length - 1} more`;
 }
 
+function downloadWorkflowJson(nodes: WorkflowNodeModel[], edges: Edge[]) {
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  const lastUpdated = new Date().toISOString();
+  const payload: SavedWorkflowFile = {
+    format: savedWorkflowJsonFormat,
+    version: savedWorkflowJsonVersion,
+    lastUpdated,
+    nodes: nodes.map(serializeWorkflowNode),
+    edges: edges.map(serializeWorkflowEdge),
+  };
+  const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `video-analysis-workflow-${fileDateStamp(lastUpdated)}.json`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function parseWorkflowJson(text: string): { lastUpdated: string; nodes: WorkflowNodeModel[]; edges: Edge[] } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("Invalid JSON file");
+  }
+
+  if (!isSavedWorkflowFile(parsed)) {
+    throw new Error("JSON does not match the workflow format");
+  }
+  if (parsed.format !== savedWorkflowJsonFormat) {
+    throw new Error("JSON is not a workflow file");
+  }
+  if (parsed.version !== savedWorkflowJsonVersion) {
+    throw new Error(`Unsupported workflow version ${parsed.version}`);
+  }
+
+  const nodes = parsed.nodes.map((node) => ({
+    id: node.id,
+    type: "workflow" as const,
+    position: { ...node.position },
+    data: cloneWorkflowNodeData(node.data),
+    selected: false,
+  }));
+  if (!hasUniqueWorkflowNodeIds(nodes)) {
+    throw new Error("Workflow contains duplicate node IDs");
+  }
+
+  const edges = parsed.edges.map((edge) => restoreSavedWorkflowEdge(edge, nodes));
+  if (edges.some((edge) => edge === null)) {
+    throw new Error("Workflow contains invalid connections");
+  }
+
+  return {
+    lastUpdated: parsed.lastUpdated,
+    nodes,
+    edges: dedupeEdges(edges.filter((edge): edge is Edge => edge !== null)),
+  };
+}
+
+function serializeWorkflowNode(node: WorkflowNodeModel): SavedWorkflowBlockNode {
+  return {
+    id: node.id,
+    position: { ...node.position },
+    data: cloneWorkflowNodeData(node.data),
+  };
+}
+
+function serializeWorkflowEdge(edge: Edge): SavedWorkflowBlockEdge {
+  return {
+    source: edge.source,
+    target: edge.target,
+    sourceHandle: edge.sourceHandle,
+    targetHandle: edge.targetHandle,
+  };
+}
+
+function restoreSavedWorkflowEdge(edge: SavedWorkflowBlockEdge, nodes: WorkflowNodeModel[]): Edge | null {
+  const sourcePort = findPort(nodes, edge.source, edge.sourceHandle, "out");
+  const targetPort = findPort(nodes, edge.target, edge.targetHandle, "in");
+  if (!sourcePort || !targetPort || sourcePort.type !== targetPort.type) {
+    return null;
+  }
+
+  return workflowEdgeFromConnection(
+    {
+      source: edge.source,
+      target: edge.target,
+      sourceHandle: edge.sourceHandle ?? null,
+      targetHandle: edge.targetHandle ?? null,
+    },
+    sourcePort.type,
+  );
+}
+
+function hasUniqueWorkflowNodeIds(nodes: WorkflowNodeModel[]): boolean {
+  const ids = new Set<string>();
+  for (const node of nodes) {
+    if (ids.has(node.id)) {
+      return false;
+    }
+    ids.add(node.id);
+  }
+  return true;
+}
+
+function formatWorkflowTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString();
+}
+
 function loadSavedWorkflowBlocks(): SavedWorkflowBlock[] {
   if (typeof window === "undefined") {
     return [];
@@ -1705,6 +1885,21 @@ function isSavedWorkflowBlock(value: unknown): value is SavedWorkflowBlock {
     typeof value.id === "string" &&
     typeof value.name === "string" &&
     typeof value.createdAt === "string" &&
+    Array.isArray(value.nodes) &&
+    value.nodes.every(isSavedWorkflowBlockNode) &&
+    Array.isArray(value.edges) &&
+    value.edges.every(isSavedWorkflowBlockEdge)
+  );
+}
+
+function isSavedWorkflowFile(value: unknown): value is SavedWorkflowFile {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.format === "string" &&
+    typeof value.version === "number" &&
+    typeof value.lastUpdated === "string" &&
     Array.isArray(value.nodes) &&
     value.nodes.every(isSavedWorkflowBlockNode) &&
     Array.isArray(value.edges) &&
