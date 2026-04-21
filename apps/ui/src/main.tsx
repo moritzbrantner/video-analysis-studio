@@ -11,6 +11,8 @@ import {
   ReactFlow,
   useEdgesState,
   useNodesState,
+  useReactFlow,
+  useUpdateNodeInternals,
   type Connection,
   type Edge,
   type Node,
@@ -544,6 +546,7 @@ interface WorkflowNodeData extends Record<string, unknown> {
   outputs: FlowPort[];
   kind?: "step" | "group";
   group?: WorkflowGroupMetadata;
+  minimized?: boolean;
 }
 
 type WorkflowNodeModel = Node<WorkflowNodeData, "workflow">;
@@ -950,6 +953,27 @@ function ComponentFlow() {
     [setEdges, setNodes],
   );
 
+  const setWorkflowNodesMinimized = useCallback(
+    (nodeIds: string[], minimized: boolean) => {
+      const ids = new Set(nodeIds);
+      setNodes((currentNodes) =>
+        currentNodes.map((node) =>
+          ids.has(node.id)
+            ? {
+                ...node,
+                data: {
+                  ...node.data,
+                  minimized,
+                },
+              }
+            : node,
+        ),
+      );
+      setContextMenu(null);
+    },
+    [setNodes],
+  );
+
   const addSavedBlock = useCallback(
     (block: SavedWorkflowBlock) => {
       const instance = instantiateSavedWorkflowBlock(block, nextBlockAnchor(nodes));
@@ -1028,6 +1052,7 @@ function ComponentFlow() {
     [contextMenu, nodes],
   );
   const contextGroupNode = contextNodes.length === 1 && contextNodes[0].data.group ? contextNodes[0] : null;
+  const contextNodesAllMinimized = contextNodes.length > 0 && contextNodes.every((node) => node.data.minimized);
 
   return (
     <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
@@ -1229,6 +1254,7 @@ function ComponentFlow() {
               canGroup={contextNodes.length >= 2}
               canSave={contextNodes.length >= 2}
               canUngroup={Boolean(contextGroupNode)}
+              minimizeLabel={contextNodesAllMinimized ? "Expand selected" : "Minimize selected"}
               onGroup={() => groupNodes(contextMenu.nodeIds)}
               onSave={() => saveNodesAsBlock(contextNodes)}
               onUngroup={() => {
@@ -1236,6 +1262,7 @@ function ComponentFlow() {
                   ungroupNode(contextGroupNode.id);
                 }
               }}
+              onToggleMinimized={() => setWorkflowNodesMinimized(contextMenu.nodeIds, !contextNodesAllMinimized)}
               onDelete={() => deleteWorkflowNodes(contextMenu.nodeIds)}
               onClose={() => setContextMenu(null)}
             />
@@ -1577,6 +1604,9 @@ function cloneWorkflowNodeData(data: WorkflowNodeData): WorkflowNodeData {
   }
   if (data.group) {
     cloned.group = cloneWorkflowGroupMetadata(data.group);
+  }
+  if (data.minimized) {
+    cloned.minimized = true;
   }
   return cloned;
 }
@@ -1935,6 +1965,7 @@ function isWorkflowNodeData(value: unknown): value is WorkflowNodeData {
   }
   const kindValid = value.kind === undefined || value.kind === "step" || value.kind === "group";
   const groupValid = value.group === undefined || isWorkflowGroupMetadata(value.group);
+  const minimizedValid = value.minimized === undefined || typeof value.minimized === "boolean";
   return (
     typeof value.title === "string" &&
     typeof value.packageName === "string" &&
@@ -1945,7 +1976,8 @@ function isWorkflowNodeData(value: unknown): value is WorkflowNodeData {
     Array.isArray(value.outputs) &&
     value.outputs.every(isFlowPort) &&
     kindValid &&
-    groupValid
+    groupValid &&
+    minimizedValid
   );
 }
 
@@ -2022,18 +2054,33 @@ function safeFlowId(value: string): string {
 
 function WorkflowNode({ id, data, selected, isConnectable }: NodeProps) {
   const nodeData = data as unknown as WorkflowNodeData;
+  const minimized = nodeData.minimized === true;
+  const { updateNodeData } = useReactFlow<WorkflowNodeModel, Edge>();
+  const updateNodeInternals = useUpdateNodeInternals();
+
+  useEffect(() => {
+    updateNodeInternals(id);
+  }, [id, minimized, nodeData.inputs.length, nodeData.outputs.length, updateNodeInternals]);
+
+  const toggleMinimized = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    updateNodeData(id, { minimized: !minimized });
+    requestAnimationFrame(() => updateNodeInternals(id));
+  };
+
   return (
     <div
       className={classNames(
-        "w-[310px] rounded-lg border bg-white text-left shadow-sm",
+        minimized ? "w-[230px]" : "w-[310px]",
+        "rounded-lg border bg-white text-left shadow-sm",
         nodeData.kind === "group" && "border-dashed",
         selected ? "border-zinc-950 ring-2 ring-zinc-950/10" : "border-zinc-200",
       )}
     >
-      <div className={classNames("border-b px-3 py-2", workflowHeaderClass(nodeData.tone))}>
+      <div className={classNames(!minimized && "border-b", "px-3 py-2", workflowHeaderClass(nodeData.tone))}>
         <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold text-zinc-950">{nodeData.title}</div>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-zinc-950">{nodeData.title}</div>
             <div className="mt-0.5 text-[11px] font-medium text-zinc-600">{nodeData.packageName}</div>
           </div>
           <div className="mt-0.5 flex shrink-0 items-center gap-2">
@@ -2043,27 +2090,105 @@ function WorkflowNode({ id, data, selected, isConnectable }: NodeProps) {
               </span>
             )}
             <span className={classNames("h-2.5 w-2.5 rounded-full", flowToneClass(nodeData.tone))} />
+            <button
+              type="button"
+              className="nodrag nopan inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-300 bg-white/80 text-zinc-700 hover:bg-white focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-1"
+              onClick={toggleMinimized}
+              title={minimized ? "Expand node" : "Minimize node"}
+              aria-label={minimized ? "Expand node" : "Minimize node"}
+            >
+              {minimized ? <ExpandIcon className="h-3.5 w-3.5" /> : <MinimizeIcon className="h-3.5 w-3.5" />}
+            </button>
           </div>
         </div>
-        <p className="mt-2 text-xs leading-5 text-zinc-600">{nodeData.description}</p>
+        {!minimized && <p className="mt-2 text-xs leading-5 text-zinc-600">{nodeData.description}</p>}
       </div>
-      <div className="grid grid-cols-2 gap-3 p-3">
-        <PortColumn
+      {minimized ? (
+        <MinimizedPortHandles
           nodeId={id}
-          title="Inputs"
-          direction="in"
-          ports={nodeData.inputs}
+          inputs={nodeData.inputs}
+          outputs={nodeData.outputs}
           isConnectable={isConnectable}
         />
-        <PortColumn
-          nodeId={id}
-          title="Outputs"
-          direction="out"
-          ports={nodeData.outputs}
-          isConnectable={isConnectable}
-        />
-      </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 p-3">
+          <PortColumn
+            nodeId={id}
+            title="Inputs"
+            direction="in"
+            ports={nodeData.inputs}
+            isConnectable={isConnectable}
+          />
+          <PortColumn
+            nodeId={id}
+            title="Outputs"
+            direction="out"
+            ports={nodeData.outputs}
+            isConnectable={isConnectable}
+          />
+        </div>
+      )}
     </div>
+  );
+}
+
+function MinimizedPortHandles({
+  nodeId,
+  inputs,
+  outputs,
+  isConnectable,
+}: {
+  nodeId: string;
+  inputs: FlowPort[];
+  outputs: FlowPort[];
+  isConnectable: boolean;
+}) {
+  const rowCount = Math.max(inputs.length, outputs.length, 1);
+  const height = Math.max(40, rowCount * 16 + 16);
+
+  return (
+    <div className="relative border-t border-zinc-100 bg-white" style={{ height }}>
+      <div className="pointer-events-none absolute inset-x-3 top-1/2 flex -translate-y-1/2 items-center justify-between text-[10px] font-semibold uppercase text-zinc-500">
+        <span>{inputs.length} in</span>
+        <span>{outputs.length} out</span>
+      </div>
+      <MinimizedPortHandleStack nodeId={nodeId} direction="in" ports={inputs} isConnectable={isConnectable} />
+      <MinimizedPortHandleStack nodeId={nodeId} direction="out" ports={outputs} isConnectable={isConnectable} />
+    </div>
+  );
+}
+
+function MinimizedPortHandleStack({
+  direction,
+  ports,
+  isConnectable,
+}: {
+  nodeId: string;
+  direction: PortDirection;
+  ports: FlowPort[];
+  isConnectable: boolean;
+}) {
+  const isInput = direction === "in";
+
+  return (
+    <>
+      {ports.map((port, index) => (
+        <Handle
+          key={`${direction}-${port.id}`}
+          type={isInput ? "target" : "source"}
+          position={isInput ? Position.Left : Position.Right}
+          id={handleId(direction, port)}
+          isConnectable={isConnectable}
+          className={classNames("!h-3 !w-3 !border-2 !border-white", flowToneClass(typeTone(port.type)))}
+          style={{
+            left: isInput ? -7 : undefined,
+            right: isInput ? undefined : -7,
+            top: `${((index + 1) / (ports.length + 1)) * 100}%`,
+          }}
+          title={`${port.label} ${formatPortType(port.type)}`}
+        />
+      ))}
+    </>
   );
 }
 
@@ -2144,9 +2269,11 @@ function WorkflowContextMenu({
   canGroup,
   canSave,
   canUngroup,
+  minimizeLabel,
   onGroup,
   onSave,
   onUngroup,
+  onToggleMinimized,
   onDelete,
   onClose,
 }: {
@@ -2156,9 +2283,11 @@ function WorkflowContextMenu({
   canGroup: boolean;
   canSave: boolean;
   canUngroup: boolean;
+  minimizeLabel: string;
   onGroup: () => void;
   onSave: () => void;
   onUngroup: () => void;
+  onToggleMinimized: () => void;
   onDelete: () => void;
   onClose: () => void;
 }) {
@@ -2177,6 +2306,9 @@ function WorkflowContextMenu({
       </ContextMenuButton>
       <ContextMenuButton icon={<SaveIcon className="h-4 w-4" />} disabled={!canSave} onClick={onSave}>
         Save as block
+      </ContextMenuButton>
+      <ContextMenuButton icon={<MinimizeIcon className="h-4 w-4" />} onClick={onToggleMinimized}>
+        {minimizeLabel}
       </ContextMenuButton>
       <ContextMenuButton icon={<UngroupIcon className="h-4 w-4" />} disabled={!canUngroup} onClick={onUngroup}>
         Ungroup
@@ -2935,6 +3067,25 @@ function UngroupIcon({ className }: { className?: string }) {
       <path d="M8.5 12.5h2" strokeLinecap="round" />
       <path d="M10.5 5.5 13 3" strokeLinecap="round" />
       <path d="m10.5 14.5 2.5 2.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function MinimizeIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className={className}>
+      <rect x="4" y="5" width="12" height="10" rx="1.5" />
+      <path d="M7 10h6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ExpandIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className={className}>
+      <rect x="4" y="5" width="12" height="10" rx="1.5" />
+      <path d="M7 8h6" strokeLinecap="round" />
+      <path d="M7 12h6" strokeLinecap="round" />
     </svg>
   );
 }
