@@ -41,12 +41,9 @@ import "@xyflow/react/dist/style.css";
 import { sampleReport } from "./sampleReport";
 import {
   ResultPageEditor,
-  addDashboardWidgetForDataKind,
-  dashboardDataKindsForWidgets,
   defaultDashboardLayout,
   type DashboardLayout,
 } from "./ResultPageEditor";
-import { WorkflowExecutionEditor } from "./WorkflowExecutionEditor";
 import {
   getWorkflowClient,
   waitForRunCompletion,
@@ -58,7 +55,7 @@ import {
 
 type UseCaseId = "youtube-video";
 type SourceMode = "url" | "file";
-type ViewMode = "overview" | "run" | "workflow" | "flow" | "result" | "scenes" | "signals" | "data";
+type ViewMode = "overview" | "run" | "flow" | "result" | "scenes" | "signals" | "data";
 
 interface UseCaseForm {
   sourceMode: SourceMode;
@@ -124,7 +121,6 @@ function App() {
   );
 
   const command = useMemo(() => buildCommand(form), [form]);
-  const dashboardDataKinds = useMemo(() => dashboardDataKindsForWidgets(dashboardLayout), [dashboardLayout]);
   const activeWorkflow = useMemo(() => activeSavedWorkflow(workflowLibrary), [workflowLibrary]);
   const validationMessage = getRunValidation(form);
   const cliRun: CliRun =
@@ -179,6 +175,14 @@ function App() {
     setViewMode("flow");
   }, [commitWorkflowLibrary, workflowLibrary]);
 
+  const startNewWorkflowRun = useCallback(() => {
+    setForm(initialForm);
+    setRunStatus("pending");
+    setLastRun(null);
+    setRunOutput({});
+    setViewMode("run");
+  }, []);
+
   const deleteWorkflowDefinition = useCallback(
     (workflowId: string) => {
       const workflow = workflowLibrary.workflows.find((candidate) => candidate.id === workflowId);
@@ -227,6 +231,18 @@ function App() {
       });
     },
     [],
+  );
+
+  const openWorkflowRun = useCallback(
+    (run: SavedWorkflowRun) => {
+      activateWorkflowDefinition(run.workflowId);
+      setForm(formFromYoutubeRunRequest(run.request));
+      setRunStatus(run.status);
+      setLastRun(workflowRunToCliRun(run));
+      setRunOutput({});
+      setViewMode("run");
+    },
+    [activateWorkflowDefinition],
   );
 
   async function runAnalysis() {
@@ -404,7 +420,7 @@ function App() {
                         <span className="min-w-0">
                           <span className="block truncate text-xs font-semibold">{workflow.name}</span>
                           <span className="block text-[10px] opacity-70">
-                            {workflow.nodes.length} components, {workflow.edges.length} connections
+                            v{workflow.version} · {workflow.nodes.length} components, {workflow.edges.length} connections
                           </span>
                         </span>
                       )}
@@ -430,7 +446,18 @@ function App() {
               </div>
             </div>
             <div className="space-y-3">
-              {!mainSidebarCollapsed && <div className="text-xs font-semibold uppercase text-zinc-500">Runs</div>}
+              <div className={classNames("flex items-center justify-between gap-2", mainSidebarCollapsed && "justify-center")}>
+                {!mainSidebarCollapsed && <div className="text-xs font-semibold uppercase text-zinc-500">Runs</div>}
+                <button
+                  type="button"
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50"
+                  onClick={startNewWorkflowRun}
+                  title="Create run"
+                  aria-label="Create run"
+                >
+                  <PlusIcon className="h-4 w-4" />
+                </button>
+              </div>
               <div className="space-y-1">
                 {workflowRuns.length === 0 ? (
                   !mainSidebarCollapsed && (
@@ -448,8 +475,7 @@ function App() {
                         mainSidebarCollapsed && "h-10 justify-center px-0 py-0",
                       )}
                       onClick={() => {
-                        activateWorkflowDefinition(run.workflowId);
-                        setViewMode("run");
+                        openWorkflowRun(run);
                       }}
                       title={`${run.workflowName}: ${run.inputSummary}`}
                       aria-label={`${run.workflowName} run ${run.status}`}
@@ -459,7 +485,7 @@ function App() {
                         <span className="min-w-0">
                           <span className="block truncate text-xs font-semibold">{run.workflowName}</span>
                           <span className="block truncate text-[10px] text-zinc-500">
-                            {run.status} · {run.inputSummary}
+                            {run.status} · {run.workflowVersion ? `v${run.workflowVersion} · ` : ""}{run.inputSummary}
                           </span>
                         </span>
                       )}
@@ -523,8 +549,7 @@ function App() {
                 value={viewMode}
                 options={[
                   ["overview", "Overview"],
-                  ["run", "Run"],
-                  ["workflow", "Workflow"],
+                  ["run", "New Run"],
                   ["flow", "Builder"],
                   ["result", "Result"],
                   ["scenes", "Scenes"],
@@ -573,27 +598,16 @@ function App() {
               />
             ) : (
               <section className="min-w-0 space-y-4">
-              {viewMode === "overview" && <Overview report={report} />}
-              {viewMode === "workflow" && (
-                <WorkflowExecutionEditor
-                  form={form}
-                  report={report}
-                  workflowName={activeWorkflow.name}
-                  visualizedDataKinds={dashboardDataKinds}
-                  onVisualizeDataKind={(dataKind) =>
-                    addDashboardWidgetForDataKind(dataKind, dashboardLayout, setDashboardLayout)
-                  }
-                />
-              )}
-              {viewMode === "flow" && (
-                <WorkflowBuilder workflowLibrary={workflowLibrary} onWorkflowLibraryChange={setWorkflowLibrary} />
-              )}
-              {viewMode === "result" && (
-                <ResultPageEditor report={report} layout={dashboardLayout} onLayoutChange={setDashboardLayout} />
-              )}
-              {viewMode === "scenes" && <Scenes report={report} />}
-              {viewMode === "signals" && <Signals report={report} />}
-              {viewMode === "data" && <Data report={report} />}
+                {viewMode === "overview" && <Overview report={report} />}
+                {viewMode === "flow" && (
+                  <WorkflowBuilder workflowLibrary={workflowLibrary} onWorkflowLibraryChange={setWorkflowLibrary} />
+                )}
+                {viewMode === "result" && (
+                  <ResultPageEditor report={report} layout={dashboardLayout} onLayoutChange={setDashboardLayout} />
+                )}
+                {viewMode === "scenes" && <Scenes report={report} />}
+                {viewMode === "signals" && <Signals report={report} />}
+                {viewMode === "data" && <Data report={report} />}
               </section>
             )}
           </div>
@@ -678,6 +692,17 @@ function RunWorkspace({
   return (
     <div className="grid gap-4 xl:grid-cols-[420px_1fr]">
       <section className="space-y-4">
+        <section className="rounded-lg border border-zinc-200 bg-white px-4 py-3 shadow-sm">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-zinc-950 text-white">
+              <RunIcon className="h-4 w-4" />
+            </span>
+            <div>
+              <h2 className="text-sm font-semibold text-zinc-950">New Run</h2>
+              <p className="mt-1 text-xs text-zinc-500">{activeWorkflow.name}</p>
+            </div>
+          </div>
+        </section>
         <RunWorkflowPicker
           workflowLibrary={workflowLibrary}
           activeWorkflow={activeWorkflow}
@@ -729,7 +754,7 @@ function RunWorkflowPicker({
             title="Create workflow"
           >
             <PlusIcon className="h-4 w-4" />
-            New
+            New Workflow
           </button>
           <button
             type="button"
@@ -757,8 +782,8 @@ function RunWorkflowPicker({
           </select>
         </Field>
         <div className="grid grid-cols-2 gap-2 text-xs text-zinc-600">
+          <Metric label="Version" value={`v${activeWorkflow.version}`} />
           <Metric label="Components" value={String(activeWorkflow.nodes.length)} />
-          <Metric label="Connections" value={String(activeWorkflow.edges.length)} />
         </div>
       </div>
     </section>
@@ -905,6 +930,17 @@ interface SavedWorkflowFile {
   format: string;
   version: number;
   lastUpdated: string;
+  workflowName?: string;
+  workflowVersion?: number;
+  nodes: SavedWorkflowBlockNode[];
+  edges: SavedWorkflowBlockEdge[];
+}
+
+interface SavedWorkflowVersion {
+  id: string;
+  version: number;
+  name: string;
+  createdAt: string;
   nodes: SavedWorkflowBlockNode[];
   edges: SavedWorkflowBlockEdge[];
 }
@@ -914,6 +950,8 @@ interface SavedWorkflow {
   name: string;
   createdAt: string;
   updatedAt: string;
+  version: number;
+  versions: SavedWorkflowVersion[];
   nodes: SavedWorkflowBlockNode[];
   edges: SavedWorkflowBlockEdge[];
 }
@@ -922,6 +960,7 @@ interface SavedWorkflowRun {
   id: string;
   workflowId: string;
   workflowName: string;
+  workflowVersion?: number;
   createdAt: string;
   updatedAt: string;
   status: RunStatus;
@@ -970,6 +1009,9 @@ const savedWorkflowRunsStorageKey = "video-analysis.workflowRuns.v1";
 const savedWorkflowBlocksStorageKey = "video-analysis.workflowBlocks.v1";
 const savedWorkflowBlocksJsonFormat = "video-analysis.workflowBlocks";
 const flowPanelCollapsedStorageKey = "video-analysis.flowPanelCollapsed.v1";
+const defaultSeedWorkflowName = "Default Analysis Pipeline";
+const legacySeedWorkflowName = "YouTube Analysis Workflow";
+const maxSavedWorkflowVersions = 25;
 
 const initialWorkflowNodes: WorkflowNodeModel[] = [
   workflowNode("react-page", 0, 180, {
@@ -1425,6 +1467,62 @@ function WorkflowBuilder({
     renameWorkflow(activeWorkflow.id, workflowNameDraft);
   }, [activeWorkflow.id, renameWorkflow, workflowNameDraft]);
 
+  const saveActiveWorkflowVersion = useCallback(() => {
+    const name = workflowNameDraft.trim() || activeWorkflow.name || "Untitled Workflow";
+    const version = createSavedWorkflowVersion(activeWorkflow, name, nodes, edges);
+    const nextLibrary: SavedWorkflowLibrary = {
+      ...workflowLibrary,
+      workflows: workflowLibrary.workflows.map((workflow) =>
+        workflow.id === activeWorkflow.id
+          ? {
+              ...workflow,
+              name,
+              updatedAt: version.createdAt,
+              version: version.version,
+              nodes: version.nodes,
+              edges: version.edges,
+              versions: [version, ...(Array.isArray(workflow.versions) ? workflow.versions : [])].slice(0, maxSavedWorkflowVersions),
+            }
+          : workflow,
+      ),
+    };
+    commitWorkflowLibrary(nextLibrary);
+    setWorkflowNameDraft(name);
+    setBlockLibraryMessage(`Saved ${name} v${version.version}`);
+  }, [activeWorkflow, commitWorkflowLibrary, edges, nodes, workflowLibrary, workflowNameDraft]);
+
+  const restoreWorkflowVersion = useCallback(
+    (version: SavedWorkflowVersion) => {
+      const restoredWorkflow: SavedWorkflow = {
+        ...activeWorkflow,
+        name: version.name,
+        updatedAt: new Date().toISOString(),
+        nodes: version.nodes.map((node) => ({
+          id: node.id,
+          position: { ...node.position },
+          data: cloneWorkflowNodeData(node.data),
+        })),
+        edges: version.edges.map((edge) => ({ ...edge })),
+      };
+      const nextLibrary: SavedWorkflowLibrary = {
+        ...workflowLibrary,
+        workflows: workflowLibrary.workflows.map((workflow) =>
+          workflow.id === activeWorkflow.id ? restoredWorkflow : workflow,
+        ),
+      };
+      const nextState = workflowStateFromSavedWorkflow(restoredWorkflow);
+      commitWorkflowLibrary(nextLibrary);
+      workflowSelectionLoadingRef.current = true;
+      setNodes(nextState.nodes);
+      setEdges(nextState.edges);
+      setSelectedNodeIds([]);
+      setContextMenu(null);
+      setWorkflowNameDraft(version.name);
+      setBlockLibraryMessage(`Restored ${version.name} v${version.version}`);
+    },
+    [activeWorkflow, commitWorkflowLibrary, setEdges, setNodes, workflowLibrary],
+  );
+
   const saveNodesAsBlock = useCallback((nodesToSave: WorkflowNodeModel[]) => {
     const block = createSavedWorkflowBlock(nodesToSave, edges, blockName);
     if (!block) {
@@ -1581,9 +1679,9 @@ function WorkflowBuilder({
   }, []);
 
   const exportWorkflow = useCallback(() => {
-    downloadWorkflowJson(nodes, edges);
-    setBlockLibraryMessage(`Saved workflow with ${nodes.length} component${nodes.length === 1 ? "" : "s"}`);
-  }, [edges, nodes]);
+    downloadWorkflowJson(activeWorkflow, nodes, edges);
+    setBlockLibraryMessage(`Exported workflow with ${nodes.length} component${nodes.length === 1 ? "" : "s"}`);
+  }, [activeWorkflow, edges, nodes]);
 
   const importWorkflow = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1737,10 +1835,56 @@ function WorkflowBuilder({
                   >
                     <span className="min-w-0 truncate font-semibold">{workflow.name}</span>
                     <span className="shrink-0 text-[10px] opacity-70">
-                      {workflow.nodes.length} / {workflow.edges.length}
+                      v{workflow.version} · {workflow.nodes.length} / {workflow.edges.length}
                     </span>
                   </button>
                 ))}
+              </div>
+
+              <div className="mt-4 border-t border-zinc-200 pt-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-xs font-semibold uppercase text-zinc-500">Versions</div>
+                  <span className="shrink-0 rounded bg-zinc-100 px-2 py-1 text-[11px] font-medium text-zinc-600">
+                    {activeWorkflow.versions.length} saved
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="mt-2 inline-flex h-8 w-full items-center justify-center gap-2 rounded-md bg-zinc-950 px-3 text-xs font-medium text-white shadow-sm hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-2"
+                  onClick={saveActiveWorkflowVersion}
+                  title="Save workflow version"
+                >
+                  <SaveIcon className="h-4 w-4" />
+                  Save Version
+                </button>
+                <div className="mt-2 max-h-36 space-y-1 overflow-auto pr-1">
+                  {activeWorkflow.versions.length === 0 ? (
+                    <div className="rounded-md border border-dashed border-zinc-200 px-3 py-2 text-xs text-zinc-400">
+                      No saved versions
+                    </div>
+                  ) : (
+                    activeWorkflow.versions.map((version) => (
+                      <div key={version.id} className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-xs font-semibold text-zinc-900">v{version.version}</div>
+                            <div className="mt-1 truncate text-[11px] text-zinc-500">
+                              {formatWorkflowTimestamp(version.createdAt)}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="inline-flex h-7 shrink-0 items-center justify-center rounded-md border border-zinc-300 bg-white px-2 text-[11px] font-medium text-zinc-700 hover:bg-zinc-100"
+                            onClick={() => restoreWorkflowVersion(version)}
+                            title={`Restore ${version.name} v${version.version}`}
+                          >
+                            Restore
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
 
               <div className="mt-4 border-t border-zinc-200 pt-3">
@@ -1881,12 +2025,20 @@ function WorkflowBuilder({
           )}
           <FlowPanel position="top-right" className="flex gap-2">
             <button
-              className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
-              onClick={exportWorkflow}
-              title="Save workflow as JSON"
+              className="inline-flex h-9 items-center gap-2 rounded-lg bg-zinc-950 px-3 text-xs font-medium text-white shadow-sm hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-2"
+              onClick={saveActiveWorkflowVersion}
+              title="Save workflow version"
             >
               <SaveIcon className="h-4 w-4" />
-              Save Workflow
+              Save Version
+            </button>
+            <button
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+              onClick={exportWorkflow}
+              title="Export workflow as JSON"
+            >
+              <DownloadIcon className="h-4 w-4" />
+              Export
             </button>
             <button
               className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
@@ -1894,7 +2046,7 @@ function WorkflowBuilder({
               title="Load workflow from JSON"
             >
               <UploadIcon className="h-4 w-4" />
-              Load Workflow
+              Load
             </button>
             <input
               ref={workflowFileInputRef}
@@ -2362,7 +2514,7 @@ function defaultWorkflowBlockName(nodes: WorkflowNodeModel[]): string {
   return `${firstNode.data.title} + ${nodes.length - 1} more`;
 }
 
-function downloadWorkflowJson(nodes: WorkflowNodeModel[], edges: Edge[]) {
+function downloadWorkflowJson(workflow: SavedWorkflow, nodes: WorkflowNodeModel[], edges: Edge[]) {
   if (typeof document === "undefined") {
     return;
   }
@@ -2372,6 +2524,8 @@ function downloadWorkflowJson(nodes: WorkflowNodeModel[], edges: Edge[]) {
     format: savedWorkflowJsonFormat,
     version: savedWorkflowJsonVersion,
     lastUpdated,
+    workflowName: workflow.name,
+    workflowVersion: workflow.version,
     nodes: nodes.map(serializeWorkflowNode),
     edges: edges.map(serializeWorkflowEdge),
   };
@@ -2379,7 +2533,7 @@ function downloadWorkflowJson(nodes: WorkflowNodeModel[], edges: Edge[]) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `video-analysis-workflow-${fileDateStamp(lastUpdated)}.json`;
+  link.download = `video-analysis-workflow-${safeFlowId(workflow.name).toLowerCase()}-v${workflow.version}-${fileDateStamp(lastUpdated)}.json`;
   document.body.append(link);
   link.click();
   link.remove();
@@ -2500,7 +2654,7 @@ function loadSavedWorkflowLibrary(): SavedWorkflowLibrary {
       return fallback;
     }
 
-    const workflows = parsed.workflows.filter(savedWorkflowHasValidGraph);
+    const workflows = parsed.workflows.filter(savedWorkflowHasValidGraph).map(normalizeSavedWorkflow);
     if (workflows.length === 0) {
       persistSavedWorkflowLibrary(fallback);
       return fallback;
@@ -2509,12 +2663,14 @@ function loadSavedWorkflowLibrary(): SavedWorkflowLibrary {
     const activeWorkflowId = workflows.some((workflow) => workflow.id === parsed.activeWorkflowId)
       ? parsed.activeWorkflowId
       : workflows[0].id;
-    return {
+    const library: SavedWorkflowLibrary = {
       format: savedWorkflowsJsonFormat,
       version: savedWorkflowsJsonVersion,
       activeWorkflowId,
       workflows,
     };
+    persistSavedWorkflowLibrary(library);
+    return library;
   } catch {
     persistSavedWorkflowLibrary(fallback);
     return fallback;
@@ -2529,7 +2685,7 @@ function persistSavedWorkflowLibrary(library: SavedWorkflowLibrary) {
 }
 
 function seedSavedWorkflowLibrary(): SavedWorkflowLibrary {
-  const workflow = createSavedWorkflow("YouTube Analysis Workflow", initialWorkflowNodes, initialWorkflowEdges);
+  const workflow = createSavedWorkflow(defaultSeedWorkflowName, initialWorkflowNodes, initialWorkflowEdges);
   return {
     format: savedWorkflowsJsonFormat,
     version: savedWorkflowsJsonVersion,
@@ -2538,16 +2694,86 @@ function seedSavedWorkflowLibrary(): SavedWorkflowLibrary {
   };
 }
 
+function normalizeSavedWorkflow(workflow: SavedWorkflow): SavedWorkflow {
+  const name = workflow.name === legacySeedWorkflowName ? defaultSeedWorkflowName : workflow.name;
+  const savedVersions = Array.isArray(workflow.versions) ? workflow.versions : [];
+  const currentVersion = typeof workflow.version === "number" ? workflow.version : 1;
+  const version = Math.max(
+    1,
+    currentVersion,
+    ...savedVersions.map((savedVersion) => savedVersion.version),
+  );
+  const validVersions = savedVersions
+    .filter(savedWorkflowVersionHasValidGraph)
+    .sort((a, b) => b.version - a.version)
+    .slice(0, maxSavedWorkflowVersions);
+  const versions =
+    validVersions.length > 0
+      ? validVersions
+      : [
+          {
+            id: createWorkflowVersionId(),
+            version,
+            name,
+            createdAt: workflow.updatedAt,
+            nodes: workflow.nodes.map((node) => ({
+              id: node.id,
+              position: { ...node.position },
+              data: cloneWorkflowNodeData(node.data),
+            })),
+            edges: workflow.edges.map((edge) => ({ ...edge })),
+          },
+        ];
+  return {
+    ...workflow,
+    name,
+    version: Math.max(version, ...versions.map((savedVersion) => savedVersion.version)),
+    versions,
+    updatedAt: workflow.name === legacySeedWorkflowName ? new Date().toISOString() : workflow.updatedAt,
+  };
+}
+
 function createSavedWorkflow(name: string, nodes: WorkflowNodeModel[], edges: Edge[]): SavedWorkflow {
   const createdAt = new Date().toISOString();
-  return {
+  const workflow: SavedWorkflow = {
     id: createWorkflowId(),
     name,
     createdAt,
     updatedAt: createdAt,
+    version: 1,
+    versions: [],
     nodes: nodes.map(serializeWorkflowNode),
     edges: edges.map(serializeWorkflowEdge),
   };
+  const version = createSavedWorkflowVersion(workflow, name, nodes, edges, 1, createdAt);
+  return {
+    ...workflow,
+    versions: [version],
+  };
+}
+
+function createSavedWorkflowVersion(
+  workflow: SavedWorkflow,
+  name: string,
+  nodes: WorkflowNodeModel[],
+  edges: Edge[],
+  versionNumber = nextSavedWorkflowVersionNumber(workflow),
+  createdAt = new Date().toISOString(),
+): SavedWorkflowVersion {
+  return {
+    id: createWorkflowVersionId(),
+    version: versionNumber,
+    name,
+    createdAt,
+    nodes: nodes.map(serializeWorkflowNode),
+    edges: edges.map(serializeWorkflowEdge),
+  };
+}
+
+function nextSavedWorkflowVersionNumber(workflow: SavedWorkflow): number {
+  const savedVersions = Array.isArray(workflow.versions) ? workflow.versions : [];
+  const currentVersion = typeof workflow.version === "number" ? workflow.version : 0;
+  return Math.max(0, currentVersion, ...savedVersions.map((version) => version.version)) + 1;
 }
 
 function createBlankSavedWorkflow(name = "Untitled Workflow"): SavedWorkflow {
@@ -2581,6 +2807,17 @@ function savedWorkflowHasValidGraph(workflow: SavedWorkflow): boolean {
     selected: false,
   }));
   return hasUniqueWorkflowNodeIds(nodes) && workflow.edges.every((edge) => restoreSavedWorkflowEdge(edge, nodes) !== null);
+}
+
+function savedWorkflowVersionHasValidGraph(version: SavedWorkflowVersion): boolean {
+  const nodes = version.nodes.map((node) => ({
+    id: node.id,
+    type: "workflow" as const,
+    position: { ...node.position },
+    data: cloneWorkflowNodeData(node.data),
+    selected: false,
+  }));
+  return hasUniqueWorkflowNodeIds(nodes) && version.edges.every((edge) => restoreSavedWorkflowEdge(edge, nodes) !== null);
 }
 
 function loadSavedWorkflowRuns(): SavedWorkflowRun[] {
@@ -2619,6 +2856,7 @@ function createSavedWorkflowRun(
     id: createWorkflowRunId(),
     workflowId: workflow.id,
     workflowName: workflow.name,
+    workflowVersion: workflow.version,
     createdAt,
     updatedAt: createdAt,
     status: "running",
@@ -2766,11 +3004,33 @@ function isSavedWorkflow(value: unknown): value is SavedWorkflow {
   if (!isRecord(value)) {
     return false;
   }
+  const versionValid = value.version === undefined || typeof value.version === "number";
+  const versionsValid =
+    value.versions === undefined ||
+    (Array.isArray(value.versions) && value.versions.every(isSavedWorkflowVersion));
   return (
     typeof value.id === "string" &&
     typeof value.name === "string" &&
     typeof value.createdAt === "string" &&
     typeof value.updatedAt === "string" &&
+    versionValid &&
+    versionsValid &&
+    Array.isArray(value.nodes) &&
+    value.nodes.every(isSavedWorkflowBlockNode) &&
+    Array.isArray(value.edges) &&
+    value.edges.every(isSavedWorkflowBlockEdge)
+  );
+}
+
+function isSavedWorkflowVersion(value: unknown): value is SavedWorkflowVersion {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.id === "string" &&
+    typeof value.version === "number" &&
+    typeof value.name === "string" &&
+    typeof value.createdAt === "string" &&
     Array.isArray(value.nodes) &&
     value.nodes.every(isSavedWorkflowBlockNode) &&
     Array.isArray(value.edges) &&
@@ -2785,10 +3045,12 @@ function isSavedWorkflowRun(value: unknown): value is SavedWorkflowRun {
   const backendRunIdValid = value.backendRunId === undefined || typeof value.backendRunId === "string";
   const reportPathValid = value.reportPath === undefined || typeof value.reportPath === "string";
   const messageValid = value.message === undefined || value.message === null || typeof value.message === "string";
+  const workflowVersionValid = value.workflowVersion === undefined || typeof value.workflowVersion === "number";
   return (
     typeof value.id === "string" &&
     typeof value.workflowId === "string" &&
     typeof value.workflowName === "string" &&
+    workflowVersionValid &&
     typeof value.createdAt === "string" &&
     typeof value.updatedAt === "string" &&
     isRunStatus(value.status) &&
@@ -2821,6 +3083,8 @@ function isSavedWorkflowFile(value: unknown): value is SavedWorkflowFile {
     typeof value.format === "string" &&
     typeof value.version === "number" &&
     typeof value.lastUpdated === "string" &&
+    (value.workflowName === undefined || typeof value.workflowName === "string") &&
+    (value.workflowVersion === undefined || typeof value.workflowVersion === "number") &&
     Array.isArray(value.nodes) &&
     value.nodes.every(isSavedWorkflowBlockNode) &&
     Array.isArray(value.edges) &&
@@ -2966,6 +3230,13 @@ function createWorkflowId(): string {
     return `workflow-${crypto.randomUUID()}`;
   }
   return `workflow-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function createWorkflowVersionId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `workflow-version-${crypto.randomUUID()}`;
+  }
+  return `workflow-version-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
 function createWorkflowRunId(): string {
@@ -3558,7 +3829,7 @@ function UseCaseControls({
   return (
     <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
       <div className="border-b border-zinc-200 px-4 py-3">
-        <h2 className="text-sm font-semibold text-zinc-950">Input</h2>
+        <h2 className="text-sm font-semibold text-zinc-950">Run Input</h2>
       </div>
       <div className="space-y-4 p-4">
         <SegmentedControl<SourceMode>
@@ -3669,7 +3940,7 @@ function UseCaseControls({
           disabled={runDisabled}
         >
           {isRunning ? <SpinnerIcon className="h-4 w-4" /> : <PlayIcon className="h-4 w-4" />}
-          {isRunning ? "Running workflow" : "Run workflow"}
+          {isRunning ? "Creating run" : "Create run"}
         </button>
         {validationMessage && <p className="text-sm text-amber-700">{validationMessage}</p>}
       </div>
@@ -3837,6 +4108,24 @@ function buildYoutubeRunRequest(form: UseCaseForm): YoutubeRunRequest {
   };
 }
 
+function formFromYoutubeRunRequest(request: YoutubeRunRequest): UseCaseForm {
+  return {
+    ...initialForm,
+    sourceMode: request.source.kind === "youtube_url" ? "url" : "file",
+    url: request.source.kind === "youtube_url" ? request.source.url : "",
+    input: request.source.kind === "local_file" ? request.source.path : initialForm.input,
+    workDir: request.work_dir ?? initialForm.workDir,
+    sceneThreshold: request.scene_threshold,
+    minSceneLen: request.min_scene_len,
+    maxFrames: request.max_frames ? String(request.max_frames) : "",
+    visualSampleEvery: request.visual_sample_every,
+    skipTranscription: !request.transcription.enabled,
+    objectCommand: commandConfigToInput(request.models.object),
+    ocrCommand: commandConfigToInput(request.models.ocr),
+    textCommand: commandConfigToInput(request.models.text),
+  };
+}
+
 function workflowInputSummaryFromForm(form: UseCaseForm): string {
   if (form.sourceMode === "url") {
     return form.url.trim() || "YouTube URL";
@@ -3849,6 +4138,13 @@ function commandConfig(command: string) {
   return trimmed ? { command: trimmed, args: [] } : null;
 }
 
+function commandConfigToInput(config: YoutubeRunRequest["models"]["object"]): string {
+  if (!config) {
+    return "";
+  }
+  return [config.command, ...config.args].filter(Boolean).join(" ");
+}
+
 function runRecordToCliRun(run: RunRecord, clientLabel: string, workflowName: string): CliRun {
   return {
     command: clientLabel,
@@ -3858,6 +4154,21 @@ function runRecordToCliRun(run: RunRecord, clientLabel: string, workflowName: st
     output_files: [run.report_path],
     message: run.message,
   };
+}
+
+function workflowRunToCliRun(run: SavedWorkflowRun): CliRun {
+  return {
+    command: "studio-api",
+    args: [run.workflowName, run.backendRunId ?? run.id],
+    status: run.status,
+    exit_code: run.status === "succeeded" ? 0 : run.status === "failed" ? 1 : null,
+    output_files: [run.reportPath ?? reportPathForRequest(run.request)],
+    message: run.message ?? null,
+  };
+}
+
+function reportPathForRequest(request: YoutubeRunRequest): string {
+  return request.work_dir ? `${request.work_dir.replace(/\/$/, "")}/analysis.json` : initialForm.output;
 }
 
 function downloadReport(report: YoutubeVideoReport) {
