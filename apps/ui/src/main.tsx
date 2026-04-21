@@ -6,6 +6,7 @@ import {
   Controls,
   Handle,
   MarkerType,
+  NodeResizer,
   Panel as FlowPanel,
   Position,
   ReactFlow,
@@ -124,6 +125,7 @@ function App() {
   const [workflowLibrary, setWorkflowLibrary] = useState<SavedWorkflowLibrary>(loadSavedWorkflowLibrary);
   const [workflowRuns, setWorkflowRuns] = useState<SavedWorkflowRun[]>(loadSavedWorkflowRuns);
   const [portTypeColors, setPortTypeColors] = useState<PortTypeColors>(loadPortTypeColors);
+  const [hotkeyBindings, setHotkeyBindings] = useState<HotkeyBindings>(loadHotkeyBindings);
   const [mainSidebarCollapsed, setMainSidebarCollapsed] = useState(() =>
     loadStoredBoolean(mainSidebarCollapsedStorageKey, false),
   );
@@ -154,6 +156,10 @@ function App() {
   useEffect(() => {
     persistPortTypeColors(portTypeColors);
   }, [portTypeColors]);
+
+  useEffect(() => {
+    persistHotkeyBindings(hotkeyBindings);
+  }, [hotkeyBindings]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -448,7 +454,7 @@ function App() {
                 {!mainSidebarCollapsed && (
                   <span>
                     <span className="block text-sm font-medium">Settings</span>
-                    <span className="block text-xs opacity-70">Type colors</span>
+                    <span className="block text-xs opacity-70">Hotkeys and colors</span>
                   </span>
                 )}
                 <SettingsIcon className="h-4 w-4 shrink-0" />
@@ -627,7 +633,7 @@ function App() {
                     {page === "workflow"
                       ? activeWorkflow.name
                       : page === "settings"
-                        ? "Workflow type colors"
+                        ? "Hotkeys and workflow type colors"
                         : report.source.local_video}
                   </p>
                 </div>
@@ -681,6 +687,7 @@ function App() {
                 workflowLibrary={workflowLibrary}
                 onWorkflowLibraryChange={setWorkflowLibrary}
                 portTypeColors={portTypeColors}
+                hotkeyBindings={hotkeyBindings}
               />
             ) : page === "settings" ? (
               <SettingsPage
@@ -692,6 +699,14 @@ function App() {
                   }))
                 }
                 onResetPortTypeColors={() => setPortTypeColors(defaultPortTypeColors)}
+                hotkeyBindings={hotkeyBindings}
+                onHotkeyChange={(actionId, binding) =>
+                  setHotkeyBindings((currentBindings) => ({
+                    ...currentBindings,
+                    [actionId]: binding,
+                  }))
+                }
+                onResetHotkeys={() => setHotkeyBindings(defaultHotkeyBindings)}
               />
             ) : viewMode === "run" ? (
               <RunWorkspace
@@ -1023,6 +1038,11 @@ interface FlowPort {
   type: PortType;
 }
 
+interface WorkflowNodeSize {
+  width: number;
+  height: number;
+}
+
 interface WorkflowRunInput {
   key: string;
   nodeId: string;
@@ -1045,6 +1065,8 @@ interface WorkflowNodeData extends Record<string, unknown> {
   tone: FlowTone;
   inputs: FlowPort[];
   outputs: FlowPort[];
+  tags?: string[];
+  size?: WorkflowNodeSize;
   kind?: "step" | "group";
   group?: WorkflowGroupMetadata;
   minimized?: boolean;
@@ -1069,6 +1091,7 @@ interface SavedWorkflowBlock {
   id: string;
   name: string;
   createdAt: string;
+  tags?: string[];
   nodes: SavedWorkflowBlockNode[];
   edges: SavedWorkflowBlockEdge[];
 }
@@ -1152,6 +1175,29 @@ type WorkflowComponentDragPayload =
 
 type PortTypeColors = Record<PortType, string>;
 type PortTypeColorStyle = React.CSSProperties & Record<`--workflow-port-color-${PortType}`, string>;
+type HotkeyActionId =
+  | "copySelection"
+  | "pasteSelection"
+  | "deleteSelection"
+  | "saveWorkflowVersion"
+  | "groupSelection"
+  | "ungroupSelection";
+
+interface HotkeyBinding {
+  key: string;
+  ctrl?: boolean;
+  shift?: boolean;
+  alt?: boolean;
+  meta?: boolean;
+}
+
+type HotkeyBindings = Record<HotkeyActionId, HotkeyBinding>;
+
+interface WorkflowClipboardState {
+  block: SavedWorkflowBlock;
+  anchor: { x: number; y: number };
+  pasteCount: number;
+}
 
 const workflowNodeTypes = { workflow: WorkflowNode };
 const workflowComponentDragDataType = "application/x-video-analysis-workflow-component";
@@ -1164,9 +1210,14 @@ const savedWorkflowRunsStorageKey = "video-analysis.workflowRuns.v1";
 const savedWorkflowBlocksStorageKey = "video-analysis.workflowBlocks.v1";
 const savedWorkflowBlocksJsonFormat = "video-analysis.workflowBlocks";
 const portTypeColorsStorageKey = "video-analysis.portTypeColors.v1";
+const hotkeyBindingsStorageKey = "video-analysis.hotkeys.v1";
 const defaultSeedWorkflowName = "Default Analysis Pipeline";
 const legacySeedWorkflowName = "YouTube Analysis Workflow";
 const maxSavedWorkflowVersions = 25;
+const defaultWorkflowNodeWidth = 310;
+const defaultWorkflowGroupHeight = 190;
+const minWorkflowGroupWidth = 260;
+const minWorkflowGroupHeight = 140;
 
 const portTypes: PortType[] = [
   "run_request",
@@ -1210,6 +1261,28 @@ const defaultPortTypeColors: PortTypeColors = {
   data_bucket: "#475569",
   json_report: "#0284c7",
   dashboard_view: "#2563eb",
+};
+
+const hotkeyActions: Array<{
+  id: HotkeyActionId;
+  label: string;
+  scope: string;
+}> = [
+  { id: "copySelection", label: "Copy selection", scope: "Workflow" },
+  { id: "pasteSelection", label: "Paste selection", scope: "Workflow" },
+  { id: "deleteSelection", label: "Delete selection", scope: "Workflow" },
+  { id: "saveWorkflowVersion", label: "Save version", scope: "Workflow" },
+  { id: "groupSelection", label: "Group selection", scope: "Workflow" },
+  { id: "ungroupSelection", label: "Ungroup selection", scope: "Workflow" },
+];
+
+const defaultHotkeyBindings: HotkeyBindings = {
+  copySelection: { key: "C", ctrl: true },
+  pasteSelection: { key: "V", ctrl: true },
+  deleteSelection: { key: "Delete" },
+  saveWorkflowVersion: { key: "S", ctrl: true },
+  groupSelection: { key: "G", ctrl: true, shift: true },
+  ungroupSelection: { key: "G", ctrl: true, alt: true },
 };
 
 const PortTypeColorContext = React.createContext<PortTypeColors>(defaultPortTypeColors);
@@ -1476,10 +1549,12 @@ function WorkflowBuilder({
   workflowLibrary,
   onWorkflowLibraryChange,
   portTypeColors,
+  hotkeyBindings,
 }: {
   workflowLibrary: SavedWorkflowLibrary;
   onWorkflowLibraryChange: React.Dispatch<React.SetStateAction<SavedWorkflowLibrary>>;
   portTypeColors: PortTypeColors;
+  hotkeyBindings: HotkeyBindings;
 }) {
   const activeWorkflow = useMemo(() => activeSavedWorkflow(workflowLibrary), [workflowLibrary]);
   const initialWorkflowState = useMemo(
@@ -1491,6 +1566,7 @@ function WorkflowBuilder({
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [savedBlocks, setSavedBlocks] = useState<SavedWorkflowBlock[]>(loadSavedWorkflowBlocks);
   const [blockName, setBlockName] = useState("");
+  const [blockTags, setBlockTags] = useState("");
   const [blockLibraryMessage, setBlockLibraryMessage] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<WorkflowContextMenuState | null>(null);
   const [componentSearch, setComponentSearch] = useState("");
@@ -1500,6 +1576,7 @@ function WorkflowBuilder({
   const workflowSelectionLoadingRef = useRef(false);
   const workflowFileInputRef = useRef<HTMLInputElement | null>(null);
   const blockFileInputRef = useRef<HTMLInputElement | null>(null);
+  const workflowClipboardRef = useRef<WorkflowClipboardState | null>(null);
   const portTypeColorStyle = useMemo(() => portTypeColorsStyle(portTypeColors), [portTypeColors]);
 
   useEffect(() => {
@@ -1695,6 +1772,11 @@ function WorkflowBuilder({
 
   const saveActiveWorkflowVersion = useCallback(() => {
     const name = workflowNameDraft.trim() || activeWorkflow.name || "Untitled Workflow";
+    if (!workflowHasChangesSinceLatestVersion(activeWorkflow, name, nodes, edges)) {
+      setBlockLibraryMessage("No workflow changes since the latest saved version");
+      setWorkflowNameDraft(name);
+      return;
+    }
     const version = createSavedWorkflowVersion(activeWorkflow, name, nodes, edges);
     const nextLibrary: SavedWorkflowLibrary = {
       ...workflowLibrary,
@@ -1750,7 +1832,7 @@ function WorkflowBuilder({
   );
 
   const saveNodesAsBlock = useCallback((nodesToSave: WorkflowNodeModel[]) => {
-    const block = createSavedWorkflowBlock(nodesToSave, edges, blockName);
+    const block = createSavedWorkflowBlock(nodesToSave, edges, blockName, blockTags);
     if (!block) {
       return;
     }
@@ -1760,9 +1842,10 @@ function WorkflowBuilder({
       return nextBlocks;
     });
     setBlockName("");
+    setBlockTags("");
     setBlockLibraryMessage("Saved component");
     setContextMenu(null);
-  }, [blockName, edges]);
+  }, [blockName, blockTags, edges]);
 
   const saveSelectedBlock = useCallback(() => {
     saveNodesAsBlock(selectedNodes);
@@ -1784,10 +1867,32 @@ function WorkflowBuilder({
       setEdges(grouped.edges);
       setSelectedNodeIds([grouped.node.id]);
       setBlockName("");
+      setBlockTags("");
       setBlockLibraryMessage(`Grouped ${grouped.groupedNodeCount} components`);
       setContextMenu(null);
     },
     [blockName, edges, nodes, setEdges, setNodes],
+  );
+
+  const updateGroupDetails = useCallback(
+    (nodeId: string, updates: Pick<WorkflowNodeData, "title" | "description">) => {
+      setNodes((currentNodes) =>
+        currentNodes.map((node) => {
+          if (node.id !== nodeId || !node.data.group) {
+            return node;
+          }
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              title: updates.title,
+              description: updates.description,
+            },
+          };
+        }),
+      );
+    },
+    [setNodes],
   );
 
   const ungroupNode = useCallback(
@@ -1871,6 +1976,41 @@ function WorkflowBuilder({
     },
     [nodes, setEdges, setNodes],
   );
+
+  const copySelectedWorkflowNodes = useCallback((): boolean => {
+    const clipboard = createWorkflowClipboardState(selectedNodes, edges);
+    if (!clipboard) {
+      return false;
+    }
+    workflowClipboardRef.current = clipboard;
+    setBlockLibraryMessage(`Copied ${selectedNodes.length} component${selectedNodes.length === 1 ? "" : "s"}`);
+    setContextMenu(null);
+    return true;
+  }, [edges, selectedNodes]);
+
+  const pasteWorkflowClipboard = useCallback((): boolean => {
+    const clipboard = workflowClipboardRef.current;
+    if (!clipboard) {
+      return false;
+    }
+    const pasteCount = clipboard.pasteCount + 1;
+    const anchor = {
+      x: clipboard.anchor.x + 56 * pasteCount,
+      y: clipboard.anchor.y + 56 * pasteCount,
+    };
+    const instance = instantiateSavedWorkflowBlock(clipboard.block, anchor);
+    workflowClipboardRef.current = { ...clipboard, pasteCount };
+    setNodes((currentNodes) =>
+      currentNodes
+        .map((node) => ({ ...node, selected: false }))
+        .concat(instance.nodes.map((node) => ({ ...node, selected: true }))),
+    );
+    setEdges((currentEdges) => dedupeEdges(currentEdges.concat(instance.edges)));
+    setSelectedNodeIds(instance.nodes.map((node) => node.id));
+    setBlockLibraryMessage(`Pasted ${instance.nodes.length} component${instance.nodes.length === 1 ? "" : "s"}`);
+    setContextMenu(null);
+    return instance.nodes.length > 0;
+  }, [setEdges, setNodes]);
 
   const deleteSavedBlock = useCallback((blockId: string) => {
     setSavedBlocks((currentBlocks) => {
@@ -1973,6 +2113,76 @@ function WorkflowBuilder({
     [addPrimitiveNode, addSavedBlock, flowInstance, savedBlocks],
   );
 
+  const runWorkflowHotkeyAction = useCallback(
+    (actionId: HotkeyActionId): boolean => {
+      switch (actionId) {
+        case "copySelection":
+          return copySelectedWorkflowNodes();
+        case "pasteSelection":
+          return pasteWorkflowClipboard();
+        case "deleteSelection":
+          if (selectedNodeIds.length === 0) {
+            return false;
+          }
+          deleteWorkflowNodes(selectedNodeIds);
+          return true;
+        case "saveWorkflowVersion":
+          saveActiveWorkflowVersion();
+          return true;
+        case "groupSelection":
+          if (selectedNodeIds.length < 2) {
+            return false;
+          }
+          groupNodes(selectedNodeIds);
+          return true;
+        case "ungroupSelection": {
+          const groupNode = selectedNodes.length === 1 && selectedNodes[0].data.group ? selectedNodes[0] : null;
+          if (!groupNode) {
+            return false;
+          }
+          ungroupNode(groupNode.id);
+          return true;
+        }
+      }
+      return false;
+    },
+    [
+      copySelectedWorkflowNodes,
+      deleteWorkflowNodes,
+      groupNodes,
+      pasteWorkflowClipboard,
+      saveActiveWorkflowVersion,
+      selectedNodeIds,
+      selectedNodes,
+      ungroupNode,
+    ],
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (shouldIgnoreHotkeyEvent(event)) {
+        return;
+      }
+      for (const action of hotkeyActions) {
+        if (!matchesHotkeyBinding(event, hotkeyBindings[action.id])) {
+          continue;
+        }
+        if (runWorkflowHotkeyAction(action.id)) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        return;
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [hotkeyBindings, runWorkflowHotkeyAction]);
+
   return (
     <PortTypeColorContext.Provider value={portTypeColors}>
       <section className="grid min-h-[760px] gap-4 xl:grid-cols-[300px_minmax(0,1fr)_340px]" style={portTypeColorStyle}>
@@ -2050,17 +2260,6 @@ function WorkflowBuilder({
                 <RefreshIcon className="h-4 w-4" />
                 Reset
               </button>
-              <button
-                className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
-                onClick={() => {
-                  setEdges([]);
-                  setContextMenu(null);
-                }}
-                title="Clear connections"
-              >
-                <CloseIcon className="h-4 w-4" />
-                Clear
-              </button>
             </div>
           </div>
           <div className="h-[720px] min-h-[560px] w-full">
@@ -2093,7 +2292,7 @@ function WorkflowBuilder({
               elementsSelectable
               selectionOnDrag
               edgesReconnectable
-              deleteKeyCode={["Backspace", "Delete"]}
+              deleteKeyCode={null}
               proOptions={{ hideAttribution: true }}
             >
               <Background color="#d4d4d8" gap={18} />
@@ -2130,7 +2329,9 @@ function WorkflowBuilder({
           selectedNodes={selectedNodes}
           selectedInternalEdgeCount={selectedInternalEdgeCount}
           blockName={blockName}
+          blockTags={blockTags}
           onBlockNameChange={setBlockName}
+          onBlockTagsChange={setBlockTags}
           onSelectWorkflow={selectWorkflow}
           onCreateWorkflow={createBlankWorkflow}
           onCloneWorkflow={cloneActiveWorkflow}
@@ -2141,6 +2342,7 @@ function WorkflowBuilder({
           onSaveSelectedBlock={saveSelectedBlock}
           onGroupSelected={() => groupNodes(selectedNodeIds)}
           onDeleteSelected={() => deleteWorkflowNodes(selectedNodeIds)}
+          onUpdateSelectedGroup={updateGroupDetails}
           onToggleSelectedMinimized={() => setWorkflowNodesMinimized(selectedNodeIds, !selectedNodes.every((node) => node.data.minimized))}
           onUngroupSelected={() => {
             const groupNode = selectedNodes.length === 1 && selectedNodes[0].data.group ? selectedNodes[0] : null;
@@ -2210,6 +2412,7 @@ function WorkflowComponentSelector({
                   subtitle={node.data.packageName}
                   tone={node.data.tone}
                   portSummary={`${node.data.inputs.length} in · ${node.data.outputs.length} out`}
+                  tags={node.data.tags ?? []}
                   dragPayload={{ type: "primitive", id: node.id }}
                   onAdd={() => onAddPrimitive(node)}
                 />
@@ -2260,6 +2463,7 @@ function WorkflowComponentSelector({
                   title={block.name}
                   subtitle={`${block.nodes.length} components`}
                   portSummary={`${block.edges.length} connections`}
+                  tags={block.tags ?? []}
                   dragPayload={{ type: "block", id: block.id }}
                   onAdd={() => onAddSavedBlock(block)}
                   onDelete={() => onDeleteSavedBlock(block.id)}
@@ -2277,6 +2481,7 @@ function WorkflowComponentTile({
   title,
   subtitle,
   portSummary,
+  tags,
   tone = "zinc",
   dragPayload,
   onAdd,
@@ -2285,6 +2490,7 @@ function WorkflowComponentTile({
   title: string;
   subtitle: string;
   portSummary: string;
+  tags: string[];
   tone?: FlowTone;
   dragPayload: WorkflowComponentDragPayload;
   onAdd: () => void;
@@ -2307,6 +2513,16 @@ function WorkflowComponentTile({
           </span>
           <span className="mt-1 block truncate text-[10px] text-zinc-500">{subtitle}</span>
           <span className="mt-1 block text-[10px] text-zinc-500">{portSummary}</span>
+          {tags.length > 0 && (
+            <span className="mt-2 flex flex-wrap gap-1">
+              {tags.slice(0, 4).map((tag) => (
+                <span key={tag} className="rounded bg-white px-1.5 py-0.5 text-[10px] font-medium text-zinc-600">
+                  {tag}
+                </span>
+              ))}
+              {tags.length > 4 && <span className="text-[10px] text-zinc-500">+{tags.length - 4}</span>}
+            </span>
+          )}
         </button>
         <div className="flex shrink-0 gap-1">
           <button
@@ -2339,8 +2555,10 @@ function WorkflowDetailsPanel({
   selectedNodes,
   selectedInternalEdgeCount,
   blockName,
+  blockTags,
   workflowNameDraft,
   onBlockNameChange,
+  onBlockTagsChange,
   onSelectWorkflow,
   onCreateWorkflow,
   onCloneWorkflow,
@@ -2350,6 +2568,7 @@ function WorkflowDetailsPanel({
   onSaveSelectedBlock,
   onGroupSelected,
   onDeleteSelected,
+  onUpdateSelectedGroup,
   onToggleSelectedMinimized,
   onUngroupSelected,
   onSaveWorkflowVersion,
@@ -2362,8 +2581,10 @@ function WorkflowDetailsPanel({
   selectedNodes: WorkflowNodeModel[];
   selectedInternalEdgeCount: number;
   blockName: string;
+  blockTags: string;
   workflowNameDraft: string;
   onBlockNameChange: (value: string) => void;
+  onBlockTagsChange: (value: string) => void;
   onSelectWorkflow: (workflowId: string) => void;
   onCreateWorkflow: () => void;
   onCloneWorkflow: () => void;
@@ -2373,6 +2594,7 @@ function WorkflowDetailsPanel({
   onSaveSelectedBlock: () => void;
   onGroupSelected: () => void;
   onDeleteSelected: () => void;
+  onUpdateSelectedGroup: (nodeId: string, updates: Pick<WorkflowNodeData, "title" | "description">) => void;
   onToggleSelectedMinimized: () => void;
   onUngroupSelected: () => void;
   onSaveWorkflowVersion: () => void;
@@ -2399,7 +2621,38 @@ function WorkflowDetailsPanel({
         {selectedNode ? (
           <>
             <div>
-              <p className="text-sm leading-6 text-zinc-700">{selectedNode.data.description}</p>
+              {selectedGroupNode ? (
+                <div className="space-y-3">
+                  <Field label="Group name">
+                    <input
+                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                      value={selectedGroupNode.data.title}
+                      placeholder="Group name"
+                      onChange={(event) =>
+                        onUpdateSelectedGroup(selectedGroupNode.id, {
+                          title: event.target.value,
+                          description: selectedGroupNode.data.description,
+                        })
+                      }
+                    />
+                  </Field>
+                  <Field label="Description">
+                    <textarea
+                      className="min-h-24 w-full resize-y rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                      value={selectedGroupNode.data.description}
+                      placeholder="Group description"
+                      onChange={(event) =>
+                        onUpdateSelectedGroup(selectedGroupNode.id, {
+                          title: selectedGroupNode.data.title,
+                          description: event.target.value,
+                        })
+                      }
+                    />
+                  </Field>
+                </div>
+              ) : (
+                <p className="text-sm leading-6 text-zinc-700">{selectedNode.data.description}</p>
+              )}
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <Metric label="Inputs" value={String(selectedNode.data.inputs.length)} />
                 <Metric label="Outputs" value={String(selectedNode.data.outputs.length)} />
@@ -2456,6 +2709,14 @@ function WorkflowDetailsPanel({
                 value={blockName}
                 placeholder="Component name"
                 onChange={(event) => onBlockNameChange(event.target.value)}
+              />
+            </Field>
+            <Field label="Tags">
+              <input
+                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={blockTags}
+                placeholder="video, ingest, report"
+                onChange={(event) => onBlockTagsChange(event.target.value)}
               />
             </Field>
             <div className="grid grid-cols-2 gap-2">
@@ -2641,14 +2902,21 @@ function SettingsPage({
   portTypeColors,
   onPortTypeColorChange,
   onResetPortTypeColors,
+  hotkeyBindings,
+  onHotkeyChange,
+  onResetHotkeys,
 }: {
   portTypeColors: PortTypeColors;
   onPortTypeColorChange: (type: PortType, color: string) => void;
   onResetPortTypeColors: () => void;
+  hotkeyBindings: HotkeyBindings;
+  onHotkeyChange: (actionId: HotkeyActionId, binding: HotkeyBinding) => void;
+  onResetHotkeys: () => void;
 }) {
   return (
     <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
       <section className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
+        <HotkeySettings bindings={hotkeyBindings} onChange={onHotkeyChange} onReset={onResetHotkeys} />
         <PortTypeColorSettings
           colors={portTypeColors}
           onChange={onPortTypeColorChange}
@@ -2656,24 +2924,129 @@ function SettingsPage({
         />
       </section>
       <aside className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
-        <h2 className="text-sm font-semibold text-zinc-950">Preview</h2>
+        <h2 className="text-sm font-semibold text-zinc-950">Active Hotkeys</h2>
         <div className="mt-3 space-y-2">
-          {portTypes.slice(0, 8).map((type) => {
-            const color = portTypeColor(type, portTypeColors);
-            return (
-              <div
-                key={type}
-                className="flex items-center justify-between rounded-md border px-3 py-2 text-xs"
-                style={{ borderColor: hexToRgba(color, 0.32), backgroundColor: hexToRgba(color, 0.08) }}
-              >
-                <span className="font-medium text-zinc-900">{formatPortType(type)}</span>
-                <span className="h-4 w-4 rounded-full border border-white shadow-sm" style={{ backgroundColor: color }} />
-              </div>
-            );
-          })}
+          {hotkeyActions.map((action) => (
+            <div
+              key={action.id}
+              className="flex items-center justify-between gap-3 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs"
+            >
+              <span className="min-w-0 truncate font-medium text-zinc-900">{action.label}</span>
+              <kbd className="shrink-0 rounded border border-zinc-300 bg-white px-2 py-1 font-mono text-[11px] text-zinc-700">
+                {formatHotkeyBinding(hotkeyBindings[action.id])}
+              </kbd>
+            </div>
+          ))}
+        </div>
+        <div className="mt-5 border-t border-zinc-200 pt-4">
+          <h2 className="text-sm font-semibold text-zinc-950">Type Preview</h2>
+          <div className="mt-3 space-y-2">
+            {portTypes.slice(0, 8).map((type) => {
+              const color = portTypeColor(type, portTypeColors);
+              return (
+                <div
+                  key={type}
+                  className="flex items-center justify-between rounded-md border px-3 py-2 text-xs"
+                  style={{ borderColor: hexToRgba(color, 0.32), backgroundColor: hexToRgba(color, 0.08) }}
+                >
+                  <span className="font-medium text-zinc-900">{formatPortType(type)}</span>
+                  <span className="h-4 w-4 rounded-full border border-white shadow-sm" style={{ backgroundColor: color }} />
+                </div>
+              );
+            })}
+          </div>
         </div>
       </aside>
     </section>
+  );
+}
+
+function HotkeySettings({
+  bindings,
+  onChange,
+  onReset,
+}: {
+  bindings: HotkeyBindings;
+  onChange: (actionId: HotkeyActionId, binding: HotkeyBinding) => void;
+  onReset: () => void;
+}) {
+  const [recordingActionId, setRecordingActionId] = useState<HotkeyActionId | null>(null);
+  const conflicts = hotkeyBindingConflicts(bindings);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs font-semibold uppercase text-zinc-500">Hotkeys</div>
+        <button
+          type="button"
+          className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+          onClick={onReset}
+          title="Reset hotkeys"
+          aria-label="Reset hotkeys"
+        >
+          <RefreshIcon className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="mt-2 overflow-hidden rounded-md border border-zinc-200">
+        {hotkeyActions.map((action, index) => {
+          const recording = recordingActionId === action.id;
+          const conflict = conflicts.has(action.id);
+          return (
+            <div
+              key={action.id}
+              className={classNames(
+                "grid min-h-12 grid-cols-[minmax(0,1fr)_128px] items-center gap-3 px-3 py-2 text-xs",
+                index > 0 && "border-t border-zinc-200",
+                conflict ? "bg-amber-50" : "bg-white",
+              )}
+            >
+              <div className="min-w-0">
+                <div className="truncate font-medium text-zinc-900">{action.label}</div>
+                <div className={classNames("mt-0.5 text-[11px]", conflict ? "text-amber-700" : "text-zinc-500")}>
+                  {conflict ? "Conflict" : action.scope}
+                </div>
+              </div>
+              <button
+                type="button"
+                className={classNames(
+                  "inline-flex h-8 items-center justify-center rounded-md border px-2 font-mono text-[11px] focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-2",
+                  recording
+                    ? "border-zinc-950 bg-zinc-950 text-white"
+                    : "border-zinc-300 bg-zinc-50 text-zinc-800 hover:bg-white",
+                )}
+                onClick={() => setRecordingActionId(action.id)}
+                onBlur={() => {
+                  if (recording) {
+                    setRecordingActionId(null);
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (!recording) {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (event.key === "Escape") {
+                    setRecordingActionId(null);
+                    return;
+                  }
+                  const binding = hotkeyBindingFromKeyboardEvent(event);
+                  if (!binding) {
+                    return;
+                  }
+                  onChange(action.id, binding);
+                  setRecordingActionId(null);
+                }}
+                title={`${action.label} hotkey`}
+                aria-label={`${action.label} hotkey`}
+              >
+                {recording ? "Recording" : formatHotkeyBinding(bindings[action.id])}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -2737,6 +3110,7 @@ function createSavedWorkflowBlock(
   selectedNodes: WorkflowNodeModel[],
   edges: Edge[],
   requestedName: string,
+  requestedTags = "",
 ): SavedWorkflowBlock | null {
   if (selectedNodes.length < 2) {
     return null;
@@ -2746,11 +3120,13 @@ function createSavedWorkflowBlock(
   const minX = Math.min(...selectedNodes.map((node) => node.position.x));
   const minY = Math.min(...selectedNodes.map((node) => node.position.y));
   const name = requestedName.trim() || defaultWorkflowBlockName(selectedNodes);
+  const tags = parseWorkflowTags(requestedTags);
 
   return {
     id: createWorkflowBlockId(),
     name,
     createdAt: new Date().toISOString(),
+    tags: tags.length > 0 ? tags : tagsForWorkflowNodes(selectedNodes),
     nodes: selectedNodes.map((node) => ({
       id: node.id,
       position: {
@@ -2767,6 +3143,47 @@ function createSavedWorkflowBlock(
         sourceHandle: edge.sourceHandle,
         targetHandle: edge.targetHandle,
     })),
+  };
+}
+
+function createWorkflowClipboardState(
+  selectedNodes: WorkflowNodeModel[],
+  edges: Edge[],
+): WorkflowClipboardState | null {
+  if (selectedNodes.length === 0) {
+    return null;
+  }
+
+  const selectedIds = new Set(selectedNodes.map((node) => node.id));
+  const minX = Math.min(...selectedNodes.map((node) => node.position.x));
+  const minY = Math.min(...selectedNodes.map((node) => node.position.y));
+  const name = selectedNodes.length === 1 ? selectedNodes[0].data.title : defaultWorkflowBlockName(selectedNodes);
+
+  return {
+    block: {
+      id: createWorkflowBlockId(),
+      name,
+      createdAt: new Date().toISOString(),
+      tags: tagsForWorkflowNodes(selectedNodes),
+      nodes: selectedNodes.map((node) => ({
+        id: node.id,
+        position: {
+          x: node.position.x - minX,
+          y: node.position.y - minY,
+        },
+        data: cloneWorkflowNodeData(node.data),
+      })),
+      edges: edges
+        .filter((edge) => selectedIds.has(edge.source) && selectedIds.has(edge.target))
+        .map((edge) => ({
+          source: edge.source,
+          target: edge.target,
+          sourceHandle: edge.sourceHandle,
+          targetHandle: edge.targetHandle,
+        })),
+    },
+    anchor: { x: minX, y: minY },
+    pasteCount: 0,
   };
 }
 
@@ -2829,6 +3246,8 @@ function createWorkflowGroup(
       tone: "zinc",
       inputs: dedupePorts(inputPorts),
       outputs: dedupePorts(outputPorts),
+      tags: tagsForWorkflowNodes(selectedNodes),
+      size: { width: defaultWorkflowNodeWidth, height: defaultWorkflowGroupHeight },
       kind: "group",
       group: {
         memberCount: selectedNodes.length,
@@ -3059,6 +3478,12 @@ function cloneWorkflowNodeData(data: WorkflowNodeData): WorkflowNodeData {
     inputs: data.inputs.map((input) => ({ ...input })),
     outputs: data.outputs.map((output) => ({ ...output })),
   };
+  if (data.tags) {
+    cloned.tags = normalizeWorkflowTags(data.tags);
+  }
+  if (data.size) {
+    cloned.size = { ...data.size };
+  }
   if (data.kind) {
     cloned.kind = data.kind;
   }
@@ -3138,6 +3563,76 @@ function defaultWorkflowBlockName(nodes: WorkflowNodeModel[]): string {
     return `${firstNode.data.title} + ${secondNode.data.title}`;
   }
   return `${firstNode.data.title} + ${nodes.length - 1} more`;
+}
+
+function workflowHasChangesSinceLatestVersion(
+  workflow: SavedWorkflow,
+  name: string,
+  nodes: WorkflowNodeModel[],
+  edges: Edge[],
+): boolean {
+  const latestVersion = latestSavedWorkflowVersion(workflow);
+  if (!latestVersion) {
+    return true;
+  }
+  return workflowVersionSnapshot(name, nodes, edges) !== savedWorkflowVersionSnapshot(latestVersion);
+}
+
+function latestSavedWorkflowVersion(workflow: SavedWorkflow): SavedWorkflowVersion | null {
+  const versions = Array.isArray(workflow.versions) ? workflow.versions : [];
+  return versions.reduce<SavedWorkflowVersion | null>(
+    (latest, version) => (!latest || version.version > latest.version ? version : latest),
+    null,
+  );
+}
+
+function workflowVersionSnapshot(name: string, nodes: WorkflowNodeModel[], edges: Edge[]): string {
+  return JSON.stringify({
+    name,
+    nodes: nodes
+      .map(serializeWorkflowNode)
+      .map(comparableWorkflowNode)
+      .sort((a, b) => a.id.localeCompare(b.id)),
+    edges: edges
+      .map(serializeWorkflowEdge)
+      .map(comparableWorkflowEdge)
+      .sort((a, b) =>
+        `${a.source}|${a.sourceHandle ?? ""}|${a.target}|${a.targetHandle ?? ""}`.localeCompare(
+          `${b.source}|${b.sourceHandle ?? ""}|${b.target}|${b.targetHandle ?? ""}`,
+        ),
+      ),
+  });
+}
+
+function savedWorkflowVersionSnapshot(version: SavedWorkflowVersion): string {
+  return JSON.stringify({
+    name: version.name,
+    nodes: version.nodes.map(comparableWorkflowNode).sort((a, b) => a.id.localeCompare(b.id)),
+    edges: version.edges
+      .map(comparableWorkflowEdge)
+      .sort((a, b) =>
+        `${a.source}|${a.sourceHandle ?? ""}|${a.target}|${a.targetHandle ?? ""}`.localeCompare(
+          `${b.source}|${b.sourceHandle ?? ""}|${b.target}|${b.targetHandle ?? ""}`,
+        ),
+      ),
+  });
+}
+
+function comparableWorkflowNode(node: SavedWorkflowBlockNode): SavedWorkflowBlockNode {
+  return {
+    id: node.id,
+    position: { ...node.position },
+    data: cloneWorkflowNodeData(node.data),
+  };
+}
+
+function comparableWorkflowEdge(edge: SavedWorkflowBlockEdge): SavedWorkflowBlockEdge {
+  return {
+    source: edge.source,
+    target: edge.target,
+    sourceHandle: edge.sourceHandle ?? null,
+    targetHandle: edge.targetHandle ?? null,
+  };
 }
 
 function downloadWorkflowJson(workflow: SavedWorkflow, nodes: WorkflowNodeModel[], edges: Edge[]) {
@@ -3516,7 +4011,7 @@ function loadSavedWorkflowBlocks(): SavedWorkflowBlock[] {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed.filter(isSavedWorkflowBlock);
+    return parsed.filter(isSavedWorkflowBlock).map(normalizeSavedWorkflowBlock);
   } catch {
     return [];
   }
@@ -3591,6 +4086,20 @@ function cloneImportedSavedWorkflowBlock(block: SavedWorkflowBlock): SavedWorkfl
     id: createWorkflowBlockId(),
     name: block.name,
     createdAt: new Date().toISOString(),
+    tags: normalizeWorkflowTags(block.tags ?? tagsForSavedWorkflowBlock(block)),
+    nodes: block.nodes.map((node) => ({
+      id: node.id,
+      position: { ...node.position },
+      data: cloneWorkflowNodeData(node.data),
+    })),
+    edges: block.edges.map((edge) => ({ ...edge })),
+  };
+}
+
+function normalizeSavedWorkflowBlock(block: SavedWorkflowBlock): SavedWorkflowBlock {
+  return {
+    ...block,
+    tags: normalizeWorkflowTags(block.tags ?? tagsForSavedWorkflowBlock(block)),
     nodes: block.nodes.map((node) => ({
       id: node.id,
       position: { ...node.position },
@@ -3619,6 +4128,7 @@ function isSavedWorkflowBlock(value: unknown): value is SavedWorkflowBlock {
     typeof value.id === "string" &&
     typeof value.name === "string" &&
     typeof value.createdAt === "string" &&
+    (value.tags === undefined || isWorkflowTags(value.tags)) &&
     Array.isArray(value.nodes) &&
     value.nodes.every(isSavedWorkflowBlockNode) &&
     Array.isArray(value.edges) &&
@@ -3747,6 +4257,8 @@ function isWorkflowNodeData(value: unknown): value is WorkflowNodeData {
   const kindValid = value.kind === undefined || value.kind === "step" || value.kind === "group";
   const groupValid = value.group === undefined || isWorkflowGroupMetadata(value.group);
   const minimizedValid = value.minimized === undefined || typeof value.minimized === "boolean";
+  const tagsValid = value.tags === undefined || isWorkflowTags(value.tags);
+  const sizeValid = value.size === undefined || isWorkflowNodeSize(value.size);
   return (
     typeof value.title === "string" &&
     typeof value.packageName === "string" &&
@@ -3756,6 +4268,8 @@ function isWorkflowNodeData(value: unknown): value is WorkflowNodeData {
     value.inputs.every(isFlowPort) &&
     Array.isArray(value.outputs) &&
     value.outputs.every(isFlowPort) &&
+    tagsValid &&
+    sizeValid &&
     kindValid &&
     groupValid &&
     minimizedValid
@@ -3800,6 +4314,20 @@ function isFlowPort(value: unknown): value is FlowPort {
     typeof value.label === "string" &&
     typeof value.type === "string" &&
     isPortType(value.type)
+  );
+}
+
+function isWorkflowTags(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((tag) => typeof tag === "string");
+}
+
+function isWorkflowNodeSize(value: unknown): value is WorkflowNodeSize {
+  return (
+    isRecord(value) &&
+    typeof value.width === "number" &&
+    Number.isFinite(value.width) &&
+    typeof value.height === "number" &&
+    Number.isFinite(value.height)
   );
 }
 
@@ -3889,10 +4417,12 @@ function WorkflowNode({ id, data, selected, isConnectable }: NodeProps) {
   const minimized = nodeData.minimized === true;
   const { updateNodeData } = useReactFlow<WorkflowNodeModel, Edge>();
   const updateNodeInternals = useUpdateNodeInternals();
+  const isGroup = nodeData.kind === "group";
+  const groupSize = isGroup ? normalizedWorkflowNodeSize(nodeData.size) : null;
 
   useEffect(() => {
     updateNodeInternals(id);
-  }, [id, minimized, nodeData.inputs.length, nodeData.outputs.length, updateNodeInternals]);
+  }, [groupSize?.height, groupSize?.width, id, minimized, nodeData.inputs.length, nodeData.outputs.length, updateNodeInternals]);
 
   const toggleMinimized = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
@@ -3900,15 +4430,47 @@ function WorkflowNode({ id, data, selected, isConnectable }: NodeProps) {
     requestAnimationFrame(() => updateNodeInternals(id));
   };
 
+  const updateGroupSize = (_event: unknown, params: { width: number; height: number }) => {
+    updateNodeData(id, {
+      size: {
+        width: Math.round(params.width),
+        height: Math.round(params.height),
+      },
+    });
+    requestAnimationFrame(() => updateNodeInternals(id));
+  };
+
   return (
     <div
       className={classNames(
-        minimized ? "w-[230px]" : "w-[310px]",
+        minimized
+          ? "w-[230px]"
+          : isGroup
+            ? "min-w-[260px]"
+            : "w-[310px]",
         "rounded-lg border bg-white text-left shadow-sm",
-        nodeData.kind === "group" && "border-dashed",
+        isGroup && "border-dashed",
         selected ? "border-zinc-950 ring-2 ring-zinc-950/10" : "border-zinc-200",
       )}
+      style={
+        isGroup && !minimized
+          ? {
+              width: groupSize?.width ?? defaultWorkflowNodeWidth,
+              minHeight: groupSize?.height ?? defaultWorkflowGroupHeight,
+            }
+          : undefined
+      }
     >
+      {isGroup && !minimized && (
+        <NodeResizer
+          isVisible={selected}
+          minWidth={minWorkflowGroupWidth}
+          minHeight={minWorkflowGroupHeight}
+          color="#18181b"
+          onResize={updateGroupSize}
+          onResizeEnd={updateGroupSize}
+        />
+      )}
       <div className={classNames(!minimized && "border-b", "px-3 py-2", workflowHeaderClass(nodeData.tone))}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -4214,7 +4776,10 @@ function workflowNode(id: string, x: number, y: number, data: WorkflowNodeData):
     id,
     type: "workflow",
     position: { x, y },
-    data,
+    data: {
+      ...data,
+      tags: normalizeWorkflowTags(data.tags ?? tagsForWorkflowNodeData(data)),
+    },
   };
 }
 
@@ -4973,7 +5538,14 @@ function filterWorkflowNodeTemplates(nodes: WorkflowNodeModel[], query: string):
     return nodes;
   }
   return nodes.filter((node) =>
-    [node.data.title, node.data.packageName, node.data.description, ...node.data.inputs.map((portValue) => portValue.label), ...node.data.outputs.map((portValue) => portValue.label)]
+    [
+      node.data.title,
+      node.data.packageName,
+      node.data.description,
+      ...(node.data.tags ?? []),
+      ...node.data.inputs.map((portValue) => portValue.label),
+      ...node.data.outputs.map((portValue) => portValue.label),
+    ]
       .join(" ")
       .toLowerCase()
       .includes(normalized),
@@ -4986,11 +5558,211 @@ function filterSavedWorkflowBlocks(blocks: SavedWorkflowBlock[], query: string):
     return blocks;
   }
   return blocks.filter((block) =>
-    [block.name, ...block.nodes.map((node) => node.data.title), ...block.nodes.map((node) => node.data.packageName)]
+    [
+      block.name,
+      ...(block.tags ?? []),
+      ...block.nodes.flatMap((node) => [
+        node.data.title,
+        node.data.packageName,
+        node.data.description,
+        ...(node.data.tags ?? []),
+      ]),
+    ]
       .join(" ")
       .toLowerCase()
       .includes(normalized),
   );
+}
+
+function parseWorkflowTags(value: string): string[] {
+  return normalizeWorkflowTags(value.split(/[\s,]+/));
+}
+
+function normalizeWorkflowTags(value: unknown): string[] {
+  const candidates =
+    typeof value === "string"
+      ? value.split(/[\s,]+/)
+      : Array.isArray(value)
+        ? value
+        : [];
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") {
+      continue;
+    }
+    const tag = candidate.trim().toLowerCase().replace(/[^a-z0-9@/_-]+/g, "-").replace(/^-+|-+$/g, "");
+    if (tag.length < 2 || seen.has(tag)) {
+      continue;
+    }
+    seen.add(tag);
+    tags.push(tag);
+  }
+  return tags.slice(0, 12);
+}
+
+function tagsForWorkflowNodes(nodes: WorkflowNodeModel[]): string[] {
+  return normalizeWorkflowTags(nodes.flatMap((node) => node.data.tags ?? tagsForWorkflowNodeData(node.data)));
+}
+
+function tagsForSavedWorkflowBlock(block: SavedWorkflowBlock): string[] {
+  return normalizeWorkflowTags(block.nodes.flatMap((node) => node.data.tags ?? tagsForWorkflowNodeData(node.data)));
+}
+
+function tagsForWorkflowNodeData(data: WorkflowNodeData): string[] {
+  return normalizeWorkflowTags([
+    data.title,
+    data.packageName,
+    data.tone,
+    ...data.inputs.map((portValue) => portValue.type),
+    ...data.outputs.map((portValue) => portValue.type),
+  ].flatMap(tokenizeWorkflowTagText));
+}
+
+function tokenizeWorkflowTagText(value: string): string[] {
+  const ignoredTags = new Set(["and", "the", "for", "with", "from", "into", "json", "cli", "web"]);
+  return value
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .split(/[^A-Za-z0-9@/_-]+/)
+    .map((token) => token.trim().toLowerCase())
+    .filter((token) => token.length > 1 && !ignoredTags.has(token));
+}
+
+function normalizedWorkflowNodeSize(size: WorkflowNodeSize | undefined): WorkflowNodeSize | null {
+  if (!size || !Number.isFinite(size.width) || !Number.isFinite(size.height)) {
+    return null;
+  }
+  return {
+    width: Math.max(minWorkflowGroupWidth, Math.round(size.width)),
+    height: Math.max(minWorkflowGroupHeight, Math.round(size.height)),
+  };
+}
+
+function matchesHotkeyBinding(event: KeyboardEvent, binding: HotkeyBinding): boolean {
+  return (
+    normalizeHotkeyKey(event.key) === binding.key &&
+    event.ctrlKey === Boolean(binding.ctrl) &&
+    event.shiftKey === Boolean(binding.shift) &&
+    event.altKey === Boolean(binding.alt) &&
+    event.metaKey === Boolean(binding.meta)
+  );
+}
+
+function hotkeyBindingFromKeyboardEvent(event: KeyboardEvent | React.KeyboardEvent<HTMLElement>): HotkeyBinding | null {
+  const key = normalizeHotkeyKey(event.key);
+  if (!key || ["Control", "Shift", "Alt", "Meta"].includes(key)) {
+    return null;
+  }
+  return normalizeHotkeyBinding({
+    key,
+    ctrl: event.ctrlKey,
+    shift: event.shiftKey,
+    alt: event.altKey,
+    meta: event.metaKey,
+  });
+}
+
+function normalizeHotkeyKey(key: string): string {
+  if (key === " ") {
+    return "Space";
+  }
+  if (key.length === 1) {
+    return key.toUpperCase();
+  }
+  switch (key) {
+    case "Esc":
+      return "Escape";
+    case "Del":
+      return "Delete";
+    default:
+      return key;
+  }
+}
+
+function normalizeHotkeyBinding(value: unknown): HotkeyBinding | null {
+  if (!isRecord(value) || typeof value.key !== "string") {
+    return null;
+  }
+  const key = normalizeHotkeyKey(value.key.trim());
+  if (!key) {
+    return null;
+  }
+  return {
+    key,
+    ctrl: value.ctrl === true || undefined,
+    shift: value.shift === true || undefined,
+    alt: value.alt === true || undefined,
+    meta: value.meta === true || undefined,
+  };
+}
+
+function formatHotkeyBinding(binding: HotkeyBinding): string {
+  return [
+    binding.ctrl ? "Ctrl" : null,
+    binding.meta ? "Meta" : null,
+    binding.alt ? "Alt" : null,
+    binding.shift ? "Shift" : null,
+    formatHotkeyKey(binding.key),
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join("+");
+}
+
+function formatHotkeyKey(key: string): string {
+  switch (key) {
+    case " ":
+      return "Space";
+    case "ArrowUp":
+      return "Up";
+    case "ArrowDown":
+      return "Down";
+    case "ArrowLeft":
+      return "Left";
+    case "ArrowRight":
+      return "Right";
+    default:
+      return key;
+  }
+}
+
+function hotkeyBindingSignature(binding: HotkeyBinding): string {
+  return [
+    binding.ctrl ? "ctrl" : "",
+    binding.meta ? "meta" : "",
+    binding.alt ? "alt" : "",
+    binding.shift ? "shift" : "",
+    binding.key.toLowerCase(),
+  ].join("+");
+}
+
+function hotkeyBindingConflicts(bindings: HotkeyBindings): Set<HotkeyActionId> {
+  const actionIdsByBinding = new Map<string, HotkeyActionId[]>();
+  for (const action of hotkeyActions) {
+    const signature = hotkeyBindingSignature(bindings[action.id]);
+    actionIdsByBinding.set(signature, [...(actionIdsByBinding.get(signature) ?? []), action.id]);
+  }
+  const conflicts = new Set<HotkeyActionId>();
+  for (const actionIds of actionIdsByBinding.values()) {
+    if (actionIds.length > 1) {
+      actionIds.forEach((actionId) => conflicts.add(actionId));
+    }
+  }
+  return conflicts;
+}
+
+function shouldIgnoreHotkeyEvent(event: KeyboardEvent): boolean {
+  if (event.defaultPrevented) {
+    return true;
+  }
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  if (target.isContentEditable) {
+    return true;
+  }
+  const tagName = target.tagName.toLowerCase();
+  return tagName === "input" || tagName === "textarea" || tagName === "select";
 }
 
 function parseWorkflowComponentDragPayload(value: string): WorkflowComponentDragPayload | null {
@@ -5044,6 +5816,41 @@ function persistPortTypeColors(colors: PortTypeColors) {
     return;
   }
   window.localStorage.setItem(portTypeColorsStorageKey, JSON.stringify(normalizePortTypeColors(colors)));
+}
+
+function loadHotkeyBindings(): HotkeyBindings {
+  if (typeof window === "undefined") {
+    return defaultHotkeyBindings;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(hotkeyBindingsStorageKey);
+    if (!raw) {
+      return defaultHotkeyBindings;
+    }
+    return normalizeHotkeyBindings(JSON.parse(raw));
+  } catch {
+    return defaultHotkeyBindings;
+  }
+}
+
+function persistHotkeyBindings(bindings: HotkeyBindings) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(hotkeyBindingsStorageKey, JSON.stringify(normalizeHotkeyBindings(bindings)));
+}
+
+function normalizeHotkeyBindings(value: unknown): HotkeyBindings {
+  const record = isRecord(value) ? value : {};
+  return hotkeyActions.reduce<HotkeyBindings>(
+    (bindings, action) => {
+      const binding = normalizeHotkeyBinding(record[action.id]);
+      bindings[action.id] = binding ?? defaultHotkeyBindings[action.id];
+      return bindings;
+    },
+    { ...defaultHotkeyBindings },
+  );
 }
 
 function normalizePortTypeColors(value: unknown): PortTypeColors {
