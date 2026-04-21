@@ -1,0 +1,15 @@
+.cargo-target/
+target/
+node_modules/
+dist/
+.DS_Store
+*.log
+studio-data/
+use-case-output/
+*.mp4
+*.mkv
+*.webm
+*.mov
+*.wav
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/

@@ -1,0 +1,20 @@
+{
+  "name": "video-analysis-studio",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.3.13",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "api:dev": "cargo run -p studio-api -- --data-dir ./studio-data",
+    "ui:dev": "bun run --cwd apps/ui dev",
+    "ui:build": "bun run --cwd apps/ui build",
+    "ui:typecheck": "bun run --cwd apps/ui typecheck",
+    "desktop:dev": "bun run --cwd apps/desktop tauri dev",
+    "desktop:check": "cargo check -p studio-desktop"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.1"
+  }
+}
