@@ -17,6 +17,7 @@ import {
   type Edge,
   type Node,
   type NodeProps,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 import {
   AssetSummary,
@@ -55,7 +56,8 @@ import {
 
 type UseCaseId = "youtube-video";
 type SourceMode = "url" | "file";
-type ViewMode = "overview" | "run" | "flow" | "result" | "scenes" | "signals" | "data";
+type AppPage = "analysis" | "workflow" | "settings";
+type ViewMode = "overview" | "run" | "result" | "scenes" | "signals" | "data";
 
 interface UseCaseForm {
   sourceMode: SourceMode;
@@ -111,6 +113,9 @@ function App() {
   const [selectedUseCase, setSelectedUseCase] = useState<UseCaseId>("youtube-video");
   const [form, setForm] = useState<UseCaseForm>(initialForm);
   const [report, setReport] = useState<YoutubeVideoReport>(sampleReport);
+  const [page, setPage] = useState<AppPage>(() =>
+    typeof window === "undefined" ? "analysis" : appPageFromPath(window.location.pathname),
+  );
   const [viewMode, setViewMode] = useState<ViewMode>("overview");
   const [runStatus, setRunStatus] = useState<CliRun["status"]>("pending");
   const [lastRun, setLastRun] = useState<CliRun | null>(null);
@@ -118,6 +123,7 @@ function App() {
   const [dashboardLayout, setDashboardLayout] = useState<DashboardLayout>(defaultDashboardLayout);
   const [workflowLibrary, setWorkflowLibrary] = useState<SavedWorkflowLibrary>(loadSavedWorkflowLibrary);
   const [workflowRuns, setWorkflowRuns] = useState<SavedWorkflowRun[]>(loadSavedWorkflowRuns);
+  const [portTypeColors, setPortTypeColors] = useState<PortTypeColors>(loadPortTypeColors);
   const [mainSidebarCollapsed, setMainSidebarCollapsed] = useState(() =>
     loadStoredBoolean(mainSidebarCollapsedStorageKey, false),
   );
@@ -145,6 +151,30 @@ function App() {
     persistStoredBoolean(mainSidebarCollapsedStorageKey, mainSidebarCollapsed);
   }, [mainSidebarCollapsed]);
 
+  useEffect(() => {
+    persistPortTypeColors(portTypeColors);
+  }, [portTypeColors]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const onPopState = () => setPage(appPageFromPath(window.location.pathname));
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  const navigateToPage = useCallback((nextPage: AppPage) => {
+    setPage(nextPage);
+    if (typeof window === "undefined") {
+      return;
+    }
+    const nextPath = pathForAppPage(nextPage);
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState({}, "", nextPath);
+    }
+  }, []);
+
   const commitWorkflowLibrary = useCallback((library: SavedWorkflowLibrary) => {
     persistSavedWorkflowLibrary(library);
     setWorkflowLibrary(library);
@@ -163,9 +193,9 @@ function App() {
   const selectWorkflowDefinition = useCallback(
     (workflowId: string) => {
       activateWorkflowDefinition(workflowId);
-      setViewMode("flow");
+      navigateToPage("workflow");
     },
-    [activateWorkflowDefinition],
+    [activateWorkflowDefinition, navigateToPage],
   );
 
   const createWorkflowDefinition = useCallback(() => {
@@ -175,16 +205,17 @@ function App() {
       activeWorkflowId: workflow.id,
       workflows: [workflow, ...workflowLibrary.workflows],
     });
-    setViewMode("flow");
-  }, [commitWorkflowLibrary, workflowLibrary]);
+    navigateToPage("workflow");
+  }, [commitWorkflowLibrary, navigateToPage, workflowLibrary]);
 
   const startNewWorkflowRun = useCallback(() => {
     setForm(initialForm);
     setRunStatus("pending");
     setLastRun(null);
     setRunOutput({});
+    navigateToPage("analysis");
     setViewMode("run");
-  }, []);
+  }, [navigateToPage]);
 
   const deleteWorkflowDefinition = useCallback(
     (workflowId: string) => {
@@ -207,9 +238,9 @@ function App() {
         activeWorkflowId: nextActiveWorkflow.id,
         workflows: nextWorkflows,
       });
-      setViewMode("flow");
+      navigateToPage("workflow");
     },
-    [activeWorkflow, commitWorkflowLibrary, workflowLibrary],
+    [activeWorkflow, commitWorkflowLibrary, navigateToPage, workflowLibrary],
   );
 
   const commitWorkflowRuns = useCallback((runs: SavedWorkflowRun[]) => {
@@ -243,9 +274,10 @@ function App() {
       setRunStatus(run.status);
       setLastRun(workflowRunToCliRun(run));
       setRunOutput({});
+      navigateToPage("analysis");
       setViewMode("run");
     },
-    [activateWorkflowDefinition],
+    [activateWorkflowDefinition, navigateToPage],
   );
 
   async function runAnalysis() {
@@ -358,17 +390,83 @@ function App() {
               </button>
             </div>
             <nav className="space-y-2">
+              <button
+                type="button"
+                className={classNames(
+                  "flex w-full items-center justify-between rounded-lg border px-3 py-3 text-left transition",
+                  mainSidebarCollapsed && "h-10 justify-center px-0 py-0",
+                  page === "analysis"
+                    ? "border-zinc-950 bg-zinc-950 text-white"
+                    : "border-zinc-200 bg-white text-zinc-800 hover:border-zinc-300 hover:bg-zinc-50",
+                )}
+                onClick={() => navigateToPage("analysis")}
+                title="Analysis"
+                aria-label="Analysis"
+              >
+                {!mainSidebarCollapsed && (
+                  <span>
+                    <span className="block text-sm font-medium">Analysis</span>
+                    <span className="block text-xs opacity-70">Reports and runs</span>
+                  </span>
+                )}
+                <RunIcon className="h-4 w-4 shrink-0" />
+              </button>
+              <button
+                type="button"
+                className={classNames(
+                  "flex w-full items-center justify-between rounded-lg border px-3 py-3 text-left transition",
+                  mainSidebarCollapsed && "h-10 justify-center px-0 py-0",
+                  page === "workflow"
+                    ? "border-zinc-950 bg-zinc-950 text-white"
+                    : "border-zinc-200 bg-white text-zinc-800 hover:border-zinc-300 hover:bg-zinc-50",
+                )}
+                onClick={() => navigateToPage("workflow")}
+                title="Workflow"
+                aria-label="Workflow"
+              >
+                {!mainSidebarCollapsed && (
+                  <span>
+                    <span className="block text-sm font-medium">Workflow</span>
+                    <span className="block text-xs opacity-70">Builder</span>
+                  </span>
+                )}
+                <WorkflowIcon className="h-4 w-4 shrink-0" />
+              </button>
+              <button
+                type="button"
+                className={classNames(
+                  "flex w-full items-center justify-between rounded-lg border px-3 py-3 text-left transition",
+                  mainSidebarCollapsed && "h-10 justify-center px-0 py-0",
+                  page === "settings"
+                    ? "border-zinc-950 bg-zinc-950 text-white"
+                    : "border-zinc-200 bg-white text-zinc-800 hover:border-zinc-300 hover:bg-zinc-50",
+                )}
+                onClick={() => navigateToPage("settings")}
+                title="Settings"
+                aria-label="Settings"
+              >
+                {!mainSidebarCollapsed && (
+                  <span>
+                    <span className="block text-sm font-medium">Settings</span>
+                    <span className="block text-xs opacity-70">Type colors</span>
+                  </span>
+                )}
+                <SettingsIcon className="h-4 w-4 shrink-0" />
+              </button>
               {useCases.map((useCase) => (
                 <button
                   key={useCase.id}
                   className={classNames(
                     "flex w-full items-center justify-between rounded-lg border px-3 py-3 text-left transition",
                     mainSidebarCollapsed && "h-10 justify-center px-0 py-0",
-                    selectedUseCase === useCase.id
+                    page === "analysis" && selectedUseCase === useCase.id
                       ? "border-zinc-950 bg-zinc-950 text-white"
                       : "border-zinc-200 bg-white text-zinc-800 hover:border-zinc-300 hover:bg-zinc-50",
                   )}
-                  onClick={() => setSelectedUseCase(useCase.id)}
+                  onClick={() => {
+                    setSelectedUseCase(useCase.id);
+                    navigateToPage("analysis");
+                  }}
                   title={useCase.name}
                   aria-label={useCase.name}
                 >
@@ -403,7 +501,7 @@ function App() {
                     key={workflow.id}
                     className={classNames(
                       "group flex items-center rounded-lg border transition",
-                      workflow.id === activeWorkflow.id && viewMode === "flow"
+                      workflow.id === activeWorkflow.id && page === "workflow"
                         ? "border-zinc-950 bg-zinc-950 text-white"
                         : "border-zinc-200 bg-white text-zinc-800 hover:border-zinc-300 hover:bg-zinc-50",
                     )}
@@ -433,7 +531,7 @@ function App() {
                         type="button"
                         className={classNames(
                           "mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md opacity-75 hover:opacity-100",
-                          workflow.id === activeWorkflow.id && viewMode === "flow"
+                          workflow.id === activeWorkflow.id && page === "workflow"
                             ? "text-white hover:bg-white/10"
                             : "text-rose-700 hover:bg-rose-50",
                         )}
@@ -519,53 +617,83 @@ function App() {
               <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                 <div>
                   <h1 className="text-2xl font-semibold tracking-normal text-zinc-950">
-                    {currentUseCase(selectedUseCase).name}
+                    {page === "workflow"
+                      ? "Workflow Builder"
+                      : page === "settings"
+                        ? "Settings"
+                        : currentUseCase(selectedUseCase).name}
                   </h1>
-                  <p className="mt-1 text-sm text-zinc-500">{report.source.local_video}</p>
+                  <p className="mt-1 text-sm text-zinc-500">
+                    {page === "workflow"
+                      ? activeWorkflow.name
+                      : page === "settings"
+                        ? "Workflow type colors"
+                        : report.source.local_video}
+                  </p>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  <IconButton
-                    icon={<RefreshIcon className="h-4 w-4" />}
-                    label="Sample"
-                    onClick={() => {
-                      setReport(sampleReport);
-                      setRunStatus("succeeded");
-                      setLastRun({
-                        command: "cargo",
-                        args: command.slice(1),
-                        status: "succeeded",
-                        exit_code: 0,
-                        output_files: [form.output],
-                        message: "sample report loaded",
-                      });
-                      setRunOutput({});
-                    }}
-                  />
-                  <IconButton
-                    icon={<DownloadIcon className="h-4 w-4" />}
-                    label="JSON"
-                    onClick={() => downloadReport(report)}
-                  />
-                </div>
+                {page === "analysis" && (
+                  <div className="flex flex-wrap gap-2">
+                    <IconButton
+                      icon={<RefreshIcon className="h-4 w-4" />}
+                      label="Sample"
+                      onClick={() => {
+                        setReport(sampleReport);
+                        setRunStatus("succeeded");
+                        setLastRun({
+                          command: "cargo",
+                          args: command.slice(1),
+                          status: "succeeded",
+                          exit_code: 0,
+                          output_files: [form.output],
+                          message: "sample report loaded",
+                        });
+                        setRunOutput({});
+                      }}
+                    />
+                    <IconButton
+                      icon={<DownloadIcon className="h-4 w-4" />}
+                      label="JSON"
+                      onClick={() => downloadReport(report)}
+                    />
+                  </div>
+                )}
               </div>
-              <SegmentedControl<ViewMode>
-                value={viewMode}
-                options={[
-                  ["overview", "Overview"],
-                  ["run", "New Run"],
-                  ["flow", "Builder"],
-                  ["result", "Result"],
-                  ["scenes", "Scenes"],
-                  ["signals", "Signals"],
-                  ["data", "Data"],
-                ]}
-                onChange={setViewMode}
-              />
+              {page === "analysis" && (
+                <SegmentedControl<ViewMode>
+                  value={viewMode}
+                  options={[
+                    ["overview", "Overview"],
+                    ["run", "New Run"],
+                    ["result", "Result"],
+                    ["scenes", "Scenes"],
+                    ["signals", "Signals"],
+                    ["data", "Data"],
+                  ]}
+                  onChange={setViewMode}
+                />
+              )}
             </div>
           </header>
 
-          <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 xl:px-8">
-            {viewMode === "run" ? (
+          <div className={classNames("mx-auto px-4 py-5 sm:px-6 xl:px-8", page === "workflow" ? "max-w-none" : "max-w-7xl")}>
+            {page === "workflow" ? (
+              <WorkflowBuilder
+                workflowLibrary={workflowLibrary}
+                onWorkflowLibraryChange={setWorkflowLibrary}
+                portTypeColors={portTypeColors}
+              />
+            ) : page === "settings" ? (
+              <SettingsPage
+                portTypeColors={portTypeColors}
+                onPortTypeColorChange={(type, color) =>
+                  setPortTypeColors((currentColors) => ({
+                    ...currentColors,
+                    [type]: color,
+                  }))
+                }
+                onResetPortTypeColors={() => setPortTypeColors(defaultPortTypeColors)}
+              />
+            ) : viewMode === "run" ? (
               <RunWorkspace
                 form={form}
                 onFormChange={(next) => {
@@ -585,7 +713,7 @@ function App() {
                 activeWorkflowInputModel={activeWorkflowInputModel}
                 onSelectWorkflow={activateWorkflowDefinition}
                 onCreateWorkflow={createWorkflowDefinition}
-                onEditWorkflow={() => setViewMode("flow")}
+                onEditWorkflow={() => navigateToPage("workflow")}
                 onLoadReport={(nextReport) => {
                   setReport(nextReport);
                   setRunStatus("succeeded");
@@ -603,9 +731,6 @@ function App() {
             ) : (
               <section className="min-w-0 space-y-4">
                 {viewMode === "overview" && <Overview report={report} />}
-                {viewMode === "flow" && (
-                  <WorkflowBuilder workflowLibrary={workflowLibrary} onWorkflowLibraryChange={setWorkflowLibrary} />
-                )}
                 {viewMode === "result" && (
                   <ResultPageEditor report={report} layout={dashboardLayout} onLayoutChange={setDashboardLayout} />
                 )}
@@ -1021,10 +1146,15 @@ interface WorkflowContextMenuState {
   nodeIds: string[];
 }
 
+type WorkflowComponentDragPayload =
+  | { type: "primitive"; id: string }
+  | { type: "block"; id: string };
+
 type PortTypeColors = Record<PortType, string>;
 type PortTypeColorStyle = React.CSSProperties & Record<`--workflow-port-color-${PortType}`, string>;
 
 const workflowNodeTypes = { workflow: WorkflowNode };
+const workflowComponentDragDataType = "application/x-video-analysis-workflow-component";
 const savedWorkflowJsonFormat = "video-analysis.workflow";
 const savedWorkflowJsonVersion = 1;
 const savedWorkflowsJsonFormat = "video-analysis.workflows";
@@ -1033,7 +1163,6 @@ const savedWorkflowsStorageKey = "video-analysis.workflows.v1";
 const savedWorkflowRunsStorageKey = "video-analysis.workflowRuns.v1";
 const savedWorkflowBlocksStorageKey = "video-analysis.workflowBlocks.v1";
 const savedWorkflowBlocksJsonFormat = "video-analysis.workflowBlocks";
-const flowPanelCollapsedStorageKey = "video-analysis.flowPanelCollapsed.v1";
 const portTypeColorsStorageKey = "video-analysis.portTypeColors.v1";
 const defaultSeedWorkflowName = "Default Analysis Pipeline";
 const legacySeedWorkflowName = "YouTube Analysis Workflow";
@@ -1346,9 +1475,11 @@ const initialWorkflowEdges: Edge[] = [
 function WorkflowBuilder({
   workflowLibrary,
   onWorkflowLibraryChange,
+  portTypeColors,
 }: {
   workflowLibrary: SavedWorkflowLibrary;
   onWorkflowLibraryChange: React.Dispatch<React.SetStateAction<SavedWorkflowLibrary>>;
+  portTypeColors: PortTypeColors;
 }) {
   const activeWorkflow = useMemo(() => activeSavedWorkflow(workflowLibrary), [workflowLibrary]);
   const initialWorkflowState = useMemo(
@@ -1362,24 +1493,14 @@ function WorkflowBuilder({
   const [blockName, setBlockName] = useState("");
   const [blockLibraryMessage, setBlockLibraryMessage] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<WorkflowContextMenuState | null>(null);
-  const [flowPanelCollapsed, setFlowPanelCollapsed] = useState(() =>
-    loadStoredBoolean(flowPanelCollapsedStorageKey, false),
-  );
-  const [portTypeColors, setPortTypeColors] = useState<PortTypeColors>(loadPortTypeColors);
+  const [componentSearch, setComponentSearch] = useState("");
+  const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<WorkflowNodeModel, Edge> | null>(null);
   const [workflowNameDraft, setWorkflowNameDraft] = useState(activeWorkflow.name);
   const workflowAutosaveReadyRef = useRef(false);
   const workflowSelectionLoadingRef = useRef(false);
   const workflowFileInputRef = useRef<HTMLInputElement | null>(null);
   const blockFileInputRef = useRef<HTMLInputElement | null>(null);
   const portTypeColorStyle = useMemo(() => portTypeColorsStyle(portTypeColors), [portTypeColors]);
-
-  useEffect(() => {
-    persistStoredBoolean(flowPanelCollapsedStorageKey, flowPanelCollapsed);
-  }, [flowPanelCollapsed]);
-
-  useEffect(() => {
-    persistPortTypeColors(portTypeColors);
-  }, [portTypeColors]);
 
   useEffect(() => {
     setWorkflowNameDraft(activeWorkflow.name);
@@ -1718,7 +1839,7 @@ function WorkflowBuilder({
   );
 
   const addPrimitiveNode = useCallback(
-    (template: WorkflowNodeModel) => {
+    (template: WorkflowNodeModel, position?: { x: number; y: number }) => {
       const nodeId = createWorkflowNodeInstanceId(template.id);
       setNodes((currentNodes) =>
         currentNodes
@@ -1726,7 +1847,7 @@ function WorkflowBuilder({
           .concat({
             id: nodeId,
             type: "workflow",
-            position: nextBlockAnchor(currentNodes),
+            position: position ?? nextBlockAnchor(currentNodes),
             data: cloneWorkflowNodeData(template.data),
             selected: true,
           }),
@@ -1738,10 +1859,15 @@ function WorkflowBuilder({
   );
 
   const addSavedBlock = useCallback(
-    (block: SavedWorkflowBlock) => {
-      const instance = instantiateSavedWorkflowBlock(block, nextBlockAnchor(nodes));
-      setNodes((currentNodes) => currentNodes.concat(instance.nodes));
+    (block: SavedWorkflowBlock, position?: { x: number; y: number }) => {
+      const anchor = position ?? nextBlockAnchor(nodes);
+      const instance = instantiateSavedWorkflowBlock(block, anchor);
+      setNodes((currentNodes) => {
+        const nextNodes: WorkflowNodeModel[] = currentNodes.map((node) => ({ ...node, selected: false }));
+        return nextNodes.concat(instance.nodes.map((node) => ({ ...node, selected: true })));
+      });
       setEdges((currentEdges) => currentEdges.concat(instance.edges));
+      setSelectedNodeIds(instance.nodes.map((node) => node.id));
     },
     [nodes, setEdges, setNodes],
   );
@@ -1816,116 +1942,595 @@ function WorkflowBuilder({
   );
   const contextGroupNode = contextNodes.length === 1 && contextNodes[0].data.group ? contextNodes[0] : null;
   const contextNodesAllMinimized = contextNodes.length > 0 && contextNodes.every((node) => node.data.minimized);
+  const filteredPrimitiveNodes = useMemo(
+    () => filterWorkflowNodeTemplates(initialWorkflowNodes, componentSearch),
+    [componentSearch],
+  );
+  const filteredSavedBlocks = useMemo(
+    () => filterSavedWorkflowBlocks(savedBlocks, componentSearch),
+    [componentSearch, savedBlocks],
+  );
+  const dropComponent = useCallback(
+    (event: React.DragEvent) => {
+      event.preventDefault();
+      const payload = parseWorkflowComponentDragPayload(event.dataTransfer.getData(workflowComponentDragDataType));
+      if (!payload) {
+        return;
+      }
+      const position = flowInstance?.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      if (payload.type === "primitive") {
+        const template = initialWorkflowNodes.find((node) => node.id === payload.id);
+        if (template) {
+          addPrimitiveNode(template, position);
+        }
+        return;
+      }
+      const block = savedBlocks.find((candidate) => candidate.id === payload.id);
+      if (block) {
+        addSavedBlock(block, position);
+      }
+    },
+    [addPrimitiveNode, addSavedBlock, flowInstance, savedBlocks],
+  );
 
   return (
     <PortTypeColorContext.Provider value={portTypeColors}>
-      <section className="rounded-lg border border-zinc-200 bg-white shadow-sm" style={portTypeColorStyle}>
-        <div className="flex flex-col gap-1 border-b border-zinc-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-          <h2 className="text-sm font-semibold text-zinc-950">Workflow Builder</h2>
-          <span className="text-xs text-zinc-500">studio-core youtube-video</span>
-        </div>
-        <div className="h-[720px] min-h-[560px] w-full">
-          <ReactFlow<WorkflowNodeModel, Edge>
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={workflowNodeTypes}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            isValidConnection={isValidConnection}
-            onSelectionChange={onSelectionChange}
-            onPaneClick={() => setContextMenu(null)}
-            onNodeContextMenu={(event, node) => {
-              event.preventDefault();
-              const nodeIds = selectedNodeIds.includes(node.id) ? selectedNodeIds : [node.id];
-              setContextMenu({ x: event.clientX, y: event.clientY, nodeIds });
-            }}
-            fitView
-            minZoom={0.18}
-            maxZoom={1.35}
-            nodesDraggable
-            nodesConnectable
-            elementsSelectable
-            selectionOnDrag
-            edgesReconnectable
-            deleteKeyCode={["Backspace", "Delete"]}
-            proOptions={{ hideAttribution: true }}
-          >
-            <Background color="#d4d4d8" gap={18} />
-            <Controls showInteractive={false} />
-          {flowPanelCollapsed ? (
-            <FlowPanel position="top-left" className="rounded-r-lg border border-l-0 border-zinc-200 bg-white shadow-sm">
+      <section className="grid min-h-[760px] gap-4 xl:grid-cols-[300px_minmax(0,1fr)_340px]" style={portTypeColorStyle}>
+        <WorkflowComponentSelector
+          search={componentSearch}
+          onSearchChange={setComponentSearch}
+          primitiveNodes={filteredPrimitiveNodes}
+          savedBlocks={filteredSavedBlocks}
+          selectedNodeCount={selectedNodes.length}
+          blockLibraryMessage={blockLibraryMessage}
+          onAddPrimitive={addPrimitiveNode}
+          onAddSavedBlock={addSavedBlock}
+          onDeleteSavedBlock={deleteSavedBlock}
+          onExportSavedBlocks={exportSavedBlocks}
+          onImportSavedBlocks={() => blockFileInputRef.current?.click()}
+          savedBlockExportDisabled={savedBlocks.length === 0}
+        />
+        <input
+          ref={blockFileInputRef}
+          className="hidden"
+          type="file"
+          accept="application/json,.json"
+          onChange={importSavedBlocks}
+        />
+        <section className="min-w-0 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
+          <div className="flex flex-col gap-3 border-b border-zinc-200 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="min-w-0">
+              <h2 className="truncate text-sm font-semibold text-zinc-950">{activeWorkflow.name}</h2>
+              <p className="mt-1 text-xs text-zinc-500">
+                v{activeWorkflow.version} · {nodes.length} components · {edges.length} connections
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
               <button
-                type="button"
-                className="inline-flex h-12 w-10 items-center justify-center text-zinc-700 hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-2"
-                onClick={() => setFlowPanelCollapsed(false)}
-                title="Expand workflow library"
-                aria-label="Expand workflow library"
+                className="inline-flex h-9 items-center gap-2 rounded-lg bg-zinc-950 px-3 text-xs font-medium text-white shadow-sm hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-2"
+                onClick={saveActiveWorkflowVersion}
+                title="Save workflow version"
               >
-                <PanelExpandIcon className="h-4 w-4" />
+                <SaveIcon className="h-4 w-4" />
+                Save Version
               </button>
-            </FlowPanel>
-          ) : (
-            <FlowPanel position="top-left" className="w-[320px] rounded-lg border border-zinc-200 bg-white p-3 shadow-sm">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-xs font-semibold uppercase text-zinc-500">Workflows</div>
-                <button
-                  type="button"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-                  onClick={() => setFlowPanelCollapsed(true)}
-                  title="Collapse workflow library"
-                  aria-label="Collapse workflow library"
-                >
-                  <PanelCollapseIcon className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              <div className="mt-3 flex gap-2">
-                <input
-                  className="min-w-0 flex-1 rounded-lg border border-zinc-300 px-3 py-2 text-xs outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-                  value={workflowNameDraft}
-                  placeholder="Workflow name"
-                  onChange={(event) => setWorkflowNameDraft(event.target.value)}
-                  onBlur={commitActiveWorkflowName}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.currentTarget.blur();
+              <button
+                className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+                onClick={exportWorkflow}
+                title="Export workflow as JSON"
+              >
+                <DownloadIcon className="h-4 w-4" />
+                Export
+              </button>
+              <button
+                className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+                onClick={() => workflowFileInputRef.current?.click()}
+                title="Load workflow from JSON"
+              >
+                <UploadIcon className="h-4 w-4" />
+                Load
+              </button>
+              <input
+                ref={workflowFileInputRef}
+                className="hidden"
+                type="file"
+                accept="application/json,.json"
+                onChange={importWorkflow}
+              />
+              <button
+                className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+                onClick={() => {
+                  setNodes(initialWorkflowNodes);
+                  setEdges(initialWorkflowEdges);
+                  setSelectedNodeIds([]);
+                  setContextMenu(null);
+                }}
+                title="Reset workflow"
+              >
+                <RefreshIcon className="h-4 w-4" />
+                Reset
+              </button>
+              <button
+                className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+                onClick={() => {
+                  setEdges([]);
+                  setContextMenu(null);
+                }}
+                title="Clear connections"
+              >
+                <CloseIcon className="h-4 w-4" />
+                Clear
+              </button>
+            </div>
+          </div>
+          <div className="h-[720px] min-h-[560px] w-full">
+            <ReactFlow<WorkflowNodeModel, Edge>
+              nodes={nodes}
+              edges={edges}
+              nodeTypes={workflowNodeTypes}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={onConnect}
+              isValidConnection={isValidConnection}
+              onSelectionChange={onSelectionChange}
+              onPaneClick={() => setContextMenu(null)}
+              onNodeContextMenu={(event, node) => {
+                event.preventDefault();
+                const nodeIds = selectedNodeIds.includes(node.id) ? selectedNodeIds : [node.id];
+                setContextMenu({ x: event.clientX, y: event.clientY, nodeIds });
+              }}
+              onInit={setFlowInstance}
+              onDrop={dropComponent}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+              }}
+              fitView
+              minZoom={0.18}
+              maxZoom={1.35}
+              nodesDraggable
+              nodesConnectable
+              elementsSelectable
+              selectionOnDrag
+              edgesReconnectable
+              deleteKeyCode={["Backspace", "Delete"]}
+              proOptions={{ hideAttribution: true }}
+            >
+              <Background color="#d4d4d8" gap={18} />
+              <Controls showInteractive={false} />
+              {contextMenu && (
+                <WorkflowContextMenu
+                  x={contextMenu.x}
+                  y={contextMenu.y}
+                  nodeCount={contextNodes.length}
+                  canGroup={contextNodes.length >= 2}
+                  canSave={contextNodes.length >= 2}
+                  canUngroup={Boolean(contextGroupNode)}
+                  minimizeLabel={contextNodesAllMinimized ? "Expand selected" : "Minimize selected"}
+                  onGroup={() => groupNodes(contextMenu.nodeIds)}
+                  onSave={() => saveNodesAsBlock(contextNodes)}
+                  onUngroup={() => {
+                    if (contextGroupNode) {
+                      ungroupNode(contextGroupNode.id);
                     }
                   }}
+                  onToggleMinimized={() => setWorkflowNodesMinimized(contextMenu.nodeIds, !contextNodesAllMinimized)}
+                  onDelete={() => deleteWorkflowNodes(contextMenu.nodeIds)}
+                  onClose={() => setContextMenu(null)}
                 />
+              )}
+            </ReactFlow>
+          </div>
+        </section>
+        <WorkflowDetailsPanel
+          workflowLibrary={workflowLibrary}
+          activeWorkflow={activeWorkflow}
+          nodes={nodes}
+          edges={edges}
+          selectedNodes={selectedNodes}
+          selectedInternalEdgeCount={selectedInternalEdgeCount}
+          blockName={blockName}
+          onBlockNameChange={setBlockName}
+          onSelectWorkflow={selectWorkflow}
+          onCreateWorkflow={createBlankWorkflow}
+          onCloneWorkflow={cloneActiveWorkflow}
+          onDeleteWorkflow={() => deleteWorkflow(activeWorkflow.id)}
+          workflowNameDraft={workflowNameDraft}
+          onWorkflowNameDraftChange={setWorkflowNameDraft}
+          onCommitWorkflowName={commitActiveWorkflowName}
+          onSaveSelectedBlock={saveSelectedBlock}
+          onGroupSelected={() => groupNodes(selectedNodeIds)}
+          onDeleteSelected={() => deleteWorkflowNodes(selectedNodeIds)}
+          onToggleSelectedMinimized={() => setWorkflowNodesMinimized(selectedNodeIds, !selectedNodes.every((node) => node.data.minimized))}
+          onUngroupSelected={() => {
+            const groupNode = selectedNodes.length === 1 && selectedNodes[0].data.group ? selectedNodes[0] : null;
+            if (groupNode) {
+              ungroupNode(groupNode.id);
+            }
+          }}
+          onSaveWorkflowVersion={saveActiveWorkflowVersion}
+          onRestoreWorkflowVersion={restoreWorkflowVersion}
+        />
+      </section>
+    </PortTypeColorContext.Provider>
+  );
+}
+
+function WorkflowComponentSelector({
+  search,
+  onSearchChange,
+  primitiveNodes,
+  savedBlocks,
+  selectedNodeCount,
+  blockLibraryMessage,
+  savedBlockExportDisabled,
+  onAddPrimitive,
+  onAddSavedBlock,
+  onDeleteSavedBlock,
+  onExportSavedBlocks,
+  onImportSavedBlocks,
+}: {
+  search: string;
+  onSearchChange: (value: string) => void;
+  primitiveNodes: WorkflowNodeModel[];
+  savedBlocks: SavedWorkflowBlock[];
+  selectedNodeCount: number;
+  blockLibraryMessage: string | null;
+  savedBlockExportDisabled: boolean;
+  onAddPrimitive: (template: WorkflowNodeModel) => void;
+  onAddSavedBlock: (block: SavedWorkflowBlock) => void;
+  onDeleteSavedBlock: (blockId: string) => void;
+  onExportSavedBlocks: () => void;
+  onImportSavedBlocks: () => void;
+}) {
+  return (
+    <aside className="min-h-0 rounded-lg border border-zinc-200 bg-white shadow-sm">
+      <div className="border-b border-zinc-200 px-4 py-3">
+        <h2 className="text-sm font-semibold text-zinc-950">Components</h2>
+        <input
+          className="mt-3 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+          value={search}
+          placeholder="Search components"
+          onChange={(event) => onSearchChange(event.target.value)}
+        />
+      </div>
+      <div className="max-h-[682px] space-y-5 overflow-auto p-4">
+        <div>
+          <div className="mb-2 text-xs font-semibold uppercase text-zinc-500">Library</div>
+          <div className="space-y-2">
+            {primitiveNodes.length === 0 ? (
+              <div className="rounded-md border border-dashed border-zinc-200 px-3 py-2 text-xs text-zinc-400">
+                No components
               </div>
-              <div className="mt-2 grid grid-cols-3 gap-2">
-                <button
-                  type="button"
-                  className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
-                  onClick={createBlankWorkflow}
-                  title="New blank workflow"
-                  aria-label="New blank workflow"
-                >
-                  <PlusIcon className="h-4 w-4" />
-                  New
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
-                  onClick={cloneActiveWorkflow}
-                  title="Clone active workflow"
-                  aria-label="Clone active workflow"
-                >
-                  <CloneIcon className="h-4 w-4" />
-                  Clone
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-3 text-xs font-medium text-rose-700 shadow-sm hover:bg-rose-50"
-                  onClick={() => deleteWorkflow(activeWorkflow.id)}
-                  title="Delete active workflow"
-                  aria-label="Delete active workflow"
-                >
-                  <CloseIcon className="h-4 w-4" />
-                  Delete
-                </button>
+            ) : (
+              primitiveNodes.map((node) => (
+                <WorkflowComponentTile
+                  key={node.id}
+                  title={node.data.title}
+                  subtitle={node.data.packageName}
+                  tone={node.data.tone}
+                  portSummary={`${node.data.inputs.length} in · ${node.data.outputs.length} out`}
+                  dragPayload={{ type: "primitive", id: node.id }}
+                  onAdd={() => onAddPrimitive(node)}
+                />
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="border-t border-zinc-200 pt-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs font-semibold uppercase text-zinc-500">Reusable</div>
+            <span className="shrink-0 rounded bg-zinc-100 px-2 py-1 text-[11px] font-medium text-zinc-600">
+              {selectedNodeCount} selected
+            </span>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button
+              className={classNames(
+                "inline-flex h-8 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50",
+                savedBlockExportDisabled && "cursor-not-allowed opacity-50",
+              )}
+              onClick={onExportSavedBlocks}
+              disabled={savedBlockExportDisabled}
+              title="Export components as JSON"
+            >
+              <DownloadIcon className="h-4 w-4" />
+              Export
+            </button>
+            <button
+              className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+              onClick={onImportSavedBlocks}
+              title="Load components from JSON"
+            >
+              <UploadIcon className="h-4 w-4" />
+              Load
+            </button>
+          </div>
+          {blockLibraryMessage && <div className="mt-2 text-[11px] text-zinc-500">{blockLibraryMessage}</div>}
+          <div className="mt-3 space-y-2">
+            {savedBlocks.length === 0 ? (
+              <div className="rounded-md border border-dashed border-zinc-200 px-3 py-2 text-xs text-zinc-400">
+                No saved components
               </div>
-              <div className="mt-3 max-h-32 space-y-1 overflow-auto pr-1">
+            ) : (
+              savedBlocks.map((block) => (
+                <WorkflowComponentTile
+                  key={block.id}
+                  title={block.name}
+                  subtitle={`${block.nodes.length} components`}
+                  portSummary={`${block.edges.length} connections`}
+                  dragPayload={{ type: "block", id: block.id }}
+                  onAdd={() => onAddSavedBlock(block)}
+                  onDelete={() => onDeleteSavedBlock(block.id)}
+                />
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function WorkflowComponentTile({
+  title,
+  subtitle,
+  portSummary,
+  tone = "zinc",
+  dragPayload,
+  onAdd,
+  onDelete,
+}: {
+  title: string;
+  subtitle: string;
+  portSummary: string;
+  tone?: FlowTone;
+  dragPayload: WorkflowComponentDragPayload;
+  onAdd: () => void;
+  onDelete?: () => void;
+}) {
+  return (
+    <div
+      draggable
+      className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-800 hover:border-zinc-300 hover:bg-white"
+      onDragStart={(event) => {
+        event.dataTransfer.setData(workflowComponentDragDataType, JSON.stringify(dragPayload));
+        event.dataTransfer.effectAllowed = "copy";
+      }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <button type="button" className="min-w-0 flex-1 text-left" onClick={onAdd} title={`Add ${title}`}>
+          <span className="flex items-center gap-2">
+            <span className={classNames("h-2.5 w-2.5 shrink-0 rounded-full", flowToneClass(tone))} />
+            <span className="min-w-0 truncate font-semibold">{title}</span>
+          </span>
+          <span className="mt-1 block truncate text-[10px] text-zinc-500">{subtitle}</span>
+          <span className="mt-1 block text-[10px] text-zinc-500">{portSummary}</span>
+        </button>
+        <div className="flex shrink-0 gap-1">
+          <button
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+            onClick={onAdd}
+            title={`Add ${title}`}
+          >
+            <PlusIcon className="h-4 w-4" />
+          </button>
+          {onDelete && (
+            <button
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+              onClick={onDelete}
+              title={`Delete ${title}`}
+            >
+              <CloseIcon className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WorkflowDetailsPanel({
+  workflowLibrary,
+  activeWorkflow,
+  nodes,
+  edges,
+  selectedNodes,
+  selectedInternalEdgeCount,
+  blockName,
+  workflowNameDraft,
+  onBlockNameChange,
+  onSelectWorkflow,
+  onCreateWorkflow,
+  onCloneWorkflow,
+  onDeleteWorkflow,
+  onWorkflowNameDraftChange,
+  onCommitWorkflowName,
+  onSaveSelectedBlock,
+  onGroupSelected,
+  onDeleteSelected,
+  onToggleSelectedMinimized,
+  onUngroupSelected,
+  onSaveWorkflowVersion,
+  onRestoreWorkflowVersion,
+}: {
+  workflowLibrary: SavedWorkflowLibrary;
+  activeWorkflow: SavedWorkflow;
+  nodes: WorkflowNodeModel[];
+  edges: Edge[];
+  selectedNodes: WorkflowNodeModel[];
+  selectedInternalEdgeCount: number;
+  blockName: string;
+  workflowNameDraft: string;
+  onBlockNameChange: (value: string) => void;
+  onSelectWorkflow: (workflowId: string) => void;
+  onCreateWorkflow: () => void;
+  onCloneWorkflow: () => void;
+  onDeleteWorkflow: () => void;
+  onWorkflowNameDraftChange: (value: string) => void;
+  onCommitWorkflowName: () => void;
+  onSaveSelectedBlock: () => void;
+  onGroupSelected: () => void;
+  onDeleteSelected: () => void;
+  onToggleSelectedMinimized: () => void;
+  onUngroupSelected: () => void;
+  onSaveWorkflowVersion: () => void;
+  onRestoreWorkflowVersion: (version: SavedWorkflowVersion) => void;
+}) {
+  const selectedNode = selectedNodes.length === 1 ? selectedNodes[0] : null;
+  const selectedGroupNode = selectedNode?.data.group ? selectedNode : null;
+
+  return (
+    <aside className="min-h-0 rounded-lg border border-zinc-200 bg-white shadow-sm">
+      <div className="border-b border-zinc-200 px-4 py-3">
+        <h2 className="text-sm font-semibold text-zinc-950">
+          {selectedNode ? selectedNode.data.title : selectedNodes.length > 1 ? "Selection" : "Workflow Details"}
+        </h2>
+        <p className="mt-1 text-xs text-zinc-500">
+          {selectedNode
+            ? selectedNode.data.packageName
+            : selectedNodes.length > 1
+              ? `${selectedNodes.length} components selected`
+              : activeWorkflow.name}
+        </p>
+      </div>
+      <div className="max-h-[682px] space-y-5 overflow-auto p-4">
+        {selectedNode ? (
+          <>
+            <div>
+              <p className="text-sm leading-6 text-zinc-700">{selectedNode.data.description}</p>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <Metric label="Inputs" value={String(selectedNode.data.inputs.length)} />
+                <Metric label="Outputs" value={String(selectedNode.data.outputs.length)} />
+              </div>
+            </div>
+            <WorkflowPortList title="Inputs" ports={selectedNode.data.inputs} />
+            <WorkflowPortList title="Outputs" ports={selectedNode.data.outputs} />
+            {selectedGroupNode?.data.group && (
+              <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+                <div className="text-xs font-semibold uppercase text-zinc-500">Group</div>
+                <div className="mt-2 text-sm font-medium text-zinc-900">
+                  {selectedGroupNode.data.group.memberCount} components
+                </div>
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+                onClick={onToggleSelectedMinimized}
+                title="Toggle selected component"
+              >
+                <MinimizeIcon className="h-4 w-4" />
+                Toggle
+              </button>
+              <button
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-rose-700 shadow-sm hover:bg-rose-50"
+                onClick={onDeleteSelected}
+                title="Delete selected component"
+              >
+                <CloseIcon className="h-4 w-4" />
+                Delete
+              </button>
+              {selectedGroupNode && (
+                <button
+                  className="col-span-2 inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+                  onClick={onUngroupSelected}
+                  title="Ungroup selected component"
+                >
+                  <UngroupIcon className="h-4 w-4" />
+                  Ungroup
+                </button>
+              )}
+            </div>
+          </>
+        ) : selectedNodes.length > 1 ? (
+          <>
+            <div className="grid grid-cols-2 gap-2">
+              <Metric label="Selected" value={String(selectedNodes.length)} />
+              <Metric label="Internal" value={String(selectedInternalEdgeCount)} />
+            </div>
+            <Field label="Component name">
+              <input
+                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={blockName}
+                placeholder="Component name"
+                onChange={(event) => onBlockNameChange(event.target.value)}
+              />
+            </Field>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-zinc-950 px-3 text-xs font-medium text-white shadow-sm hover:bg-zinc-800"
+                onClick={onSaveSelectedBlock}
+                title="Save selected components"
+              >
+                <SaveIcon className="h-4 w-4" />
+                Save
+              </button>
+              <button
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-zinc-950 px-3 text-xs font-medium text-white shadow-sm hover:bg-zinc-800"
+                onClick={onGroupSelected}
+                title="Group selected components"
+              >
+                <GroupIcon className="h-4 w-4" />
+                Group
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <Field label="Workflow name">
+              <input
+                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={workflowNameDraft}
+                placeholder="Workflow name"
+                onChange={(event) => onWorkflowNameDraftChange(event.target.value)}
+                onBlur={onCommitWorkflowName}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.currentTarget.blur();
+                  }
+                }}
+              />
+            </Field>
+            <div className="grid grid-cols-2 gap-2">
+              <Metric label="Version" value={`v${activeWorkflow.version}`} />
+              <Metric label="Updated" value={formatWorkflowTimestamp(activeWorkflow.updatedAt)} />
+              <Metric label="Components" value={String(nodes.length)} />
+              <Metric label="Connections" value={String(edges.length)} />
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+                onClick={onCreateWorkflow}
+                title="New blank workflow"
+              >
+                <PlusIcon className="h-4 w-4" />
+                New
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+                onClick={onCloneWorkflow}
+                title="Clone active workflow"
+              >
+                <CloneIcon className="h-4 w-4" />
+                Clone
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-3 text-xs font-medium text-rose-700 shadow-sm hover:bg-rose-50"
+                onClick={onDeleteWorkflow}
+                title="Delete active workflow"
+              >
+                <CloseIcon className="h-4 w-4" />
+                Delete
+              </button>
+            </div>
+            <div>
+              <div className="mb-2 text-xs font-semibold uppercase text-zinc-500">Workflows</div>
+              <div className="max-h-36 space-y-1 overflow-auto pr-1">
                 {workflowLibrary.workflows.map((workflow) => (
                   <button
                     key={workflow.id}
@@ -1936,7 +2541,7 @@ function WorkflowBuilder({
                         ? "border-zinc-950 bg-zinc-950 text-white"
                         : "border-zinc-200 bg-zinc-50 text-zinc-800 hover:border-zinc-300 hover:bg-white",
                     )}
-                    onClick={() => selectWorkflow(workflow.id)}
+                    onClick={() => onSelectWorkflow(workflow.id)}
                     title={workflow.name}
                   >
                     <span className="min-w-0 truncate font-semibold">{workflow.name}</span>
@@ -1946,282 +2551,129 @@ function WorkflowBuilder({
                   </button>
                 ))}
               </div>
-
-              <PortTypeColorSettings
-                colors={portTypeColors}
-                onChange={(type, color) =>
-                  setPortTypeColors((currentColors) => ({
-                    ...currentColors,
-                    [type]: color,
-                  }))
-                }
-                onReset={() => setPortTypeColors(defaultPortTypeColors)}
-              />
-
-              <div className="mt-4 border-t border-zinc-200 pt-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-xs font-semibold uppercase text-zinc-500">Versions</div>
-                  <span className="shrink-0 rounded bg-zinc-100 px-2 py-1 text-[11px] font-medium text-zinc-600">
-                    {activeWorkflow.versions.length} saved
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  className="mt-2 inline-flex h-8 w-full items-center justify-center gap-2 rounded-md bg-zinc-950 px-3 text-xs font-medium text-white shadow-sm hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-2"
-                  onClick={saveActiveWorkflowVersion}
-                  title="Save workflow version"
-                >
-                  <SaveIcon className="h-4 w-4" />
-                  Save Version
-                </button>
-                <div className="mt-2 max-h-36 space-y-1 overflow-auto pr-1">
-                  {activeWorkflow.versions.length === 0 ? (
-                    <div className="rounded-md border border-dashed border-zinc-200 px-3 py-2 text-xs text-zinc-400">
-                      No saved versions
-                    </div>
-                  ) : (
-                    activeWorkflow.versions.map((version) => (
-                      <div key={version.id} className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="truncate text-xs font-semibold text-zinc-900">v{version.version}</div>
-                            <div className="mt-1 truncate text-[11px] text-zinc-500">
-                              {formatWorkflowTimestamp(version.createdAt)}
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            className="inline-flex h-7 shrink-0 items-center justify-center rounded-md border border-zinc-300 bg-white px-2 text-[11px] font-medium text-zinc-700 hover:bg-zinc-100"
-                            onClick={() => restoreWorkflowVersion(version)}
-                            title={`Restore ${version.name} v${version.version}`}
-                          >
-                            Restore
-                          </button>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
+            </div>
+            <div className="border-t border-zinc-200 pt-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs font-semibold uppercase text-zinc-500">Versions</div>
+                <span className="shrink-0 rounded bg-zinc-100 px-2 py-1 text-[11px] font-medium text-zinc-600">
+                  {activeWorkflow.versions.length} saved
+                </span>
               </div>
-
-              <div className="mt-4 border-t border-zinc-200 pt-3">
-                <div className="text-xs font-semibold uppercase text-zinc-500">Components</div>
-                <div className="mt-2 max-h-40 space-y-1 overflow-auto pr-1">
-                  {initialWorkflowNodes.map((node) => (
-                    <button
-                      key={node.id}
-                      type="button"
-                      className="flex w-full items-center justify-between gap-3 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-left text-xs text-zinc-800 hover:border-zinc-300 hover:bg-white"
-                      onClick={() => addPrimitiveNode(node)}
-                      title={`Add ${node.data.title}`}
-                    >
-                      <span className="min-w-0">
-                        <span className="block truncate font-semibold">{node.data.title}</span>
-                        <span className="block truncate text-[10px] text-zinc-500">{node.data.packageName}</span>
-                      </span>
-                      <PlusIcon className="h-3.5 w-3.5 shrink-0" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="mt-4 border-t border-zinc-200 pt-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-xs font-semibold uppercase text-zinc-500">Reusable Components</div>
-                  <span className="shrink-0 rounded bg-zinc-100 px-2 py-1 text-[11px] font-medium text-zinc-600">
-                    {selectedNodes.length} selected
-                  </span>
-                </div>
-                <div className="mt-3 flex gap-2">
-                  <input
-                    className="min-w-0 flex-1 rounded-lg border border-zinc-300 px-3 py-2 text-xs outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-                    value={blockName}
-                    placeholder="Component name"
-                    onChange={(event) => setBlockName(event.target.value)}
-                  />
-                </div>
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  <button
-                    className={classNames(
-                      "inline-flex h-9 items-center justify-center gap-2 rounded-lg px-3 text-xs font-medium text-white shadow-sm focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-2",
-                      selectedNodes.length < 2 ? "cursor-not-allowed bg-zinc-400" : "bg-zinc-950 hover:bg-zinc-800",
-                    )}
-                    onClick={saveSelectedBlock}
-                    disabled={selectedNodes.length < 2}
-                    title="Save selected components"
-                  >
-                    <SaveIcon className="h-4 w-4" />
-                    Save
-                  </button>
-                  <button
-                    className={classNames(
-                      "inline-flex h-9 items-center justify-center gap-2 rounded-lg px-3 text-xs font-medium text-white shadow-sm focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-2",
-                      selectedNodes.length < 2 ? "cursor-not-allowed bg-zinc-400" : "bg-zinc-950 hover:bg-zinc-800",
-                    )}
-                    onClick={() => groupNodes(selectedNodeIds)}
-                    disabled={selectedNodes.length < 2}
-                    title="Group selected components"
-                  >
-                    <GroupIcon className="h-4 w-4" />
-                    Group
-                  </button>
-                </div>
-                <div className="mt-2 text-[11px] text-zinc-500">
-                  {selectedNodes.length >= 2
-                    ? `${selectedInternalEdgeCount} internal connection${selectedInternalEdgeCount === 1 ? "" : "s"}`
-                    : "Select multiple components"}
-                </div>
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <button
-                    className={classNames(
-                      "inline-flex h-8 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50",
-                      savedBlocks.length === 0 && "cursor-not-allowed opacity-50",
-                    )}
-                    onClick={exportSavedBlocks}
-                    disabled={savedBlocks.length === 0}
-                    title="Export components as JSON"
-                  >
-                    <DownloadIcon className="h-4 w-4" />
-                    Export
-                  </button>
-                  <button
-                    className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
-                    onClick={() => blockFileInputRef.current?.click()}
-                    title="Load components from JSON"
-                  >
-                    <UploadIcon className="h-4 w-4" />
-                    Load
-                  </button>
-                  <input
-                    ref={blockFileInputRef}
-                    className="hidden"
-                    type="file"
-                    accept="application/json,.json"
-                    onChange={importSavedBlocks}
-                  />
-                </div>
-                {blockLibraryMessage && <div className="mt-2 text-[11px] text-zinc-500">{blockLibraryMessage}</div>}
-                <div className="mt-3 max-h-64 space-y-2 overflow-auto pr-1">
-                  {savedBlocks.length === 0 ? (
-                    <div className="rounded-md border border-dashed border-zinc-200 px-3 py-2 text-xs text-zinc-400">
-                      No saved components
-                    </div>
-                  ) : (
-                    savedBlocks.map((block) => (
-                      <div key={block.id} className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="truncate text-xs font-semibold text-zinc-900">{block.name}</div>
-                            <div className="mt-1 text-[11px] text-zinc-500">
-                              {block.nodes.length} components, {block.edges.length} connections
-                            </div>
-                          </div>
-                          <div className="flex shrink-0 gap-1">
-                            <button
-                              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-                              onClick={() => addSavedBlock(block)}
-                              title="Add component"
-                            >
-                              <PlusIcon className="h-4 w-4" />
-                            </button>
-                            <button
-                              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-                              onClick={() => deleteSavedBlock(block.id)}
-                              title="Delete component"
-                            >
-                              <CloseIcon className="h-4 w-4" />
-                            </button>
+              <button
+                type="button"
+                className="mt-2 inline-flex h-8 w-full items-center justify-center gap-2 rounded-md bg-zinc-950 px-3 text-xs font-medium text-white shadow-sm hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-2"
+                onClick={onSaveWorkflowVersion}
+                title="Save workflow version"
+              >
+                <SaveIcon className="h-4 w-4" />
+                Save Version
+              </button>
+              <div className="mt-2 max-h-36 space-y-1 overflow-auto pr-1">
+                {activeWorkflow.versions.length === 0 ? (
+                  <div className="rounded-md border border-dashed border-zinc-200 px-3 py-2 text-xs text-zinc-400">
+                    No saved versions
+                  </div>
+                ) : (
+                  activeWorkflow.versions.map((version) => (
+                    <div key={version.id} className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-xs font-semibold text-zinc-900">v{version.version}</div>
+                          <div className="mt-1 truncate text-[11px] text-zinc-500">
+                            {formatWorkflowTimestamp(version.createdAt)}
                           </div>
                         </div>
+                        <button
+                          type="button"
+                          className="inline-flex h-7 shrink-0 items-center justify-center rounded-md border border-zinc-300 bg-white px-2 text-[11px] font-medium text-zinc-700 hover:bg-zinc-100"
+                          onClick={() => onRestoreWorkflowVersion(version)}
+                          title={`Restore ${version.name} v${version.version}`}
+                        >
+                          Restore
+                        </button>
                       </div>
-                    ))
-                  )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function WorkflowPortList({ title, ports }: { title: string; ports: FlowPort[] }) {
+  const colors = usePortTypeColors();
+  return (
+    <div>
+      <div className="mb-2 text-xs font-semibold uppercase text-zinc-500">{title}</div>
+      <div className="space-y-2">
+        {ports.length === 0 ? (
+          <div className="rounded-md border border-dashed border-zinc-200 px-3 py-2 text-xs text-zinc-400">none</div>
+        ) : (
+          ports.map((portValue) => {
+            const color = portTypeColor(portValue.type, colors);
+            return (
+              <div
+                key={`${title}-${portValue.id}-${portValue.type}`}
+                className="rounded-md border px-3 py-2 text-xs"
+                style={{
+                  backgroundColor: hexToRgba(color, 0.08),
+                  borderColor: hexToRgba(color, 0.32),
+                }}
+              >
+                <div className="font-medium text-zinc-900">{portValue.label}</div>
+                <div className="mt-1 text-[10px] font-semibold uppercase" style={{ color: portTypeBadgeTextColor(color) }}>
+                  {formatPortType(portValue.type)}
                 </div>
               </div>
-            </FlowPanel>
-          )}
-          <FlowPanel position="top-right" className="flex gap-2">
-            <button
-              className="inline-flex h-9 items-center gap-2 rounded-lg bg-zinc-950 px-3 text-xs font-medium text-white shadow-sm hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-2"
-              onClick={saveActiveWorkflowVersion}
-              title="Save workflow version"
-            >
-              <SaveIcon className="h-4 w-4" />
-              Save Version
-            </button>
-            <button
-              className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
-              onClick={exportWorkflow}
-              title="Export workflow as JSON"
-            >
-              <DownloadIcon className="h-4 w-4" />
-              Export
-            </button>
-            <button
-              className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
-              onClick={() => workflowFileInputRef.current?.click()}
-              title="Load workflow from JSON"
-            >
-              <UploadIcon className="h-4 w-4" />
-              Load
-            </button>
-            <input
-              ref={workflowFileInputRef}
-              className="hidden"
-              type="file"
-              accept="application/json,.json"
-              onChange={importWorkflow}
-            />
-            <button
-              className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
-              onClick={() => {
-                setNodes(initialWorkflowNodes);
-                setEdges(initialWorkflowEdges);
-                setSelectedNodeIds([]);
-                setContextMenu(null);
-              }}
-              title="Reset workflow"
-            >
-              <RefreshIcon className="h-4 w-4" />
-              Reset
-            </button>
-            <button
-              className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
-              onClick={() => {
-                setEdges([]);
-                setContextMenu(null);
-              }}
-              title="Clear connections"
-            >
-              <CloseIcon className="h-4 w-4" />
-              Clear
-            </button>
-          </FlowPanel>
-          {contextMenu && (
-            <WorkflowContextMenu
-              x={contextMenu.x}
-              y={contextMenu.y}
-              nodeCount={contextNodes.length}
-              canGroup={contextNodes.length >= 2}
-              canSave={contextNodes.length >= 2}
-              canUngroup={Boolean(contextGroupNode)}
-              minimizeLabel={contextNodesAllMinimized ? "Expand selected" : "Minimize selected"}
-              onGroup={() => groupNodes(contextMenu.nodeIds)}
-              onSave={() => saveNodesAsBlock(contextNodes)}
-              onUngroup={() => {
-                if (contextGroupNode) {
-                  ungroupNode(contextGroupNode.id);
-                }
-              }}
-              onToggleMinimized={() => setWorkflowNodesMinimized(contextMenu.nodeIds, !contextNodesAllMinimized)}
-              onDelete={() => deleteWorkflowNodes(contextMenu.nodeIds)}
-              onClose={() => setContextMenu(null)}
-            />
-          )}
-          </ReactFlow>
-        </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SettingsPage({
+  portTypeColors,
+  onPortTypeColorChange,
+  onResetPortTypeColors,
+}: {
+  portTypeColors: PortTypeColors;
+  onPortTypeColorChange: (type: PortType, color: string) => void;
+  onResetPortTypeColors: () => void;
+}) {
+  return (
+    <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <section className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
+        <PortTypeColorSettings
+          colors={portTypeColors}
+          onChange={onPortTypeColorChange}
+          onReset={onResetPortTypeColors}
+        />
       </section>
-    </PortTypeColorContext.Provider>
+      <aside className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
+        <h2 className="text-sm font-semibold text-zinc-950">Preview</h2>
+        <div className="mt-3 space-y-2">
+          {portTypes.slice(0, 8).map((type) => {
+            const color = portTypeColor(type, portTypeColors);
+            return (
+              <div
+                key={type}
+                className="flex items-center justify-between rounded-md border px-3 py-2 text-xs"
+                style={{ borderColor: hexToRgba(color, 0.32), backgroundColor: hexToRgba(color, 0.08) }}
+              >
+                <span className="font-medium text-zinc-900">{formatPortType(type)}</span>
+                <span className="h-4 w-4 rounded-full border border-white shadow-sm" style={{ backgroundColor: color }} />
+              </div>
+            );
+          })}
+        </div>
+      </aside>
+    </section>
   );
 }
 
@@ -4494,6 +4946,71 @@ function currentUseCase(id: UseCaseId) {
   return useCases.find((useCase) => useCase.id === id) ?? useCases[0];
 }
 
+function appPageFromPath(pathname: string): AppPage {
+  if (pathname === "/workflow" || pathname === "/workflows") {
+    return "workflow";
+  }
+  if (pathname === "/settings") {
+    return "settings";
+  }
+  return "analysis";
+}
+
+function pathForAppPage(page: AppPage): string {
+  switch (page) {
+    case "workflow":
+      return "/workflow";
+    case "settings":
+      return "/settings";
+    case "analysis":
+      return "/";
+  }
+}
+
+function filterWorkflowNodeTemplates(nodes: WorkflowNodeModel[], query: string): WorkflowNodeModel[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    return nodes;
+  }
+  return nodes.filter((node) =>
+    [node.data.title, node.data.packageName, node.data.description, ...node.data.inputs.map((portValue) => portValue.label), ...node.data.outputs.map((portValue) => portValue.label)]
+      .join(" ")
+      .toLowerCase()
+      .includes(normalized),
+  );
+}
+
+function filterSavedWorkflowBlocks(blocks: SavedWorkflowBlock[], query: string): SavedWorkflowBlock[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    return blocks;
+  }
+  return blocks.filter((block) =>
+    [block.name, ...block.nodes.map((node) => node.data.title), ...block.nodes.map((node) => node.data.packageName)]
+      .join(" ")
+      .toLowerCase()
+      .includes(normalized),
+  );
+}
+
+function parseWorkflowComponentDragPayload(value: string): WorkflowComponentDragPayload | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!isRecord(parsed) || typeof parsed.id !== "string") {
+      return null;
+    }
+    if (parsed.type === "primitive" || parsed.type === "block") {
+      return { type: parsed.type, id: parsed.id };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function basename(path: string): string {
   const last = path.split(/[\\/]/).pop() ?? path;
   return last.replace(/\.[^.]+$/, "") || "video";
@@ -4650,6 +5167,19 @@ function RunIcon({ className }: { className?: string }) {
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className={className}>
       <path d="M5 4.5v11l9-5.5-9-5.5Z" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M15.5 5v10" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function SettingsIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className={className}>
+      <path d="M10 7.2a2.8 2.8 0 1 1 0 5.6 2.8 2.8 0 0 1 0-5.6Z" />
+      <path
+        d="M15.6 11.4c.1-.5.1-.9 0-1.4l1.5-1.1-1.5-2.6-1.8.7a6 6 0 0 0-1.2-.7L12.4 4H7.6l-.3 2.3c-.4.2-.8.4-1.2.7l-1.8-.7-1.5 2.6L4.4 10a5.6 5.6 0 0 0 0 1.4l-1.5 1.1 1.5 2.6 1.8-.7c.4.3.8.5 1.2.7l.3 2.3h4.8l.3-2.3c.4-.2.8-.4 1.2-.7l1.8.7 1.5-2.6-1.7-1.1Z"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
