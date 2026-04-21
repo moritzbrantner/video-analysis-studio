@@ -276,11 +276,13 @@ const defaultExecutionEdges: Edge[] = [
 export function WorkflowExecutionEditor({
   form,
   report,
+  workflowName = "Workflow",
   visualizedDataKinds,
   onVisualizeDataKind,
 }: {
   form: UseCaseFormSnapshot;
   report: YoutubeVideoReport;
+  workflowName?: string;
   visualizedDataKinds: string[];
   onVisualizeDataKind: (dataKind: string) => void;
 }) {
@@ -351,7 +353,7 @@ export function WorkflowExecutionEditor({
         <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
           <div className="flex flex-col gap-1 border-b border-zinc-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-sm font-semibold text-zinc-950">Executable Workflow</h2>
+              <h2 className="text-sm font-semibold text-zinc-950">{workflowName}</h2>
               <p className="mt-1 text-sm text-zinc-600">{workflowInputSummary(form)}</p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -744,7 +746,7 @@ function buildCoverage(edges: Edge[], visualizedDataKinds: string[], ignoredKind
       const isVisualized = visualized.has(portValue.kind) || portValue.kind === "dashboard_view";
       const status = routed ? "routed" : isVisualized ? "visualized" : ignored ? "ignored" : "unresolved";
       const reason = routed
-        ? "connected to another node"
+        ? "connected to another component"
         : isVisualized
           ? "covered by a result page component"
           : ignored
