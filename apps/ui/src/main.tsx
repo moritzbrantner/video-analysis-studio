@@ -41,8 +41,8 @@ import {
   ResultPageEditor,
   addDashboardWidgetForDataKind,
   dashboardDataKindsForWidgets,
-  defaultDashboardWidgets,
-  type DashboardWidget,
+  defaultDashboardLayout,
+  type DashboardLayout,
 } from "./ResultPageEditor";
 import { WorkflowExecutionEditor } from "./WorkflowExecutionEditor";
 import {
@@ -111,10 +111,10 @@ function App() {
   const [runStatus, setRunStatus] = useState<CliRun["status"]>("pending");
   const [lastRun, setLastRun] = useState<CliRun | null>(null);
   const [runOutput, setRunOutput] = useState<{ stdout?: string; stderr?: string }>({});
-  const [dashboardWidgets, setDashboardWidgets] = useState<DashboardWidget[]>(defaultDashboardWidgets);
+  const [dashboardLayout, setDashboardLayout] = useState<DashboardLayout>(defaultDashboardLayout);
 
   const command = useMemo(() => buildCommand(form), [form]);
-  const dashboardDataKinds = useMemo(() => dashboardDataKindsForWidgets(dashboardWidgets), [dashboardWidgets]);
+  const dashboardDataKinds = useMemo(() => dashboardDataKindsForWidgets(dashboardLayout), [dashboardLayout]);
   const validationMessage = getRunValidation(form);
   const cliRun: CliRun =
     lastRun ?? {
@@ -330,13 +330,13 @@ function App() {
                   report={report}
                   visualizedDataKinds={dashboardDataKinds}
                   onVisualizeDataKind={(dataKind) =>
-                    addDashboardWidgetForDataKind(dataKind, dashboardWidgets, setDashboardWidgets)
+                    addDashboardWidgetForDataKind(dataKind, dashboardLayout, setDashboardLayout)
                   }
                 />
               )}
               {viewMode === "flow" && <ComponentFlow />}
               {viewMode === "result" && (
-                <ResultPageEditor report={report} widgets={dashboardWidgets} onWidgetsChange={setDashboardWidgets} />
+                <ResultPageEditor report={report} layout={dashboardLayout} onLayoutChange={setDashboardLayout} />
               )}
               {viewMode === "scenes" && <Scenes report={report} />}
               {viewMode === "signals" && <Signals report={report} />}
