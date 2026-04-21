@@ -36,7 +36,7 @@ interface UseCaseFormSnapshot {
 }
 
 type ExecutionStatus = "waiting" | "processing" | "complete";
-type ExecutionTone = "sky" | "amber" | "emerald" | "violet" | "cyan" | "indigo" | "fuchsia" | "slate" | "zinc";
+type ExecutionTone = "sky" | "rose" | "amber" | "emerald" | "violet" | "cyan" | "indigo" | "fuchsia" | "slate" | "zinc";
 type WorkflowDataKind =
   | "run_config"
   | "source_media"
@@ -238,7 +238,7 @@ const executionTemplates: ExecutionNodeTemplate[] = [
   },
   {
     id: "result",
-    x: 2020,
+    x: 2430,
     y: 210,
     title: "Result Page",
     packageName: "Result Page Editor",
@@ -246,6 +246,39 @@ const executionTemplates: ExecutionNodeTemplate[] = [
     tone: "sky",
     inputs: [port("report", "report json", "json_report")],
     outputs: [port("view", "dashboard view", "dashboard_view")],
+  },
+  {
+    id: "disk-sink",
+    x: 2020,
+    y: 0,
+    title: "Disk Result Sink",
+    packageName: "fs / browser download",
+    description: "Persists the final JSON report to disk as analysis output.",
+    tone: "emerald",
+    inputs: [port("report", "report json", "json_report")],
+    outputs: [],
+  },
+  {
+    id: "database-sink",
+    x: 2020,
+    y: 210,
+    title: "Database Result Sink",
+    packageName: "IndexedDB / database adapter",
+    description: "Stores the final JSON report as a durable database record.",
+    tone: "cyan",
+    inputs: [port("report", "report json", "json_report")],
+    outputs: [],
+  },
+  {
+    id: "http-sink",
+    x: 2020,
+    y: 420,
+    title: "HTTP Result Sink",
+    packageName: "fetch / webhook",
+    description: "Sends the final JSON report to an HTTP endpoint.",
+    tone: "rose",
+    inputs: [port("report", "report json", "json_report")],
+    outputs: [],
   },
 ];
 
@@ -271,6 +304,9 @@ const defaultExecutionEdges: Edge[] = [
   executionEdge("text", "records", "buckets", "records"),
   executionEdge("buckets", "buckets", "report", "buckets"),
   executionEdge("report", "report", "result", "report"),
+  executionEdge("report", "report", "disk-sink", "report"),
+  executionEdge("report", "report", "database-sink", "report"),
+  executionEdge("report", "report", "http-sink", "report"),
 ];
 
 export function WorkflowExecutionEditor({
@@ -902,6 +938,8 @@ function executionHeaderClass(tone: ExecutionTone): string {
   switch (tone) {
     case "sky":
       return "border-sky-100 bg-sky-50";
+    case "rose":
+      return "border-rose-100 bg-rose-50";
     case "amber":
       return "border-amber-100 bg-amber-50";
     case "emerald":
@@ -956,6 +994,8 @@ function executionToneDot(tone: ExecutionTone): string {
   switch (tone) {
     case "sky":
       return "bg-sky-500";
+    case "rose":
+      return "bg-rose-500";
     case "amber":
       return "bg-amber-500";
     case "emerald":
@@ -979,6 +1019,8 @@ function dataBadgeClass(kind: WorkflowDataKind): string {
   switch (dataTone(kind)) {
     case "sky":
       return "bg-sky-100 text-sky-800";
+    case "rose":
+      return "bg-rose-100 text-rose-800";
     case "amber":
       return "bg-amber-100 text-amber-800";
     case "emerald":
@@ -1002,6 +1044,8 @@ function dataStroke(kind: WorkflowDataKind): string {
   switch (dataTone(kind)) {
     case "sky":
       return "#0ea5e9";
+    case "rose":
+      return "#f43f5e";
     case "amber":
       return "#f59e0b";
     case "emerald":

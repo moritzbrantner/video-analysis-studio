@@ -71,6 +71,7 @@ interface UseCaseForm {
   objectCommand: string;
   ocrCommand: string;
   textCommand: string;
+  workflowInputs: Record<string, string>;
 }
 
 const useCases: Array<{
@@ -101,6 +102,7 @@ const initialForm: UseCaseForm = {
   objectCommand: "",
   ocrCommand: "",
   textCommand: "",
+  workflowInputs: {},
 };
 
 const mainSidebarCollapsedStorageKey = "video-analysis.mainSidebarCollapsed.v1";
@@ -120,9 +122,10 @@ function App() {
     loadStoredBoolean(mainSidebarCollapsedStorageKey, false),
   );
 
-  const command = useMemo(() => buildCommand(form), [form]);
   const activeWorkflow = useMemo(() => activeSavedWorkflow(workflowLibrary), [workflowLibrary]);
-  const validationMessage = getRunValidation(form);
+  const activeWorkflowInputModel = useMemo(() => deriveWorkflowRunInputModel(activeWorkflow), [activeWorkflow]);
+  const command = useMemo(() => buildCommand(form, activeWorkflowInputModel), [form, activeWorkflowInputModel]);
+  const validationMessage = getRunValidation(form, activeWorkflowInputModel);
   const cliRun: CliRun =
     lastRun ?? {
       command: "studio-api",
@@ -246,7 +249,7 @@ function App() {
   );
 
   async function runAnalysis() {
-    const message = getRunValidation(form);
+    const message = getRunValidation(form, activeWorkflowInputModel);
     if (message) {
       setRunStatus("failed");
       setLastRun({
@@ -261,8 +264,8 @@ function App() {
     }
 
     setRunStatus("running");
-    const request = buildYoutubeRunRequest(form);
-    const localRun = createSavedWorkflowRun(activeWorkflow, request, workflowInputSummaryFromForm(form));
+    const request = buildYoutubeRunRequest(form, activeWorkflowInputModel);
+    const localRun = createSavedWorkflowRun(activeWorkflow, request, workflowInputSummaryFromForm(form, activeWorkflowInputModel));
     addWorkflowRun(localRun);
     setLastRun({
       command: "studio-api",
@@ -579,6 +582,7 @@ function App() {
                 runOutput={runOutput}
                 workflowLibrary={workflowLibrary}
                 activeWorkflow={activeWorkflow}
+                activeWorkflowInputModel={activeWorkflowInputModel}
                 onSelectWorkflow={activateWorkflowDefinition}
                 onCreateWorkflow={createWorkflowDefinition}
                 onEditWorkflow={() => setViewMode("flow")}
@@ -669,6 +673,7 @@ function RunWorkspace({
   runOutput,
   workflowLibrary,
   activeWorkflow,
+  activeWorkflowInputModel,
   onSelectWorkflow,
   onCreateWorkflow,
   onEditWorkflow,
@@ -684,6 +689,7 @@ function RunWorkspace({
   runOutput: { stdout?: string; stderr?: string };
   workflowLibrary: SavedWorkflowLibrary;
   activeWorkflow: SavedWorkflow;
+  activeWorkflowInputModel: WorkflowRunInputModel;
   onSelectWorkflow: (workflowId: string) => void;
   onCreateWorkflow: () => void;
   onEditWorkflow: () => void;
@@ -713,6 +719,7 @@ function RunWorkspace({
         <DependencyStatusPanel />
         <UseCaseControls
           form={form}
+          inputModel={activeWorkflowInputModel}
           onChange={onFormChange}
           onRun={onRun}
           isRunning={isRunning}
@@ -891,6 +898,21 @@ interface FlowPort {
   type: PortType;
 }
 
+interface WorkflowRunInput {
+  key: string;
+  nodeId: string;
+  nodeTitle: string;
+  port: FlowPort;
+  source: "open" | "provider";
+}
+
+interface WorkflowRunInputModel {
+  sourceModes: SourceMode[];
+  showRunConfig: boolean;
+  openInputs: WorkflowRunInput[];
+  genericInputs: WorkflowRunInput[];
+}
+
 interface WorkflowNodeData extends Record<string, unknown> {
   title: string;
   packageName: string;
@@ -999,6 +1021,9 @@ interface WorkflowContextMenuState {
   nodeIds: string[];
 }
 
+type PortTypeColors = Record<PortType, string>;
+type PortTypeColorStyle = React.CSSProperties & Record<`--workflow-port-color-${PortType}`, string>;
+
 const workflowNodeTypes = { workflow: WorkflowNode };
 const savedWorkflowJsonFormat = "video-analysis.workflow";
 const savedWorkflowJsonVersion = 1;
@@ -1009,9 +1034,56 @@ const savedWorkflowRunsStorageKey = "video-analysis.workflowRuns.v1";
 const savedWorkflowBlocksStorageKey = "video-analysis.workflowBlocks.v1";
 const savedWorkflowBlocksJsonFormat = "video-analysis.workflowBlocks";
 const flowPanelCollapsedStorageKey = "video-analysis.flowPanelCollapsed.v1";
+const portTypeColorsStorageKey = "video-analysis.portTypeColors.v1";
 const defaultSeedWorkflowName = "Default Analysis Pipeline";
 const legacySeedWorkflowName = "YouTube Analysis Workflow";
 const maxSavedWorkflowVersions = 25;
+
+const portTypes: PortType[] = [
+  "run_request",
+  "run_config",
+  "youtube_url",
+  "video_file",
+  "video_metadata",
+  "video_frame",
+  "audio_frame",
+  "audio_wav",
+  "scene_result",
+  "video_observation",
+  "model_request",
+  "model_prediction",
+  "transcript_segment",
+  "audio_event",
+  "text_event",
+  "data_record",
+  "data_bucket",
+  "json_report",
+  "dashboard_view",
+];
+
+const defaultPortTypeColors: PortTypeColors = {
+  run_request: "#52525b",
+  run_config: "#71717a",
+  youtube_url: "#0ea5e9",
+  video_file: "#f59e0b",
+  video_metadata: "#d97706",
+  video_frame: "#10b981",
+  audio_frame: "#06b6d4",
+  audio_wav: "#0891b2",
+  scene_result: "#22c55e",
+  video_observation: "#8b5cf6",
+  model_request: "#a855f7",
+  model_prediction: "#7c3aed",
+  transcript_segment: "#6366f1",
+  audio_event: "#0e7490",
+  text_event: "#d946ef",
+  data_record: "#64748b",
+  data_bucket: "#475569",
+  json_report: "#0284c7",
+  dashboard_view: "#2563eb",
+};
+
+const PortTypeColorContext = React.createContext<PortTypeColors>(defaultPortTypeColors);
 
 const initialWorkflowNodes: WorkflowNodeModel[] = [
   workflowNode("react-page", 0, 180, {
@@ -1206,6 +1278,30 @@ const initialWorkflowNodes: WorkflowNodeModel[] = [
     inputs: [port("report", "report json", "json_report")],
     outputs: [port("view", "visible panels", "dashboard_view")],
   }),
+  workflowNode("disk-result-sink", 3640, 120, {
+    title: "Disk Result Sink",
+    packageName: "fs / browser download",
+    description: "Persists the final JSON report to a configured file path or browser download.",
+    tone: "emerald",
+    inputs: [port("report", "report json", "json_report")],
+    outputs: [],
+  }),
+  workflowNode("database-result-sink", 3640, 420, {
+    title: "Database Result Sink",
+    packageName: "IndexedDB / database adapter",
+    description: "Stores the final JSON report as a durable record for later retrieval or indexing.",
+    tone: "cyan",
+    inputs: [port("report", "report json", "json_report")],
+    outputs: [],
+  }),
+  workflowNode("http-result-sink", 3640, 720, {
+    title: "HTTP Result Sink",
+    packageName: "fetch / webhook",
+    description: "Sends the final JSON report to an HTTP endpoint such as a webhook or API route.",
+    tone: "rose",
+    inputs: [port("report", "report json", "json_report")],
+    outputs: [],
+  }),
 ];
 
 const initialWorkflowEdges: Edge[] = [
@@ -1242,6 +1338,9 @@ const initialWorkflowEdges: Edge[] = [
   workflowEdge("buckets", "buckets", "report-writer", "buckets"),
   workflowEdge("report-writer", "report", "dashboard", "report"),
   workflowEdge("report-writer", "report", "react-page", "report"),
+  workflowEdge("report-writer", "report", "disk-result-sink", "report"),
+  workflowEdge("report-writer", "report", "database-result-sink", "report"),
+  workflowEdge("report-writer", "report", "http-result-sink", "report"),
 ];
 
 function WorkflowBuilder({
@@ -1266,15 +1365,21 @@ function WorkflowBuilder({
   const [flowPanelCollapsed, setFlowPanelCollapsed] = useState(() =>
     loadStoredBoolean(flowPanelCollapsedStorageKey, false),
   );
+  const [portTypeColors, setPortTypeColors] = useState<PortTypeColors>(loadPortTypeColors);
   const [workflowNameDraft, setWorkflowNameDraft] = useState(activeWorkflow.name);
   const workflowAutosaveReadyRef = useRef(false);
   const workflowSelectionLoadingRef = useRef(false);
   const workflowFileInputRef = useRef<HTMLInputElement | null>(null);
   const blockFileInputRef = useRef<HTMLInputElement | null>(null);
+  const portTypeColorStyle = useMemo(() => portTypeColorsStyle(portTypeColors), [portTypeColors]);
 
   useEffect(() => {
     persistStoredBoolean(flowPanelCollapsedStorageKey, flowPanelCollapsed);
   }, [flowPanelCollapsed]);
+
+  useEffect(() => {
+    persistPortTypeColors(portTypeColors);
+  }, [portTypeColors]);
 
   useEffect(() => {
     setWorkflowNameDraft(activeWorkflow.name);
@@ -1713,40 +1818,41 @@ function WorkflowBuilder({
   const contextNodesAllMinimized = contextNodes.length > 0 && contextNodes.every((node) => node.data.minimized);
 
   return (
-    <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
-      <div className="flex flex-col gap-1 border-b border-zinc-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-        <h2 className="text-sm font-semibold text-zinc-950">Workflow Builder</h2>
-        <span className="text-xs text-zinc-500">studio-core youtube-video</span>
-      </div>
-      <div className="h-[720px] min-h-[560px] w-full">
-        <ReactFlow<WorkflowNodeModel, Edge>
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={workflowNodeTypes}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          isValidConnection={isValidConnection}
-          onSelectionChange={onSelectionChange}
-          onPaneClick={() => setContextMenu(null)}
-          onNodeContextMenu={(event, node) => {
-            event.preventDefault();
-            const nodeIds = selectedNodeIds.includes(node.id) ? selectedNodeIds : [node.id];
-            setContextMenu({ x: event.clientX, y: event.clientY, nodeIds });
-          }}
-          fitView
-          minZoom={0.18}
-          maxZoom={1.35}
-          nodesDraggable
-          nodesConnectable
-          elementsSelectable
-          selectionOnDrag
-          edgesReconnectable
-          deleteKeyCode={["Backspace", "Delete"]}
-          proOptions={{ hideAttribution: true }}
-        >
-          <Background color="#d4d4d8" gap={18} />
-          <Controls showInteractive={false} />
+    <PortTypeColorContext.Provider value={portTypeColors}>
+      <section className="rounded-lg border border-zinc-200 bg-white shadow-sm" style={portTypeColorStyle}>
+        <div className="flex flex-col gap-1 border-b border-zinc-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <h2 className="text-sm font-semibold text-zinc-950">Workflow Builder</h2>
+          <span className="text-xs text-zinc-500">studio-core youtube-video</span>
+        </div>
+        <div className="h-[720px] min-h-[560px] w-full">
+          <ReactFlow<WorkflowNodeModel, Edge>
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={workflowNodeTypes}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            isValidConnection={isValidConnection}
+            onSelectionChange={onSelectionChange}
+            onPaneClick={() => setContextMenu(null)}
+            onNodeContextMenu={(event, node) => {
+              event.preventDefault();
+              const nodeIds = selectedNodeIds.includes(node.id) ? selectedNodeIds : [node.id];
+              setContextMenu({ x: event.clientX, y: event.clientY, nodeIds });
+            }}
+            fitView
+            minZoom={0.18}
+            maxZoom={1.35}
+            nodesDraggable
+            nodesConnectable
+            elementsSelectable
+            selectionOnDrag
+            edgesReconnectable
+            deleteKeyCode={["Backspace", "Delete"]}
+            proOptions={{ hideAttribution: true }}
+          >
+            <Background color="#d4d4d8" gap={18} />
+            <Controls showInteractive={false} />
           {flowPanelCollapsed ? (
             <FlowPanel position="top-left" className="rounded-r-lg border border-l-0 border-zinc-200 bg-white shadow-sm">
               <button
@@ -1840,6 +1946,17 @@ function WorkflowBuilder({
                   </button>
                 ))}
               </div>
+
+              <PortTypeColorSettings
+                colors={portTypeColors}
+                onChange={(type, color) =>
+                  setPortTypeColors((currentColors) => ({
+                    ...currentColors,
+                    [type]: color,
+                  }))
+                }
+                onReset={() => setPortTypeColors(defaultPortTypeColors)}
+              />
 
               <div className="mt-4 border-t border-zinc-200 pt-3">
                 <div className="flex items-center justify-between gap-3">
@@ -2101,9 +2218,66 @@ function WorkflowBuilder({
               onClose={() => setContextMenu(null)}
             />
           )}
-        </ReactFlow>
+          </ReactFlow>
+        </div>
+      </section>
+    </PortTypeColorContext.Provider>
+  );
+}
+
+function PortTypeColorSettings({
+  colors,
+  onChange,
+  onReset,
+}: {
+  colors: PortTypeColors;
+  onChange: (type: PortType, color: string) => void;
+  onReset: () => void;
+}) {
+  return (
+    <div className="mt-4 border-t border-zinc-200 pt-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs font-semibold uppercase text-zinc-500">Type Colors</div>
+        <button
+          type="button"
+          className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+          onClick={onReset}
+          title="Reset type colors"
+          aria-label="Reset type colors"
+        >
+          <RefreshIcon className="h-3.5 w-3.5" />
+        </button>
       </div>
-    </section>
+      <div className="mt-2 max-h-56 space-y-1 overflow-auto pr-1">
+        {portTypes.map((type) => {
+          const color = colors[type];
+          return (
+            <label
+              key={type}
+              className="flex h-9 items-center gap-2 rounded-md border px-2 text-xs"
+              style={{
+                borderColor: hexToRgba(color, 0.28),
+                backgroundColor: hexToRgba(color, 0.08),
+              }}
+            >
+              <span
+                className="h-3 w-3 shrink-0 rounded-full border border-white shadow-sm"
+                style={{ backgroundColor: color }}
+              />
+              <span className="min-w-0 flex-1 truncate font-medium text-zinc-800">{formatPortType(type)}</span>
+              <input
+                type="color"
+                className="h-7 w-9 shrink-0 cursor-pointer rounded border-0 bg-transparent p-0"
+                value={color}
+                onChange={(event) => onChange(type, event.target.value)}
+                title={`${formatPortType(type)} color`}
+                aria-label={`${formatPortType(type)} color`}
+              />
+            </label>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -3375,25 +3549,30 @@ function MinimizedPortHandleStack({
   isConnectable: boolean;
 }) {
   const isInput = direction === "in";
+  const colors = usePortTypeColors();
 
   return (
     <>
-      {ports.map((port, index) => (
-        <Handle
-          key={`${direction}-${port.id}`}
-          type={isInput ? "target" : "source"}
-          position={isInput ? Position.Left : Position.Right}
-          id={handleId(direction, port)}
-          isConnectable={isConnectable}
-          className={classNames("!h-3 !w-3 !border-2 !border-white", flowToneClass(typeTone(port.type)))}
-          style={{
-            left: isInput ? -7 : undefined,
-            right: isInput ? undefined : -7,
-            top: `${((index + 1) / (ports.length + 1)) * 100}%`,
-          }}
-          title={`${port.label} ${formatPortType(port.type)}`}
-        />
-      ))}
+      {ports.map((port, index) => {
+        const color = portTypeColor(port.type, colors);
+        return (
+          <Handle
+            key={`${direction}-${port.id}`}
+            type={isInput ? "target" : "source"}
+            position={isInput ? Position.Left : Position.Right}
+            id={handleId(direction, port)}
+            isConnectable={isConnectable}
+            className="!h-3 !w-3 !border-2 !border-white"
+            style={{
+              backgroundColor: color,
+              left: isInput ? -7 : undefined,
+              right: isInput ? undefined : -7,
+              top: `${((index + 1) / (ports.length + 1)) * 100}%`,
+            }}
+            title={`${port.label} ${formatPortType(port.type)}`}
+          />
+        );
+      })}
     </>
   );
 }
@@ -3444,15 +3623,26 @@ function PortRow({
   isConnectable: boolean;
 }) {
   const isInput = direction === "in";
+  const colors = usePortTypeColors();
+  const color = portTypeColor(port.type, colors);
+
   return (
-    <div className={classNames("relative rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1.5", isInput ? "pl-3" : "pr-3")}>
+    <div
+      className={classNames("relative rounded-md border px-2 py-1.5", isInput ? "pl-3" : "pr-3")}
+      style={{
+        backgroundColor: hexToRgba(color, 0.08),
+        borderColor: hexToRgba(color, 0.32),
+        boxShadow: `inset ${isInput ? "3px" : "-3px"} 0 0 ${color}`,
+      }}
+    >
       <Handle
         type={isInput ? "target" : "source"}
         position={isInput ? Position.Left : Position.Right}
         id={handleId(direction, port)}
         isConnectable={isConnectable}
-        className={classNames("!h-3 !w-3 !border-2 !border-white", flowToneClass(typeTone(port.type)))}
+        className="!h-3 !w-3 !border-2 !border-white"
         style={{
+          backgroundColor: color,
           left: isInput ? -7 : undefined,
           right: isInput ? undefined : -7,
           top: "50%",
@@ -3460,7 +3650,13 @@ function PortRow({
       />
       <div className={classNames("flex flex-col gap-1", isInput ? "items-start" : "items-end text-right")}>
         <span className="text-xs font-medium text-zinc-800">{port.label}</span>
-        <span className={classNames("rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase", typeBadgeClass(port.type))}>
+        <span
+          className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+          style={{
+            backgroundColor: hexToRgba(color, 0.16),
+            color: portTypeBadgeTextColor(color),
+          }}
+        >
           {formatPortType(port.type)}
         </span>
       </div>
@@ -3601,8 +3797,8 @@ function workflowEdgeFromConnection(connection: Connection | Edge, type: PortTyp
     targetHandle: connection.targetHandle,
     label: formatPortType(type),
     type: "smoothstep",
-    markerEnd: { type: MarkerType.ArrowClosed },
-    style: { stroke: portTypeStroke(type), strokeWidth: 1.7 },
+    markerEnd: { type: MarkerType.ArrowClosed, color: portTypeColorVar(type) },
+    style: { stroke: portTypeColorVar(type), strokeWidth: 1.7 },
     labelStyle: { fill: "#3f3f46", fontSize: 11, fontWeight: 600 },
     labelBgStyle: { fill: "#ffffff", fillOpacity: 0.9 },
   };
@@ -3648,31 +3844,38 @@ function parseHandleId(handle: string): { direction: PortDirection; portId: stri
 }
 
 function isPortType(value: string | undefined): value is PortType {
-  return [
-    "run_request",
-    "run_config",
-    "youtube_url",
-    "video_file",
-    "video_metadata",
-    "video_frame",
-    "audio_frame",
-    "audio_wav",
-    "scene_result",
-    "video_observation",
-    "model_request",
-    "model_prediction",
-    "transcript_segment",
-    "audio_event",
-    "text_event",
-    "data_record",
-    "data_bucket",
-    "json_report",
-    "dashboard_view",
-  ].includes(value ?? "");
+  return portTypes.includes((value ?? "") as PortType);
 }
 
 function formatPortType(type: PortType): string {
   return type.replace(/_/g, " ");
+}
+
+function usePortTypeColors(): PortTypeColors {
+  return React.useContext(PortTypeColorContext);
+}
+
+function portTypeColor(type: PortType, colors: PortTypeColors): string {
+  return colors[type] ?? defaultPortTypeColors[type];
+}
+
+function portTypeColorVar(type: PortType): string {
+  return `var(${portTypeColorVariableName(type)}, ${defaultPortTypeColors[type]})`;
+}
+
+function portTypeColorVariableName(type: PortType): `--workflow-port-color-${PortType}` {
+  return `--workflow-port-color-${type}`;
+}
+
+function portTypeColorsStyle(colors: PortTypeColors): PortTypeColorStyle {
+  return portTypes.reduce((style, type) => {
+    style[portTypeColorVariableName(type)] = portTypeColor(type, colors);
+    return style;
+  }, {} as PortTypeColorStyle);
+}
+
+function portTypeBadgeTextColor(color: string): string {
+  return mixHexColors(normalizeHexColor(color) ?? "#52525b", "#18181b", 0.35);
 }
 
 function workflowHeaderClass(tone: FlowTone): string {
@@ -3725,91 +3928,97 @@ function flowToneClass(tone: FlowTone): string {
   }
 }
 
-function typeTone(type: PortType): FlowTone {
-  switch (type) {
-    case "youtube_url":
-    case "json_report":
-    case "dashboard_view":
-      return "sky";
-    case "video_file":
-    case "video_metadata":
-      return "amber";
-    case "video_frame":
-    case "scene_result":
-      return "emerald";
-    case "model_request":
-    case "model_prediction":
-    case "video_observation":
-      return "violet";
-    case "audio_frame":
-    case "audio_event":
-    case "audio_wav":
-      return "cyan";
-    case "transcript_segment":
-      return "indigo";
-    case "text_event":
-      return "fuchsia";
-    case "data_record":
-    case "data_bucket":
-      return "slate";
-    case "run_request":
-    case "run_config":
-      return "zinc";
+function deriveWorkflowRunInputModel(workflow: SavedWorkflow): WorkflowRunInputModel {
+  const incomingHandles = new Set(
+    workflow.edges
+      .filter((edge) => edge.targetHandle)
+      .map((edge) => `${edge.target}:${edge.targetHandle}`),
+  );
+  const incomingNodes = new Set(workflow.edges.map((edge) => edge.target));
+  const inputs: WorkflowRunInput[] = [];
+  const seen = new Set<string>();
+
+  const addInput = (
+    node: SavedWorkflowBlockNode,
+    portValue: FlowPort,
+    source: WorkflowRunInput["source"],
+  ) => {
+    const key = `${node.id}:${handleId(source === "open" ? "in" : "out", portValue)}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    inputs.push({
+      key,
+      nodeId: node.id,
+      nodeTitle: node.data.title,
+      port: portValue,
+      source,
+    });
+  };
+
+  for (const node of workflow.nodes) {
+    for (const input of node.data.inputs) {
+      if (!incomingHandles.has(`${node.id}:${handleId("in", input)}`)) {
+        addInput(node, input, "open");
+      }
+    }
   }
+
+  for (const node of workflow.nodes) {
+    if (!isWorkflowInputProviderNode(node, incomingNodes)) {
+      continue;
+    }
+    for (const output of node.data.outputs) {
+      if (isExecutableWorkflowInputType(output.type)) {
+        addInput(node, output, "provider");
+      }
+    }
+  }
+
+  const sourceModes: SourceMode[] = [];
+  if (inputs.some((input) => input.port.type === "youtube_url")) {
+    sourceModes.push("url");
+  }
+  if (inputs.some((input) => input.port.type === "video_file")) {
+    sourceModes.push("file");
+  }
+
+  return {
+    sourceModes,
+    showRunConfig: inputs.some((input) => input.port.type === "run_config"),
+    openInputs: inputs.filter((input) => input.source === "open"),
+    genericInputs: inputs.filter((input) => input.source === "open" && !isExecutableWorkflowInputType(input.port.type)),
+  };
 }
 
-function typeBadgeClass(type: PortType): string {
-  switch (typeTone(type)) {
-    case "sky":
-      return "bg-sky-100 text-sky-800";
-    case "rose":
-      return "bg-rose-100 text-rose-800";
-    case "amber":
-      return "bg-amber-100 text-amber-800";
-    case "emerald":
-      return "bg-emerald-100 text-emerald-800";
-    case "violet":
-      return "bg-violet-100 text-violet-800";
-    case "cyan":
-      return "bg-cyan-100 text-cyan-800";
-    case "indigo":
-      return "bg-indigo-100 text-indigo-800";
-    case "fuchsia":
-      return "bg-fuchsia-100 text-fuchsia-800";
-    case "slate":
-      return "bg-slate-100 text-slate-800";
-    case "zinc":
-      return "bg-zinc-100 text-zinc-800";
+function isWorkflowInputProviderNode(node: SavedWorkflowBlockNode, incomingNodes: Set<string>): boolean {
+  const title = node.data.title.toLowerCase();
+  const packageName = node.data.packageName.toLowerCase();
+  if (
+    packageName === "input" ||
+    packageName.includes("@video-analysis/web") ||
+    title.includes("source picker") ||
+    title.includes("run input") ||
+    title.includes("user story page")
+  ) {
+    return true;
   }
+  return !incomingNodes.has(node.id) && node.data.outputs.some((output) => isExecutableWorkflowInputType(output.type));
 }
 
-function portTypeStroke(type: PortType): string {
-  switch (typeTone(type)) {
-    case "sky":
-      return "#0ea5e9";
-    case "rose":
-      return "#f43f5e";
-    case "amber":
-      return "#f59e0b";
-    case "emerald":
-      return "#10b981";
-    case "violet":
-      return "#8b5cf6";
-    case "cyan":
-      return "#06b6d4";
-    case "indigo":
-      return "#6366f1";
-    case "fuchsia":
-      return "#d946ef";
-    case "slate":
-      return "#64748b";
-    case "zinc":
-      return "#52525b";
-  }
+function isExecutableWorkflowInputType(type: PortType): boolean {
+  return type === "youtube_url" || type === "video_file" || type === "run_config";
+}
+
+function effectiveSourceMode(form: UseCaseForm, inputModel?: WorkflowRunInputModel): SourceMode {
+  const sourceModes = inputModel?.sourceModes.length ? inputModel.sourceModes : (["url", "file"] as SourceMode[]);
+  return sourceModes.includes(form.sourceMode) ? form.sourceMode : sourceModes[0] ?? form.sourceMode;
 }
 
 function UseCaseControls({
   form,
+  inputModel,
   onChange,
   onRun,
   isRunning,
@@ -3817,6 +4026,7 @@ function UseCaseControls({
   validationMessage,
 }: {
   form: UseCaseForm;
+  inputModel: WorkflowRunInputModel;
   onChange: (form: UseCaseForm) => void;
   onRun: () => void;
   isRunning: boolean;
@@ -3825,6 +4035,11 @@ function UseCaseControls({
 }) {
   const set = <K extends keyof UseCaseForm>(key: K, value: UseCaseForm[K]) =>
     onChange({ ...form, [key]: value });
+  const setWorkflowInput = (key: string, value: string) =>
+    onChange({ ...form, workflowInputs: { ...form.workflowInputs, [key]: value } });
+  const sourceModes = inputModel.sourceModes.length > 0 ? inputModel.sourceModes : (["url", "file"] as SourceMode[]);
+  const selectedSourceMode = effectiveSourceMode(form, inputModel);
+  const showSourceSelector = sourceModes.length > 1;
 
   return (
     <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
@@ -3832,22 +4047,21 @@ function UseCaseControls({
         <h2 className="text-sm font-semibold text-zinc-950">Run Input</h2>
       </div>
       <div className="space-y-4 p-4">
-        <SegmentedControl<SourceMode>
-          value={form.sourceMode}
-          options={[
-            ["url", "URL"],
-            ["file", "File"],
-          ]}
-          onChange={(value) => set("sourceMode", value)}
-        />
+        {showSourceSelector && (
+          <SegmentedControl<SourceMode>
+            value={selectedSourceMode}
+            options={sourceModes.map((mode): [SourceMode, string] => [mode, mode === "url" ? "URL" : "File"])}
+            onChange={(value) => set("sourceMode", value)}
+          />
+        )}
 
-        {form.sourceMode === "url" ? (
+        {selectedSourceMode === "url" ? (
           <Field label="YouTube URL">
             <input
               className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
               value={form.url}
               placeholder="https://www.youtube.com/watch?v=..."
-              onChange={(event) => set("url", event.target.value)}
+              onChange={(event) => onChange({ ...form, sourceMode: "url", url: event.target.value })}
             />
           </Field>
         ) : (
@@ -3855,79 +4069,128 @@ function UseCaseControls({
             <input
               className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
               value={form.input}
-              onChange={(event) => set("input", event.target.value)}
+              onChange={(event) => onChange({ ...form, sourceMode: "file", input: event.target.value })}
             />
           </Field>
         )}
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Scene threshold">
-            <input
-              type="number"
-              min="0"
-              step="0.5"
-              className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-              value={form.sceneThreshold}
-              onChange={(event) => set("sceneThreshold", Number(event.target.value))}
-            />
-          </Field>
-          <Field label="Minimum scene frames">
-            <input
-              type="number"
-              min="1"
-              step="1"
-              className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-              value={form.minSceneLen}
-              onChange={(event) => set("minSceneLen", Number(event.target.value))}
-            />
-          </Field>
-        </div>
+        {inputModel.showRunConfig && (
+          <>
+            <Field label="Work directory">
+              <input
+                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={form.workDir}
+                onChange={(event) => set("workDir", event.target.value)}
+              />
+            </Field>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Max frames">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Scene threshold">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={form.sceneThreshold}
+                  onChange={(event) => set("sceneThreshold", Number(event.target.value))}
+                />
+              </Field>
+              <Field label="Minimum scene frames">
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={form.minSceneLen}
+                  onChange={(event) => set("minSceneLen", Number(event.target.value))}
+                />
+              </Field>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Max frames">
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  placeholder="all"
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={form.maxFrames}
+                  onChange={(event) => set("maxFrames", event.target.value)}
+                />
+              </Field>
+              <Field label="Visual sample step">
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={form.visualSampleEvery}
+                  onChange={(event) => set("visualSampleEvery", Number(event.target.value))}
+                />
+              </Field>
+            </div>
+
+            <label className="flex items-center gap-3 rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-800">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-zinc-300 text-zinc-950 focus:ring-zinc-950"
+                checked={form.skipTranscription}
+                onChange={(event) => set("skipTranscription", event.target.checked)}
+              />
+              <span>Skip transcription</span>
+            </label>
+
+            <Field label="Object command">
+              <input
+                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={form.objectCommand}
+                placeholder="optional"
+                onChange={(event) => set("objectCommand", event.target.value)}
+              />
+            </Field>
+            <Field label="OCR command">
+              <input
+                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={form.ocrCommand}
+                placeholder="optional"
+                onChange={(event) => set("ocrCommand", event.target.value)}
+              />
+            </Field>
+            <Field label="Text command">
+              <input
+                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={form.textCommand}
+                placeholder="optional"
+                onChange={(event) => set("textCommand", event.target.value)}
+              />
+            </Field>
+
+            <Field label="Output JSON">
+              <input
+                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={form.output}
+                onChange={(event) => set("output", event.target.value)}
+              />
+            </Field>
+          </>
+        )}
+
+        {inputModel.genericInputs.map((input) => (
+          <Field key={input.key} label={`${input.nodeTitle} ${input.port.label}`}>
             <input
-              type="number"
-              min="1"
-              step="1"
-              placeholder="all"
               className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-              value={form.maxFrames}
-              onChange={(event) => set("maxFrames", event.target.value)}
+              value={form.workflowInputs[input.key] ?? ""}
+              placeholder={formatPortType(input.port.type)}
+              title={formatPortType(input.port.type)}
+              onChange={(event) => setWorkflowInput(input.key, event.target.value)}
             />
           </Field>
-          <Field label="Visual sample step">
-            <input
-              type="number"
-              min="1"
-              step="1"
-              className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-              value={form.visualSampleEvery}
-              onChange={(event) => set("visualSampleEvery", Number(event.target.value))}
-            />
-          </Field>
-        </div>
-
-        <label className="flex items-center gap-3 rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-800">
-          <input
-            type="checkbox"
-            className="h-4 w-4 rounded border-zinc-300 text-zinc-950 focus:ring-zinc-950"
-            checked={form.skipTranscription}
-            onChange={(event) => set("skipTranscription", event.target.checked)}
-          />
-          <span>Skip transcription</span>
-        </label>
-
-        <Field label="Output JSON">
-          <input
-            className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-            value={form.output}
-            onChange={(event) => set("output", event.target.value)}
-          />
-        </Field>
+        ))}
 
         <div className="rounded-lg bg-zinc-950 p-3">
           <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-zinc-100">
-            {buildCommand(form).map(shellQuote).join(" ")}
+            {buildCommand(form, inputModel).map(shellQuote).join(" ")}
           </pre>
         </div>
 
@@ -4046,7 +4309,8 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function buildCommand(form: UseCaseForm): string[] {
+function buildCommand(form: UseCaseForm, inputModel?: WorkflowRunInputModel): string[] {
+  const sourceMode = effectiveSourceMode(form, inputModel);
   const command = [
     "studio-api",
     "POST",
@@ -4061,7 +4325,7 @@ function buildCommand(form: UseCaseForm): string[] {
     String(form.visualSampleEvery),
   ];
 
-  if (form.sourceMode === "url") {
+  if (sourceMode === "url") {
     command.push("--url", form.url);
   } else {
     command.push("--input", form.input);
@@ -4085,10 +4349,11 @@ function buildCommand(form: UseCaseForm): string[] {
   return command;
 }
 
-function buildYoutubeRunRequest(form: UseCaseForm): YoutubeRunRequest {
+function buildYoutubeRunRequest(form: UseCaseForm, inputModel?: WorkflowRunInputModel): YoutubeRunRequest {
+  const sourceMode = effectiveSourceMode(form, inputModel);
   return {
     source:
-      form.sourceMode === "url"
+      sourceMode === "url"
         ? { kind: "youtube_url", url: form.url.trim() }
         : { kind: "local_file", path: form.input.trim() },
     work_dir: form.workDir.trim() || null,
@@ -4126,8 +4391,8 @@ function formFromYoutubeRunRequest(request: YoutubeRunRequest): UseCaseForm {
   };
 }
 
-function workflowInputSummaryFromForm(form: UseCaseForm): string {
-  if (form.sourceMode === "url") {
+function workflowInputSummaryFromForm(form: UseCaseForm, inputModel?: WorkflowRunInputModel): string {
+  if (effectiveSourceMode(form, inputModel) === "url") {
     return form.url.trim() || "YouTube URL";
   }
   return form.input.trim() || "Local file";
@@ -4181,8 +4446,9 @@ function downloadReport(report: YoutubeVideoReport) {
   URL.revokeObjectURL(url);
 }
 
-function getRunValidation(form: UseCaseForm): string | null {
-  if (form.sourceMode === "url") {
+function getRunValidation(form: UseCaseForm, inputModel?: WorkflowRunInputModel): string | null {
+  const sourceMode = effectiveSourceMode(form, inputModel);
+  if (sourceMode === "url") {
     const url = form.url.trim();
     if (!url) {
       return "Enter a YouTube URL.";
@@ -4200,7 +4466,7 @@ function getRunValidation(form: UseCaseForm): string | null {
       return "Enter a valid YouTube URL.";
     }
   }
-  if (form.sourceMode === "file" && !form.input.trim()) {
+  if (sourceMode === "file" && !form.input.trim()) {
     return "Enter a local video file path.";
   }
   if (!form.output.trim()) {
@@ -4238,6 +4504,85 @@ function shellQuote(value: string): string {
     return value;
   }
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function loadPortTypeColors(): PortTypeColors {
+  if (typeof window === "undefined") {
+    return defaultPortTypeColors;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(portTypeColorsStorageKey);
+    if (!raw) {
+      return defaultPortTypeColors;
+    }
+    return normalizePortTypeColors(JSON.parse(raw));
+  } catch {
+    return defaultPortTypeColors;
+  }
+}
+
+function persistPortTypeColors(colors: PortTypeColors) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(portTypeColorsStorageKey, JSON.stringify(normalizePortTypeColors(colors)));
+}
+
+function normalizePortTypeColors(value: unknown): PortTypeColors {
+  const record = isRecord(value) ? value : {};
+  return portTypes.reduce<PortTypeColors>((colors, type) => {
+    const color = record[type];
+    colors[type] = typeof color === "string" ? normalizeHexColor(color) ?? defaultPortTypeColors[type] : defaultPortTypeColors[type];
+    return colors;
+  }, { ...defaultPortTypeColors });
+}
+
+function normalizeHexColor(value: string): string | null {
+  const normalized = value.trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(normalized)) {
+    return normalized;
+  }
+  if (/^#[0-9a-f]{3}$/.test(normalized)) {
+    return `#${normalized[1]}${normalized[1]}${normalized[2]}${normalized[2]}${normalized[3]}${normalized[3]}`;
+  }
+  return null;
+}
+
+function hexToRgba(color: string, alpha: number): string {
+  const normalized = normalizeHexColor(color) ?? "#52525b";
+  const red = Number.parseInt(normalized.slice(1, 3), 16);
+  const green = Number.parseInt(normalized.slice(3, 5), 16);
+  const blue = Number.parseInt(normalized.slice(5, 7), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function mixHexColors(color: string, target: string, amount: number): string {
+  const sourceColor = normalizeHexColor(color) ?? "#52525b";
+  const targetColor = normalizeHexColor(target) ?? "#18181b";
+  const source = hexToRgb(sourceColor);
+  const destination = hexToRgb(targetColor);
+  const mixChannel = (sourceChannel: number, targetChannel: number) =>
+    Math.round(sourceChannel + (targetChannel - sourceChannel) * amount);
+  return rgbToHex(
+    mixChannel(source.red, destination.red),
+    mixChannel(source.green, destination.green),
+    mixChannel(source.blue, destination.blue),
+  );
+}
+
+function hexToRgb(color: string): { red: number; green: number; blue: number } {
+  const normalized = normalizeHexColor(color) ?? "#52525b";
+  return {
+    red: Number.parseInt(normalized.slice(1, 3), 16),
+    green: Number.parseInt(normalized.slice(3, 5), 16),
+    blue: Number.parseInt(normalized.slice(5, 7), 16),
+  };
+}
+
+function rgbToHex(red: number, green: number, blue: number): string {
+  const channelToHex = (channel: number) => Math.max(0, Math.min(255, channel)).toString(16).padStart(2, "0");
+  return `#${channelToHex(red)}${channelToHex(green)}${channelToHex(blue)}`;
 }
 
 function loadStoredBoolean(key: string, fallback: boolean): boolean {

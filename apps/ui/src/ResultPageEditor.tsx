@@ -14,6 +14,7 @@ import {
   EventList,
   ModelObservationGrid,
   ObservationList,
+  ResultPersistencePanel,
   ScenePanel,
   SourceSummary,
   SplitPlanTable,
@@ -31,6 +32,7 @@ export type DashboardWidgetId =
   | "audio-events"
   | "text-events"
   | "data-buckets"
+  | "result-delivery"
   | "split-plan"
   | "diagnostics";
 
@@ -77,6 +79,7 @@ const widgetOptions: Array<{ id: DashboardWidgetId; label: string; dataKinds: Da
   { id: "audio-events", label: "Audio Events", dataKinds: ["audio_event"] },
   { id: "text-events", label: "Text Events", dataKinds: ["text_event"] },
   { id: "data-buckets", label: "Data Buckets", dataKinds: ["data_bucket"] },
+  { id: "result-delivery", label: "Save Results", dataKinds: ["json_report"] },
   { id: "split-plan", label: "Split Plan", dataKinds: ["scene_result"] },
   {
     id: "diagnostics",
@@ -716,6 +719,14 @@ function renderWidget(widgetId: DashboardWidgetId, report: YoutubeVideoReport) {
       return <EventList events={report.text.events} title={`Text Events (${report.text.status})`} />;
     case "data-buckets":
       return <DataBucketOverview buckets={report.data_buckets} />;
+    case "result-delivery":
+      return (
+        <ResultPersistencePanel
+          result={report}
+          defaultFilename={basename(report.assets.report_path) || "analysis.json"}
+          defaultLabel={basename(report.source.local_video) || "Analysis result"}
+        />
+      );
     case "split-plan":
       return <SplitPlanTable scenes={report.video.scenes} videoName={basename(report.source.local_video)} />;
     case "diagnostics":
