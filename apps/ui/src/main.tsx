@@ -1035,6 +1035,10 @@ type PortType =
   | "run_request"
   | "run_config"
   | "template_string"
+  | "string_value"
+  | "number_value"
+  | "boolean_value"
+  | "array_value"
   | "youtube_url"
   | "video_file"
   | "video_metadata"
@@ -1284,6 +1288,10 @@ const portTypes: PortType[] = [
   "run_request",
   "run_config",
   "template_string",
+  "string_value",
+  "number_value",
+  "boolean_value",
+  "array_value",
   "youtube_url",
   "video_file",
   "video_metadata",
@@ -1309,6 +1317,10 @@ const defaultPortTypeColors: PortTypeColors = {
   run_request: "#52525b",
   run_config: "#71717a",
   template_string: "#14b8a6",
+  string_value: "#0891b2",
+  number_value: "#16a34a",
+  boolean_value: "#ca8a04",
+  array_value: "#9333ea",
   youtube_url: "#0ea5e9",
   video_file: "#f59e0b",
   video_metadata: "#d97706",
@@ -1331,6 +1343,11 @@ const defaultPortTypeColors: PortTypeColors = {
 };
 
 const dataValueCompatibleSourceTypes: PortType[] = [
+  "string_value",
+  "number_value",
+  "boolean_value",
+  "array_value",
+  "object_value",
   "data_value",
   "data_record",
   "data_bucket",
@@ -1602,6 +1619,65 @@ const initialWorkflowNodes: WorkflowNodeModel[] = [
     outputs: [],
   }),
 ];
+
+const generatorWorkflowNodes: WorkflowNodeModel[] = [
+  workflowNode("string-generator", 0, 0, {
+    title: "String Generator",
+    packageName: "Generator",
+    description: "Emits a generated text value for templates, labels, paths, and metadata.",
+    tone: "cyan",
+    inputs: [],
+    outputs: [
+      port("value", "string", "string_value"),
+      port("template", "template", "template_string"),
+    ],
+    tags: ["generator", "string", "text", "template"],
+  }),
+  workflowNode("number-generator", 0, 0, {
+    title: "Number Generator",
+    packageName: "Generator",
+    description: "Emits a generated numeric value for counters, thresholds, limits, and scores.",
+    tone: "emerald",
+    inputs: [],
+    outputs: [port("value", "number", "number_value")],
+    tags: ["generator", "number", "integer", "float"],
+  }),
+  workflowNode("boolean-generator", 0, 0, {
+    title: "Boolean Generator",
+    packageName: "Generator",
+    description: "Emits a generated true or false value for flags, toggles, and conditional routing.",
+    tone: "amber",
+    inputs: [],
+    outputs: [port("value", "boolean", "boolean_value")],
+    tags: ["generator", "boolean", "flag", "toggle"],
+  }),
+  workflowNode("array-generator", 0, 0, {
+    title: "Array Generator",
+    packageName: "Generator",
+    description: "Emits a generated ordered list for batch values, tags, IDs, and sampled items.",
+    tone: "violet",
+    inputs: [],
+    outputs: [
+      port("items", "array", "array_value"),
+      port("data", "data", "data_value"),
+    ],
+    tags: ["generator", "array", "list", "items"],
+  }),
+  workflowNode("object-generator", 0, 0, {
+    title: "Object Generator",
+    packageName: "Generator",
+    description: "Emits a generated object for structured context, parameters, and JSON-like data.",
+    tone: "fuchsia",
+    inputs: [],
+    outputs: [
+      port("object", "object", "object_value"),
+      port("data", "data", "data_value"),
+    ],
+    tags: ["generator", "object", "json", "context"],
+  }),
+];
+
+const workflowNodeTemplates: WorkflowNodeModel[] = initialWorkflowNodes.concat(generatorWorkflowNodes);
 
 const initialWorkflowEdges: Edge[] = [
   workflowEdge("react-page", "run", "vite-api", "run"),
@@ -2241,7 +2317,7 @@ function WorkflowBuilder({
   const contextGroupNode = contextNodes.length === 1 && contextNodes[0].data.group ? contextNodes[0] : null;
   const contextNodesAllMinimized = contextNodes.length > 0 && contextNodes.every((node) => node.data.minimized);
   const filteredPrimitiveNodes = useMemo(
-    () => filterWorkflowNodeTemplates(initialWorkflowNodes, componentSearch),
+    () => filterWorkflowNodeTemplates(workflowNodeTemplates, componentSearch),
     [componentSearch],
   );
   const filteredSavedBlocks = useMemo(
@@ -2251,7 +2327,7 @@ function WorkflowBuilder({
   const outputConnectorPrimitiveTargets = useMemo(
     () =>
       outputConnectorMenu
-        ? workflowPrimitiveConnectorTargets(initialWorkflowNodes, outputConnectorMenu.sourcePort.type)
+        ? workflowPrimitiveConnectorTargets(workflowNodeTemplates, outputConnectorMenu.sourcePort.type)
         : [],
     [outputConnectorMenu?.sourcePort.type],
   );
@@ -2375,7 +2451,7 @@ function WorkflowBuilder({
       }
       const position = flowInstance?.screenToFlowPosition({ x: event.clientX, y: event.clientY });
       if (payload.type === "primitive") {
-        const template = initialWorkflowNodes.find((node) => node.id === payload.id);
+        const template = workflowNodeTemplates.find((node) => node.id === payload.id);
         if (template) {
           addPrimitiveNode(template, position);
         }
