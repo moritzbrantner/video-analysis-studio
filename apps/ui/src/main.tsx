@@ -1014,6 +1014,7 @@ type FlowTone = "sky" | "rose" | "amber" | "emerald" | "violet" | "cyan" | "indi
 type PortType =
   | "run_request"
   | "run_config"
+  | "template_string"
   | "youtube_url"
   | "video_file"
   | "video_metadata"
@@ -1027,6 +1028,8 @@ type PortType =
   | "transcript_segment"
   | "audio_event"
   | "text_event"
+  | "object_value"
+  | "data_value"
   | "data_record"
   | "data_bucket"
   | "json_report"
@@ -1036,6 +1039,7 @@ interface FlowPort {
   id: string;
   label: string;
   type: PortType;
+  optional?: boolean;
 }
 
 interface WorkflowNodeSize {
@@ -1250,6 +1254,7 @@ const minWorkflowGroupHeight = 140;
 const portTypes: PortType[] = [
   "run_request",
   "run_config",
+  "template_string",
   "youtube_url",
   "video_file",
   "video_metadata",
@@ -1263,6 +1268,8 @@ const portTypes: PortType[] = [
   "transcript_segment",
   "audio_event",
   "text_event",
+  "object_value",
+  "data_value",
   "data_record",
   "data_bucket",
   "json_report",
@@ -1272,6 +1279,7 @@ const portTypes: PortType[] = [
 const defaultPortTypeColors: PortTypeColors = {
   run_request: "#52525b",
   run_config: "#71717a",
+  template_string: "#14b8a6",
   youtube_url: "#0ea5e9",
   video_file: "#f59e0b",
   video_metadata: "#d97706",
@@ -1285,11 +1293,27 @@ const defaultPortTypeColors: PortTypeColors = {
   transcript_segment: "#6366f1",
   audio_event: "#0e7490",
   text_event: "#d946ef",
+  object_value: "#db2777",
+  data_value: "#334155",
   data_record: "#64748b",
   data_bucket: "#475569",
   json_report: "#0284c7",
   dashboard_view: "#2563eb",
 };
+
+const dataValueCompatibleSourceTypes: PortType[] = [
+  "data_value",
+  "data_record",
+  "data_bucket",
+  "json_report",
+  "video_metadata",
+  "scene_result",
+  "video_observation",
+  "model_prediction",
+  "transcript_segment",
+  "audio_event",
+  "text_event",
+];
 
 const hotkeyActions: Array<{
   id: HotkeyActionId;
@@ -1511,6 +1535,18 @@ const initialWorkflowNodes: WorkflowNodeModel[] = [
     inputs: [port("report", "report json", "json_report")],
     outputs: [port("view", "visible panels", "dashboard_view")],
   }),
+  workflowNode("templated-data-save", 3640, -180, {
+    title: "Templated Data Save",
+    packageName: "fs / mustache",
+    description: "Serializes incoming data to a path resolved from a template string. Use {{field}} values from the optional context object.",
+    tone: "emerald",
+    inputs: [
+      port("data", "data", "data_value"),
+      port("location", "location template", "template_string"),
+      port("context", "context object", "object_value", { optional: true }),
+    ],
+    outputs: [],
+  }),
   workflowNode("disk-result-sink", 3640, 120, {
     title: "Disk Result Sink",
     packageName: "fs / browser download",
@@ -1571,6 +1607,7 @@ const initialWorkflowEdges: Edge[] = [
   workflowEdge("buckets", "buckets", "report-writer", "buckets"),
   workflowEdge("report-writer", "report", "dashboard", "report"),
   workflowEdge("report-writer", "report", "react-page", "report"),
+  workflowEdge("report-writer", "report", "templated-data-save", "data"),
   workflowEdge("report-writer", "report", "disk-result-sink", "report"),
   workflowEdge("report-writer", "report", "database-result-sink", "report"),
   workflowEdge("report-writer", "report", "http-result-sink", "report"),
@@ -1664,7 +1701,7 @@ function WorkflowBuilder({
     (connection: Connection) => {
       const sourcePort = findPort(nodes, connection.source, connection.sourceHandle, "out");
       const targetPort = findPort(nodes, connection.target, connection.targetHandle, "in");
-      if (!sourcePort || !targetPort || sourcePort.type !== targetPort.type) {
+      if (!sourcePort || !targetPort || !portTypesCompatible(sourcePort.type, targetPort.type)) {
         return;
       }
       setEdges((currentEdges) =>
@@ -3071,8 +3108,9 @@ function WorkflowPortList({ title, ports }: { title: string; ports: FlowPort[] }
                 }}
               >
                 <div className="font-medium text-zinc-900">{portValue.label}</div>
-                <div className="mt-1 text-[10px] font-semibold uppercase" style={{ color: portTypeBadgeTextColor(color) }}>
-                  {formatPortType(portValue.type)}
+                <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] font-semibold uppercase">
+                  <span style={{ color: portTypeBadgeTextColor(color) }}>{formatPortType(portValue.type)}</span>
+                  {portValue.optional && <span className="text-zinc-500">optional</span>}
                 </div>
               </div>
             );
@@ -3660,8 +3698,8 @@ function cloneWorkflowNodeData(data: WorkflowNodeData): WorkflowNodeData {
     packageName: data.packageName,
     description: data.description,
     tone: data.tone,
-    inputs: data.inputs.map((input) => ({ ...input })),
-    outputs: data.outputs.map((output) => ({ ...output })),
+    inputs: data.inputs.map(cloneFlowPort),
+    outputs: data.outputs.map(cloneFlowPort),
   };
   if (data.tags) {
     cloned.tags = normalizeWorkflowTags(data.tags);
@@ -3679,6 +3717,10 @@ function cloneWorkflowNodeData(data: WorkflowNodeData): WorkflowNodeData {
     cloned.minimized = true;
   }
   return cloned;
+}
+
+function cloneFlowPort(portValue: FlowPort): FlowPort {
+  return portValue.optional ? { ...portValue, optional: true } : { ...portValue };
 }
 
 function cloneWorkflowGroupMetadata(group: WorkflowGroupMetadata): WorkflowGroupMetadata {
@@ -3700,6 +3742,7 @@ function groupBoundaryPort(direction: PortDirection, node: WorkflowNodeModel, po
     id: `${direction}-${safeFlowId(node.id)}-${safeFlowId(portValue.id)}`,
     label: `${node.data.title}: ${portValue.label}`,
     type: portValue.type,
+    optional: portValue.optional,
   };
 }
 
@@ -3931,7 +3974,7 @@ function serializeWorkflowEdge(edge: Edge): SavedWorkflowBlockEdge {
 function restoreSavedWorkflowEdge(edge: SavedWorkflowBlockEdge, nodes: WorkflowNodeModel[]): Edge | null {
   const sourcePort = findPort(nodes, edge.source, edge.sourceHandle, "out");
   const targetPort = findPort(nodes, edge.target, edge.targetHandle, "in");
-  if (!sourcePort || !targetPort || sourcePort.type !== targetPort.type) {
+  if (!sourcePort || !targetPort || !portTypesCompatible(sourcePort.type, targetPort.type)) {
     return null;
   }
 
@@ -4522,7 +4565,8 @@ function isFlowPort(value: unknown): value is FlowPort {
     typeof value.id === "string" &&
     typeof value.label === "string" &&
     typeof value.type === "string" &&
-    isPortType(value.type)
+    isPortType(value.type) &&
+    (value.optional === undefined || typeof value.optional === "boolean")
   );
 }
 
@@ -4891,14 +4935,21 @@ function PortRow({
       />
       <div className={classNames("flex flex-col gap-1", isInput ? "items-start" : "items-end text-right")}>
         <span className="text-xs font-medium text-zinc-800">{port.label}</span>
-        <span
-          className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase"
-          style={{
-            backgroundColor: hexToRgba(color, 0.16),
-            color: portTypeBadgeTextColor(color),
-          }}
-        >
-          {formatPortType(port.type)}
+        <span className={classNames("flex flex-wrap gap-1", isInput ? "justify-start" : "justify-end")}>
+          <span
+            className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+            style={{
+              backgroundColor: hexToRgba(color, 0.16),
+              color: portTypeBadgeTextColor(color),
+            }}
+          >
+            {formatPortType(port.type)}
+          </span>
+          {port.optional && (
+            <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-zinc-500">
+              optional
+            </span>
+          )}
         </span>
       </div>
     </div>
@@ -5128,8 +5179,8 @@ function workflowNode(id: string, x: number, y: number, data: WorkflowNodeData):
   };
 }
 
-function port(id: string, label: string, type: PortType): FlowPort {
-  return { id, label, type };
+function port(id: string, label: string, type: PortType, options: Pick<FlowPort, "optional"> = {}): FlowPort {
+  return options.optional ? { id, label, type, optional: true } : { id, label, type };
 }
 
 function workflowEdge(source: string, sourcePortId: string, target: string, targetPortId: string): Edge {
@@ -5172,7 +5223,11 @@ function compatibleConnection(nodes: WorkflowNodeModel[], connection: Connection
   }
   const sourcePort = findPort(nodes, connection.source, connection.sourceHandle, "out");
   const targetPort = findPort(nodes, connection.target, connection.targetHandle, "in");
-  return Boolean(sourcePort && targetPort && sourcePort.type === targetPort.type);
+  return Boolean(sourcePort && targetPort && portTypesCompatible(sourcePort.type, targetPort.type));
+}
+
+function portTypesCompatible(sourceType: PortType, targetType: PortType): boolean {
+  return sourceType === targetType || (targetType === "data_value" && dataValueCompatibleSourceTypes.includes(sourceType));
 }
 
 function findPort(
@@ -5539,11 +5594,11 @@ function UseCaseControls({
         )}
 
         {inputModel.genericInputs.map((input) => (
-          <Field key={input.key} label={`${input.nodeTitle} ${input.port.label}`}>
+          <Field key={input.key} label={`${input.nodeTitle} ${input.port.label}${input.port.optional ? " (optional)" : ""}`}>
             <input
               className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
               value={form.workflowInputs[input.key] ?? ""}
-              placeholder={formatPortType(input.port.type)}
+              placeholder={input.port.type === "template_string" ? "output/{{id}}.json" : formatPortType(input.port.type)}
               title={formatPortType(input.port.type)}
               onChange={(event) => setWorkflowInput(input.key, event.target.value)}
             />
@@ -5912,7 +5967,7 @@ function workflowPrimitiveConnectorTargets(
   type: PortType,
 ): WorkflowPrimitiveConnectorTarget[] {
   return nodes.flatMap((template) => {
-    const input = template.data.inputs.find((portValue) => portValue.type === type);
+    const input = template.data.inputs.find((portValue) => portTypesCompatible(type, portValue.type));
     return input ? [{ template, input }] : [];
   });
 }
@@ -5922,7 +5977,7 @@ function workflowSavedBlockConnectorTargets(
   type: PortType,
 ): WorkflowSavedBlockConnectorTarget[] {
   return blocks.flatMap((block) => {
-    const input = savedWorkflowBlockOpenInputs(block).find((candidate) => candidate.port.type === type);
+    const input = savedWorkflowBlockOpenInputs(block).find((candidate) => portTypesCompatible(type, candidate.port.type));
     return input ? [{ block, input }] : [];
   });
 }
