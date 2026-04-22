@@ -9,6 +9,11 @@ use uuid::Uuid;
 
 use crate::error::{Result, StudioError};
 use crate::report::StudioReport;
+use crate::song::{
+    import_song_catalog_items, run_song_analysis_workflow, SongAnalysisRunRequest,
+    SongCatalogImportRequest, SongCatalogImportResponse,
+};
+use crate::subtitles::{run_subtitle_generation_workflow, SubtitleGenerationRunRequest};
 use crate::youtube::{
     run_youtube_collection_workflow, run_youtube_video_workflow, YoutubeCollectionRunRequest,
     YoutubeRunRequest,
@@ -21,6 +26,8 @@ pub type RunId = Uuid;
 pub enum WorkflowKind {
     YoutubeVideo,
     YoutubeCollection,
+    SongAnalysis,
+    SubtitleGeneration,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -239,6 +246,181 @@ impl RunManager {
         });
 
         Ok(record)
+    }
+
+    pub async fn start_song_analysis(&self, request: SongAnalysisRunRequest) -> Result<RunRecord> {
+        request.validate()?;
+        let run_id = Uuid::new_v4();
+        let work_dir = request.resolved_work_dir(&self.data_dir, run_id);
+        let report_path = work_dir.join("song-analysis.json");
+        let data_dir = self.data_dir.clone();
+        let now = Utc::now();
+        let record = RunRecord {
+            run_id,
+            workflow: WorkflowKind::SongAnalysis,
+            status: RunStatus::Pending,
+            work_dir: work_dir.clone(),
+            report_path: report_path.clone(),
+            created_at: now,
+            updated_at: now,
+            started_at: None,
+            finished_at: None,
+            message: Some("queued".to_string()),
+        };
+        let (events, _) = broadcast::channel(128);
+        {
+            let mut runs = self.inner.runs.lock().await;
+            runs.insert(
+                run_id,
+                RunState {
+                    record: record.clone(),
+                    events: events.clone(),
+                },
+            );
+        }
+        self.emit(run_id, RunStatus::Pending, "queued").await;
+
+        let manager = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(async {
+                manager
+                    .update_run(
+                        run_id,
+                        RunStatus::Running,
+                        Some("running song analysis workflow".to_string()),
+                        false,
+                    )
+                    .await;
+                manager
+                    .emit(run_id, RunStatus::Running, "running song analysis workflow")
+                    .await;
+            });
+
+            let result = run_song_analysis_workflow(request, data_dir, work_dir, report_path);
+            handle.block_on(async {
+                match result {
+                    Ok(_) => {
+                        manager
+                            .update_run(
+                                run_id,
+                                RunStatus::Succeeded,
+                                Some("song analysis completed".to_string()),
+                                true,
+                            )
+                            .await;
+                        manager
+                            .emit(run_id, RunStatus::Succeeded, "song analysis completed")
+                            .await;
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        manager
+                            .update_run(run_id, RunStatus::Failed, Some(message.clone()), true)
+                            .await;
+                        manager.emit(run_id, RunStatus::Failed, message).await;
+                    }
+                }
+            });
+        });
+
+        Ok(record)
+    }
+
+    pub async fn start_subtitle_generation(
+        &self,
+        request: SubtitleGenerationRunRequest,
+    ) -> Result<RunRecord> {
+        request.validate()?;
+        let run_id = Uuid::new_v4();
+        let work_dir = request.resolved_work_dir(&self.data_dir, run_id);
+        let report_path = work_dir.join("subtitle-generation.json");
+        let now = Utc::now();
+        let record = RunRecord {
+            run_id,
+            workflow: WorkflowKind::SubtitleGeneration,
+            status: RunStatus::Pending,
+            work_dir: work_dir.clone(),
+            report_path: report_path.clone(),
+            created_at: now,
+            updated_at: now,
+            started_at: None,
+            finished_at: None,
+            message: Some("queued".to_string()),
+        };
+        let (events, _) = broadcast::channel(128);
+        {
+            let mut runs = self.inner.runs.lock().await;
+            runs.insert(
+                run_id,
+                RunState {
+                    record: record.clone(),
+                    events: events.clone(),
+                },
+            );
+        }
+        self.emit(run_id, RunStatus::Pending, "queued").await;
+
+        let manager = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(async {
+                manager
+                    .update_run(
+                        run_id,
+                        RunStatus::Running,
+                        Some("running subtitle generation workflow".to_string()),
+                        false,
+                    )
+                    .await;
+                manager
+                    .emit(
+                        run_id,
+                        RunStatus::Running,
+                        "running subtitle generation workflow",
+                    )
+                    .await;
+            });
+
+            let result = run_subtitle_generation_workflow(request, work_dir, report_path);
+            handle.block_on(async {
+                match result {
+                    Ok(_) => {
+                        manager
+                            .update_run(
+                                run_id,
+                                RunStatus::Succeeded,
+                                Some("subtitle generation completed".to_string()),
+                                true,
+                            )
+                            .await;
+                        manager
+                            .emit(
+                                run_id,
+                                RunStatus::Succeeded,
+                                "subtitle generation completed",
+                            )
+                            .await;
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        manager
+                            .update_run(run_id, RunStatus::Failed, Some(message.clone()), true)
+                            .await;
+                        manager.emit(run_id, RunStatus::Failed, message).await;
+                    }
+                }
+            });
+        });
+
+        Ok(record)
+    }
+
+    pub fn import_song_catalog_items(
+        &self,
+        request: SongCatalogImportRequest,
+    ) -> Result<SongCatalogImportResponse> {
+        import_song_catalog_items(request, self.data_dir.clone())
     }
 
     pub async fn get_run(&self, run_id: RunId) -> Result<RunRecord> {

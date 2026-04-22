@@ -24,10 +24,11 @@ import {
   SplitPlanTable,
   TranscriptPanel,
   VideoSummaryCards,
+  type SubtitleGenerationReport,
   type StudioReport,
   type YoutubeVideoReport,
 } from "./index";
-import { isYoutubeCollectionReport, isYoutubeVideoReport } from "./api/client";
+import { isSubtitleGenerationReport, isYoutubeCollectionReport, isYoutubeVideoReport } from "./api/client";
 
 export type DashboardWidgetId =
   | "summary"
@@ -730,6 +731,33 @@ function renderWidget(widgetId: DashboardWidgetId, report: StudioReport) {
         return <CollectionDashboard report={report} />;
     }
   }
+  if (isSubtitleGenerationReport(report)) {
+    switch (widgetId) {
+      case "summary":
+      case "diagnostics":
+      case "data-buckets":
+        return <SubtitleDiagnosticsPanel report={report} />;
+      case "source-assets":
+        return (
+          <div className="grid gap-4 2xl:grid-cols-2">
+            <SourceSummary source={report.source} />
+            <AssetSummary assets={report.assets} />
+          </div>
+        );
+      case "transcript":
+        return <TranscriptPanel transcription={report.transcription} />;
+      case "result-delivery":
+        return (
+          <ResultPersistencePanel
+            result={report}
+            defaultFilename={basename(report.assets.report_path) || "subtitle-generation.json"}
+            defaultLabel={basename(report.subtitle.path) || "Subtitle generation"}
+          />
+        );
+      default:
+        return <SubtitleDiagnosticsPanel report={report} />;
+    }
+  }
   if (!isYoutubeVideoReport(report)) {
     return null;
   }
@@ -806,6 +834,34 @@ function DiagnosticsPanel({ report }: { report: YoutubeVideoReport }) {
               <div className="mt-0.5 text-xs text-zinc-500">{detail}</div>
             </div>
             <div className="text-right font-semibold tabular-nums text-zinc-950">{value}</div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function SubtitleDiagnosticsPanel({ report }: { report: SubtitleGenerationReport }) {
+  const rows = [
+    ["Subtitle format", report.subtitle.format.toUpperCase(), report.subtitle.path],
+    ["Subtitle segments", formatNumber(report.subtitle.segments), report.subtitle.message ?? "written"],
+    ["Transcription", report.transcription.status, report.transcription.message ?? "transcript"],
+    ["Audio wav", report.assets.audio_wav ? "1" : "0", report.assets.audio_wav ?? "not exported"],
+  ];
+
+  return (
+    <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
+      <div className="border-b border-zinc-200 px-4 py-3">
+        <h2 className="text-sm font-semibold text-zinc-950">Subtitle Output</h2>
+      </div>
+      <div className="divide-y divide-zinc-100">
+        {rows.map(([label, value, detail]) => (
+          <div key={label} className="grid grid-cols-[minmax(0,1fr)_120px] gap-3 px-4 py-3 text-sm">
+            <div>
+              <div className="font-medium text-zinc-900">{label}</div>
+              <div className="mt-0.5 break-all text-xs text-zinc-500">{detail}</div>
+            </div>
+            <div className="truncate text-right font-semibold tabular-nums text-zinc-950">{value}</div>
           </div>
         ))}
       </div>

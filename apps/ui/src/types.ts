@@ -157,6 +157,14 @@ export interface YoutubeVideoReport {
   data_buckets: DataBucketReport[];
 }
 
+export type TranscriptionEngine = "whisper" | "faster_whisper" | "fast_whisper" | "whisperx";
+
+export interface TranscriptionConfig {
+  enabled: boolean;
+  engine?: TranscriptionEngine;
+  command?: { command: string; args: string[] } | null;
+}
+
 export type YoutubeCollectionSource =
   | { kind: "playlist_url"; url: string }
   | { kind: "channel_url"; url: string }
@@ -216,10 +224,7 @@ export interface YoutubeRunOptions {
   min_scene_len: number;
   max_frames?: number | null;
   visual_sample_every: number;
-  transcription: {
-    enabled: boolean;
-    command?: { command: string; args: string[] } | null;
-  };
+  transcription: TranscriptionConfig;
   models: {
     object?: { command: string; args: string[] } | null;
     ocr?: { command: string; args: string[] } | null;
@@ -300,7 +305,179 @@ export interface YoutubeCollectionReport {
   capabilities: CapabilityReport;
 }
 
-export type StudioReport = YoutubeVideoReport | YoutubeCollectionReport;
+export type SongSourceSpec =
+  | { kind: "youtube_url"; url: string }
+  | { kind: "local_file"; path: string };
+
+export interface MusicAnalysisConfig {
+  enabled: boolean;
+  command?: { command: string; args: string[] } | null;
+  window_seconds: number;
+  hop_seconds: number;
+  min_bpm: number;
+  max_bpm: number;
+}
+
+export interface SongAnalysisRunRequest {
+  source: SongSourceSpec;
+  work_dir?: string | null;
+  catalog: {
+    db_path?: string | null;
+  };
+  identification: {
+    enabled: boolean;
+    min_score: number;
+    ambiguous_margin: number;
+    max_candidates: number;
+  };
+  transcription: TranscriptionConfig;
+  music: MusicAnalysisConfig;
+}
+
+export interface SongCatalogImportRequest {
+  catalog_db_path?: string | null;
+  items: SongCatalogImportItem[];
+}
+
+export interface SongCatalogImportItem {
+  source: SongSourceSpec;
+  metadata: {
+    title: string;
+    artist?: string | null;
+    album?: string | null;
+    isrc?: string | null;
+    source_uri?: string | null;
+  };
+}
+
+export interface SongCatalogImportResult {
+  index: number;
+  track_id?: string | null;
+  title: string;
+  status: string;
+  message?: string | null;
+}
+
+export interface SongCatalogImportResponse {
+  catalog_path: string;
+  imported: number;
+  failed: number;
+  results: SongCatalogImportResult[];
+}
+
+export interface SongSourceReport {
+  url?: string | null;
+  local_media: string;
+}
+
+export interface SongAssetReport {
+  work_dir: string;
+  report_path: string;
+  transcription_wav?: string | null;
+  music_analysis_wav?: string | null;
+}
+
+export interface SongFingerprintQueryReport {
+  duration_seconds: number;
+  fingerprint: string;
+  chunk_count: number;
+}
+
+export interface SongMatchedSegmentReport {
+  query_start_seconds?: number | null;
+  catalog_start_seconds?: number | null;
+  duration_seconds: number;
+}
+
+export interface SongMatchCandidateReport {
+  track_id: string;
+  title: string;
+  artist?: string | null;
+  album?: string | null;
+  isrc?: string | null;
+  source_uri?: string | null;
+  duration_seconds: number;
+  score: number;
+  matched_segment?: SongMatchedSegmentReport | null;
+}
+
+export interface SongIdentificationReport {
+  status: string;
+  query?: SongFingerprintQueryReport | null;
+  catalog_path: string;
+  top_match?: SongMatchCandidateReport | null;
+  candidates: SongMatchCandidateReport[];
+  message?: string | null;
+}
+
+export interface MusicFeatureReport {
+  bpm?: number | null;
+  bpm_confidence?: number | null;
+  key?: string | null;
+  mode?: string | null;
+  key_confidence?: number | null;
+}
+
+export interface MusicSegmentReport {
+  index: number;
+  start_seconds: number;
+  end_seconds: number;
+  bpm?: number | null;
+  bpm_confidence?: number | null;
+  key?: string | null;
+  mode?: string | null;
+  key_confidence?: number | null;
+}
+
+export interface MusicAnalysisReport {
+  status: string;
+  global?: MusicFeatureReport | null;
+  segments: MusicSegmentReport[];
+  message?: string | null;
+}
+
+export interface SongAnalysisReport {
+  use_case: "song_analysis" | string;
+  source: SongSourceReport;
+  assets: SongAssetReport;
+  capabilities: CapabilityReport;
+  identification: SongIdentificationReport;
+  lyrics: TranscriptionReport;
+  music: MusicAnalysisReport;
+  data_buckets: DataBucketReport[];
+}
+
+export interface SubtitleGenerationRunRequest {
+  source: SongSourceSpec;
+  work_dir?: string | null;
+  transcription: TranscriptionConfig;
+  overwrite: boolean;
+}
+
+export interface SubtitleAssetReport {
+  work_dir: string;
+  report_path: string;
+  audio_wav?: string | null;
+  subtitle_path: string;
+}
+
+export interface SubtitleReport {
+  format: string;
+  path: string;
+  segments: number;
+  message?: string | null;
+}
+
+export interface SubtitleGenerationReport {
+  use_case: "subtitle_generation" | string;
+  source: SourceReport;
+  assets: SubtitleAssetReport;
+  capabilities: CapabilityReport;
+  transcription: TranscriptionReport;
+  subtitle: SubtitleReport;
+}
+
+export type StudioReport = YoutubeVideoReport | YoutubeCollectionReport | SongAnalysisReport | SubtitleGenerationReport;
 
 export interface CollectionTableRow {
   id: string;

@@ -35,8 +35,13 @@ import {
   SplitPlanTable,
   TranscriptPanel,
   VideoSummaryCards,
+  type SongAnalysisReport,
+  type SongAnalysisRunRequest,
   type CliRun,
   type StudioReport,
+  type SubtitleGenerationReport,
+  type SubtitleGenerationRunRequest,
+  type TranscriptionEngine,
   type YoutubeCollectionRunRequest,
   type YoutubeVideoReport,
 } from "./index";
@@ -51,6 +56,8 @@ import {
 } from "./ResultPageEditor";
 import {
   getWorkflowClient,
+  isSongAnalysisReport,
+  isSubtitleGenerationReport,
   isYoutubeCollectionReport,
   isYoutubeVideoReport,
   waitForRunCompletion,
@@ -60,7 +67,7 @@ import {
   type YoutubeRunRequest,
 } from "./api/client";
 
-type UseCaseId = "youtube-video" | "youtube-collection";
+type UseCaseId = "youtube-video" | "youtube-collection" | "song-analysis" | "subtitle-generation";
 type SourceMode = "url" | "file" | "collection";
 type AppPage = "analysis" | "workflow" | "settings";
 type ViewMode = "overview" | "run" | "result" | "scenes" | "signals" | "data";
@@ -76,6 +83,8 @@ interface UseCaseForm {
   maxFrames: string;
   visualSampleEvery: number;
   skipTranscription: boolean;
+  transcriptionEngine: Exclude<TranscriptionEngine, "fast_whisper">;
+  transcriptionCommand: string;
   objectCommand: string;
   ocrCommand: string;
   textCommand: string;
@@ -87,6 +96,15 @@ interface UseCaseForm {
   localDurationMax: string;
   localExtensions: string;
   alreadyDownloaded: "include" | "skip" | "reuse";
+  songCatalogPath: string;
+  songMinScore: number;
+  songAmbiguousMargin: number;
+  songMaxCandidates: number;
+  songWindowSeconds: number;
+  songHopSeconds: number;
+  songMinBpm: number;
+  songMaxBpm: number;
+  musicCommand: string;
   workflowInputs: Record<string, string>;
 }
 
@@ -108,6 +126,18 @@ const useCases: Array<{
     packageName: "studio-core",
     status: "Ready",
   },
+  {
+    id: "song-analysis",
+    name: "Song Analysis",
+    packageName: "studio-core",
+    status: "Ready",
+  },
+  {
+    id: "subtitle-generation",
+    name: "Subtitle Generation",
+    packageName: "studio-core",
+    status: "Ready",
+  },
 ];
 
 const initialForm: UseCaseForm = {
@@ -121,6 +151,8 @@ const initialForm: UseCaseForm = {
   maxFrames: "",
   visualSampleEvery: 30,
   skipTranscription: false,
+  transcriptionEngine: "whisper",
+  transcriptionCommand: "",
   objectCommand: "",
   ocrCommand: "",
   textCommand: "",
@@ -132,6 +164,15 @@ const initialForm: UseCaseForm = {
   localDurationMax: "",
   localExtensions: "mp4,mkv,webm,mov",
   alreadyDownloaded: "reuse",
+  songCatalogPath: "",
+  songMinScore: 0.82,
+  songAmbiguousMargin: 0.03,
+  songMaxCandidates: 5,
+  songWindowSeconds: 30,
+  songHopSeconds: 15,
+  songMinBpm: 60,
+  songMaxBpm: 200,
+  musicCommand: "",
   workflowInputs: {},
 };
 
@@ -160,14 +201,20 @@ function App() {
 
   const activeWorkflow = useMemo(() => activeSavedWorkflow(workflowLibrary), [workflowLibrary]);
   const activeWorkflowInputModel = useMemo(() => deriveWorkflowRunInputModel(activeWorkflow), [activeWorkflow]);
-  const command = useMemo(() => buildCommand(form, activeWorkflowInputModel), [form, activeWorkflowInputModel]);
-  const validationMessage = getRunValidation(form, activeWorkflowInputModel);
+  const command = useMemo(() => buildCommand(form, activeWorkflowInputModel, selectedUseCase), [form, activeWorkflowInputModel, selectedUseCase]);
+  const validationMessage = getRunValidation(form, activeWorkflowInputModel, selectedUseCase);
+  const songReport = isSongAnalysisReport(report) ? report : null;
+  const subtitleReport = isSubtitleGenerationReport(report) ? report : null;
   const collectionReport = isYoutubeCollectionReport(report) ? report : null;
   const videoReport = isYoutubeVideoReport(report)
     ? report
     : collectionReport?.items.find((item) => item.report)?.report ?? sampleReport;
   const reportTitle = collectionReport
     ? collectionReport.collection.title ?? collectionReport.collection.source_url
+    : songReport
+      ? songReport.identification.top_match?.title ?? songReport.source.local_media
+    : subtitleReport
+      ? subtitleReport.subtitle.path
     : videoReport.source.local_video;
   const cliRun: CliRun =
     lastRun ?? {
@@ -253,10 +300,8 @@ function App() {
     setForm({
       ...initialForm,
       sourceMode: selectedUseCase === "youtube-collection" ? "collection" : "url",
-      workDir:
-        selectedUseCase === "youtube-collection"
-          ? "use-case-output/youtube-collection"
-          : initialForm.workDir,
+      workDir: defaultWorkDirForUseCase(selectedUseCase),
+      output: defaultOutputForUseCase(selectedUseCase),
     });
     setRunStatus("pending");
     setLastRun(null);
@@ -332,8 +377,24 @@ function App() {
   const openWorkflowRun = useCallback(
     (run: SavedWorkflowRun) => {
       activateWorkflowDefinition(run.workflowId);
-      setForm(isYoutubeCollectionRunRequest(run.request) ? formFromYoutubeCollectionRunRequest(run.request) : formFromYoutubeRunRequest(run.request));
-      setSelectedUseCase(isYoutubeCollectionRunRequest(run.request) ? "youtube-collection" : "youtube-video");
+      setForm(
+        isYoutubeCollectionRunRequest(run.request)
+          ? formFromYoutubeCollectionRunRequest(run.request)
+          : isSubtitleGenerationRunRequest(run.request)
+            ? formFromSubtitleGenerationRunRequest(run.request)
+          : isSongAnalysisRunRequest(run.request)
+            ? formFromSongAnalysisRunRequest(run.request)
+            : formFromYoutubeRunRequest(run.request),
+      );
+      setSelectedUseCase(
+        isYoutubeCollectionRunRequest(run.request)
+          ? "youtube-collection"
+          : isSubtitleGenerationRunRequest(run.request)
+            ? "subtitle-generation"
+          : isSongAnalysisRunRequest(run.request)
+            ? "song-analysis"
+            : "youtube-video",
+      );
       setRunStatus(run.status);
       setLastRun(workflowRunToCliRun(run));
       setRunOutput({});
@@ -344,7 +405,7 @@ function App() {
   );
 
   async function runAnalysis() {
-    const message = getRunValidation(form, activeWorkflowInputModel);
+    const message = getRunValidation(form, activeWorkflowInputModel, selectedUseCase);
     const workflowKind = selectedUseCase;
     if (message) {
       setRunStatus("failed");
@@ -363,6 +424,10 @@ function App() {
     const request =
       workflowKind === "youtube-collection"
         ? buildYoutubeCollectionRunRequest(form)
+        : workflowKind === "subtitle-generation"
+          ? buildSubtitleGenerationRunRequest(form, activeWorkflowInputModel)
+        : workflowKind === "song-analysis"
+          ? buildSongAnalysisRunRequest(form, activeWorkflowInputModel)
         : buildYoutubeRunRequest(form, activeWorkflowInputModel);
     const localRun = createSavedWorkflowRun(activeWorkflow, request, workflowInputSummaryFromForm(form, activeWorkflowInputModel));
     addWorkflowRun(localRun);
@@ -381,6 +446,10 @@ function App() {
       const started =
         workflowKind === "youtube-collection"
           ? await client.startYoutubeCollectionRun(request as YoutubeCollectionRunRequest)
+          : workflowKind === "subtitle-generation"
+            ? await client.startSubtitleGenerationRun(request as SubtitleGenerationRunRequest)
+          : workflowKind === "song-analysis"
+            ? await client.startSongAnalysisRun(request as SongAnalysisRunRequest)
           : await client.startYoutubeVideoRun(request as YoutubeRunRequest);
       updateWorkflowRun(localRun.id, (run) => workflowRunFromRunRecord(run, started));
       setLastRun(runRecordToCliRun(started, client.label, activeWorkflow.name));
@@ -406,6 +475,10 @@ function App() {
       setReport(
         workflowKind === "youtube-collection"
           ? await client.getYoutubeCollectionReport(finalRun.run_id)
+          : workflowKind === "subtitle-generation"
+            ? await client.getSubtitleGenerationReport(finalRun.run_id)
+          : workflowKind === "song-analysis"
+            ? await client.getSongAnalysisReport(finalRun.run_id)
           : await client.getYoutubeVideoReport(finalRun.run_id),
       );
       setRunStatus("succeeded");
@@ -542,10 +615,8 @@ function App() {
                     setForm((current) => ({
                       ...current,
                       sourceMode: useCase.id === "youtube-collection" ? "collection" : "url",
-                      workDir:
-                        useCase.id === "youtube-collection"
-                          ? "use-case-output/youtube-collection"
-                          : "use-case-output/youtube-video",
+                      workDir: defaultWorkDirForUseCase(useCase.id),
+                      output: defaultOutputForUseCase(useCase.id),
                     }));
                     navigateToPage("analysis");
                   }}
@@ -686,12 +757,12 @@ function App() {
                 />
                 <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-zinc-600">
                   <Metric
-                    label={collectionReport ? "Items" : "Scenes"}
-                    value={String(collectionReport?.items.length ?? videoReport.video.scenes.length)}
+                    label={songReport ? "Segments" : collectionReport ? "Items" : "Scenes"}
+                    value={String(songReport ? songReport.music.segments.length : collectionReport?.items.length ?? videoReport.video.scenes.length)}
                   />
                   <Metric
-                    label={collectionReport ? "Analyzed" : "Frames"}
-                    value={String(collectionReport?.collection.analyzed_items ?? videoReport.video.frames_processed)}
+                    label={songReport ? "Matches" : collectionReport ? "Analyzed" : "Frames"}
+                    value={String(songReport ? songReport.identification.candidates.length : collectionReport?.collection.analyzed_items ?? videoReport.video.frames_processed)}
                   />
                 </div>
               </div>
@@ -809,6 +880,7 @@ function App() {
                 workflowLibrary={workflowLibrary}
                 activeWorkflow={activeWorkflow}
                 activeWorkflowInputModel={activeWorkflowInputModel}
+                selectedUseCase={selectedUseCase}
                 onSelectWorkflow={activateWorkflowDefinition}
                 onCreateWorkflow={createWorkflowDefinition}
                 onEditWorkflow={() => navigateToPage("workflow")}
@@ -829,13 +901,13 @@ function App() {
               />
             ) : (
               <section className="min-w-0 space-y-4">
-                {viewMode === "overview" && (collectionReport ? <CollectionDashboard report={collectionReport} /> : <Overview report={videoReport} />)}
+                {viewMode === "overview" && (songReport ? <SongDashboard report={songReport} /> : subtitleReport ? <SubtitleDashboard report={subtitleReport} /> : collectionReport ? <CollectionDashboard report={collectionReport} /> : <Overview report={videoReport} />)}
                 {viewMode === "result" && (
                   <ResultPageEditor report={report} layout={dashboardLayout} onLayoutChange={setDashboardLayout} />
                 )}
-                {viewMode === "scenes" && (collectionReport ? <CollectionDashboard report={collectionReport} /> : <Scenes report={videoReport} />)}
-                {viewMode === "signals" && (collectionReport ? <CollectionDashboard report={collectionReport} /> : <Signals report={videoReport} />)}
-                {viewMode === "data" && (collectionReport ? <CollectionDashboard report={collectionReport} /> : <Data report={videoReport} />)}
+                {viewMode === "scenes" && (songReport ? <SongMusicPanel report={songReport} /> : subtitleReport ? <SubtitleDashboard report={subtitleReport} /> : collectionReport ? <CollectionDashboard report={collectionReport} /> : <Scenes report={videoReport} />)}
+                {viewMode === "signals" && (songReport ? <SongSignals report={songReport} /> : subtitleReport ? <SubtitleDashboard report={subtitleReport} /> : collectionReport ? <CollectionDashboard report={collectionReport} /> : <Signals report={videoReport} />)}
+                {viewMode === "data" && (songReport ? <DataBucketOverview buckets={songReport.data_buckets} /> : subtitleReport ? <SubtitleDashboard report={subtitleReport} /> : collectionReport ? <CollectionDashboard report={collectionReport} /> : <Data report={videoReport} />)}
               </section>
             )}
           </div>
@@ -886,6 +958,156 @@ function Data({ report }: { report: YoutubeVideoReport }) {
   return <DataBucketOverview buckets={report.data_buckets} />;
 }
 
+function SongDashboard({ report }: { report: SongAnalysisReport }) {
+  return (
+    <>
+      <SongSummaryCards report={report} />
+      <SongIdentificationPanel report={report} />
+      <SongMusicPanel report={report} />
+      <CapabilityPanel capabilities={report.capabilities} />
+    </>
+  );
+}
+
+function SubtitleDashboard({ report }: { report: SubtitleGenerationReport }) {
+  return (
+    <>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <MetricCard label="Subtitle" value={report.subtitle.format.toUpperCase()} detail={`${report.subtitle.segments} segments`} />
+        <MetricCard label="Transcription" value={report.transcription.status} detail={report.transcription.message ?? "Transcript generated"} />
+        <MetricCard label="Output" value={basename(report.subtitle.path)} detail={report.subtitle.path} />
+        <MetricCard label="Source" value={basename(report.source.local_video)} detail={report.source.local_video} />
+      </div>
+      <div className="grid gap-4 2xl:grid-cols-2">
+        <SourceSummary source={report.source} />
+        <AssetSummary assets={report.assets} />
+      </div>
+      <TranscriptPanel transcription={report.transcription} />
+      <CapabilityPanel capabilities={report.capabilities} />
+    </>
+  );
+}
+
+function SongSignals({ report }: { report: SongAnalysisReport }) {
+  return (
+    <>
+      <TranscriptPanel transcription={report.lyrics} />
+      <SongMusicPanel report={report} />
+    </>
+  );
+}
+
+function SongSummaryCards({ report }: { report: SongAnalysisReport }) {
+  const top = report.identification.top_match;
+  const global = report.music.global;
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <MetricCard label="Identification" value={report.identification.status} detail={top?.title ?? "No match"} />
+      <MetricCard label="BPM" value={global?.bpm != null ? global.bpm.toFixed(1) : "n/a"} detail={scoreLabel(global?.bpm_confidence)} />
+      <MetricCard label="Key" value={global?.key ? `${global.key} ${global.mode ?? ""}`.trim() : "n/a"} detail={scoreLabel(global?.key_confidence)} />
+      <MetricCard label="Lyrics" value={report.lyrics.status} detail={`${report.lyrics.segments.length} segments`} />
+    </div>
+  );
+}
+
+function MetricCard({ label, value, detail }: { label: string; value: string; detail?: string }) {
+  return (
+    <section className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
+      <div className="text-xs font-medium uppercase text-zinc-500">{label}</div>
+      <div className="mt-2 truncate text-xl font-semibold text-zinc-950">{value}</div>
+      {detail && <div className="mt-1 truncate text-sm text-zinc-500">{detail}</div>}
+    </section>
+  );
+}
+
+function SongIdentificationPanel({ report }: { report: SongAnalysisReport }) {
+  const candidates = report.identification.candidates;
+  return (
+    <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
+      <div className="border-b border-zinc-200 px-4 py-3">
+        <h2 className="text-sm font-semibold text-zinc-950">Song Identification</h2>
+        <p className="mt-1 text-xs text-zinc-500">
+          {report.identification.catalog_path} · {report.identification.query?.chunk_count ?? 0} chunks
+        </p>
+      </div>
+      {candidates.length === 0 ? (
+        <p className="px-4 py-4 text-sm text-zinc-500">{report.identification.message ?? "No candidates"}</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-left text-sm">
+            <thead className="border-b border-zinc-200 text-xs uppercase text-zinc-500">
+              <tr>
+                <th className="px-3 py-2 font-medium">Score</th>
+                <th className="px-3 py-2 font-medium">Title</th>
+                <th className="px-3 py-2 font-medium">Artist</th>
+                <th className="px-3 py-2 font-medium">Duration</th>
+                <th className="px-3 py-2 font-medium">Segment</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100">
+              {candidates.map((candidate) => (
+                <tr key={candidate.track_id}>
+                  <td className="px-3 py-2 tabular-nums text-zinc-700">{scoreLabel(candidate.score)}</td>
+                  <td className="px-3 py-2 font-medium text-zinc-950">{candidate.title}</td>
+                  <td className="px-3 py-2 text-zinc-700">{candidate.artist ?? "n/a"}</td>
+                  <td className="px-3 py-2 tabular-nums text-zinc-700">{durationLabel(candidate.duration_seconds)}</td>
+                  <td className="px-3 py-2 tabular-nums text-zinc-700">
+                    {candidate.matched_segment ? durationLabel(candidate.matched_segment.catalog_start_seconds) : "n/a"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SongMusicPanel({ report }: { report: SongAnalysisReport }) {
+  const segments = report.music.segments;
+  return (
+    <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
+      <div className="border-b border-zinc-200 px-4 py-3">
+        <h2 className="text-sm font-semibold text-zinc-950">BPM and Key</h2>
+        <p className="mt-1 text-xs text-zinc-500">{report.music.status}</p>
+      </div>
+      {segments.length === 0 ? (
+        <p className="px-4 py-4 text-sm text-zinc-500">{report.music.message ?? "No segment estimates"}</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-left text-sm">
+            <thead className="border-b border-zinc-200 text-xs uppercase text-zinc-500">
+              <tr>
+                <th className="px-3 py-2 font-medium">Window</th>
+                <th className="px-3 py-2 font-medium">Time</th>
+                <th className="px-3 py-2 font-medium">BPM</th>
+                <th className="px-3 py-2 font-medium">BPM Conf.</th>
+                <th className="px-3 py-2 font-medium">Key</th>
+                <th className="px-3 py-2 font-medium">Key Conf.</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100">
+              {segments.map((segment) => (
+                <tr key={segment.index}>
+                  <td className="px-3 py-2 font-medium text-zinc-950">{segment.index + 1}</td>
+                  <td className="px-3 py-2 tabular-nums text-zinc-700">
+                    {durationLabel(segment.start_seconds)}-{durationLabel(segment.end_seconds)}
+                  </td>
+                  <td className="px-3 py-2 tabular-nums text-zinc-700">{segment.bpm != null ? segment.bpm.toFixed(1) : "n/a"}</td>
+                  <td className="px-3 py-2 tabular-nums text-zinc-700">{scoreLabel(segment.bpm_confidence)}</td>
+                  <td className="px-3 py-2 text-zinc-700">{segment.key ? `${segment.key} ${segment.mode ?? ""}`.trim() : "n/a"}</td>
+                  <td className="px-3 py-2 tabular-nums text-zinc-700">{scoreLabel(segment.key_confidence)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function RunWorkspace({
   form,
   onFormChange,
@@ -898,6 +1120,7 @@ function RunWorkspace({
   workflowLibrary,
   activeWorkflow,
   activeWorkflowInputModel,
+  selectedUseCase,
   onSelectWorkflow,
   onCreateWorkflow,
   onEditWorkflow,
@@ -915,6 +1138,7 @@ function RunWorkspace({
   workflowLibrary: SavedWorkflowLibrary;
   activeWorkflow: SavedWorkflow;
   activeWorkflowInputModel: WorkflowRunInputModel;
+  selectedUseCase: UseCaseId;
   onSelectWorkflow: (workflowId: string) => void;
   onCreateWorkflow: () => void;
   onEditWorkflow: () => void;
@@ -946,6 +1170,7 @@ function RunWorkspace({
         <UseCaseControls
           form={form}
           inputModel={activeWorkflowInputModel}
+          selectedUseCase={selectedUseCase}
           onChange={onFormChange}
           onFocusWorkflowInput={onFocusWorkflowInput}
           onRun={onRun}
@@ -953,6 +1178,7 @@ function RunWorkspace({
           runDisabled={runDisabled}
           validationMessage={validationMessage}
         />
+        {selectedUseCase === "song-analysis" && <SongCatalogImportPanel form={form} />}
         <JsonReportLoader<StudioReport> label="Load report JSON" onLoad={onLoadReport} />
       </section>
       <section className="min-w-0 space-y-4">
@@ -960,6 +1186,90 @@ function RunWorkspace({
         <RunOutputPanel stdout={runOutput.stdout} stderr={runOutput.stderr} />
       </section>
     </div>
+  );
+}
+
+function SongCatalogImportPanel({ form }: { form: UseCaseForm }) {
+  const [path, setPath] = useState(form.input);
+  const [title, setTitle] = useState("");
+  const [artist, setArtist] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  async function importSong() {
+    if (!path.trim() || !title.trim()) {
+      setMessage("Enter a local file and title.");
+      return;
+    }
+    setImporting(true);
+    setMessage(null);
+    try {
+      const client = getWorkflowClient();
+      const result = await client.importSongCatalogItems({
+        catalog_db_path: form.songCatalogPath.trim() || null,
+        items: [
+          {
+            source: { kind: "local_file", path: path.trim() },
+            metadata: {
+              title: title.trim(),
+              artist: artist.trim() || null,
+              album: null,
+              isrc: null,
+              source_uri: null,
+            },
+          },
+        ],
+      });
+      const first = result.results[0];
+      setMessage(first?.status === "imported" ? `Imported ${first.title}` : first?.message ?? "Import failed");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  return (
+    <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
+      <div className="border-b border-zinc-200 px-4 py-3">
+        <h2 className="text-sm font-semibold text-zinc-950">Catalog Import</h2>
+      </div>
+      <div className="space-y-3 p-4">
+        <Field label="Local song file">
+          <input
+            className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+            value={path}
+            onChange={(event) => setPath(event.target.value)}
+          />
+        </Field>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Title">
+            <input
+              className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+            />
+          </Field>
+          <Field label="Artist">
+            <input
+              className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+              value={artist}
+              onChange={(event) => setArtist(event.target.value)}
+            />
+          </Field>
+        </div>
+        <button
+          type="button"
+          className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-zinc-950 px-3 text-sm font-medium text-white shadow-sm hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-400"
+          disabled={importing}
+          onClick={importSong}
+        >
+          {importing ? <SpinnerIcon className="h-4 w-4" /> : <WorkflowIcon className="h-4 w-4" />}
+          {importing ? "Importing" : "Import Song"}
+        </button>
+        {message && <p className="text-sm text-zinc-600">{message}</p>}
+      </div>
+    </section>
   );
 }
 
@@ -1135,6 +1445,9 @@ type PortType =
   | "video_frame"
   | "audio_frame"
   | "audio_wav"
+  | "song_fingerprint"
+  | "song_match"
+  | "music_feature"
   | "scene_result"
   | "video_observation"
   | "model_request"
@@ -1268,7 +1581,7 @@ interface SavedWorkflowRun {
   updatedAt: string;
   status: RunStatus;
   inputSummary: string;
-  request: YoutubeRunRequest | YoutubeCollectionRunRequest;
+  request: YoutubeRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest;
   backendRunId?: string;
   reportPath?: string;
   message?: string | null;
@@ -1400,6 +1713,9 @@ const portTypes: PortType[] = [
   "video_frame",
   "audio_frame",
   "audio_wav",
+  "song_fingerprint",
+  "song_match",
+  "music_feature",
   "scene_result",
   "video_observation",
   "model_request",
@@ -1436,6 +1752,9 @@ const defaultPortTypeColors: PortTypeColors = {
   video_frame: "#10b981",
   audio_frame: "#06b6d4",
   audio_wav: "#0891b2",
+  song_fingerprint: "#db2777",
+  song_match: "#be123c",
+  music_feature: "#65a30d",
   scene_result: "#22c55e",
   video_observation: "#8b5cf6",
   model_request: "#a855f7",
@@ -1469,6 +1788,9 @@ const dataValueCompatibleSourceTypes: PortType[] = [
   "json_report",
   "video_metadata",
   "scene_result",
+  "song_fingerprint",
+  "song_match",
+  "music_feature",
   "video_observation",
   "model_prediction",
   "transcript_segment",
@@ -1483,6 +1805,9 @@ const streamablePortTypes: PortType[] = [
   "video_file",
   "video_frame",
   "audio_frame",
+  "song_fingerprint",
+  "song_match",
+  "music_feature",
   "scene_result",
   "video_observation",
   "model_request",
@@ -1502,6 +1827,9 @@ const streamBridgePortDescriptors: Array<{ id: string; label: string; type: Port
   { id: "video_file", label: "video files", type: "video_file" },
   { id: "video_frame", label: "video frames", type: "video_frame" },
   { id: "audio_frame", label: "audio frames", type: "audio_frame" },
+  { id: "song_fingerprint", label: "fingerprints", type: "song_fingerprint" },
+  { id: "song_match", label: "song matches", type: "song_match" },
+  { id: "music_feature", label: "music features", type: "music_feature" },
   { id: "scene_result", label: "scenes", type: "scene_result" },
   { id: "video_observation", label: "observations", type: "video_observation" },
   { id: "model_request", label: "model requests", type: "model_request" },
@@ -1597,6 +1925,94 @@ const initialWorkflowNodes: WorkflowNodeModel[] = [
       port("file", "video file", "video_file"),
       port("config", "pipeline config", "run_config"),
     ],
+  }),
+  workflowNode("song-use-case", 720, 560, {
+    title: "Song Use Case",
+    packageName: "studio-core",
+    description: "Coordinates song source resolution, catalog matching, lyrics transcription, BPM, key, and report JSON.",
+    tone: "amber",
+    inputs: [
+      port("args", "cargo args", "run_config"),
+      port("url", "youtube url", "youtube_url"),
+      port("file", "local file", "video_file"),
+    ],
+    outputs: [
+      port("file", "media file", "video_file"),
+      port("config", "song config", "run_config"),
+    ],
+    tags: ["song", "music", "audio", "analysis"],
+  }),
+  workflowNode("subtitle-use-case", 720, 900, {
+    title: "Subtitle Use Case",
+    packageName: "studio-core",
+    description: "Coordinates source resolution, transcription, SRT writing next to the video, and JSON report output.",
+    tone: "amber",
+    inputs: [
+      port("args", "cargo args", "run_config"),
+      port("url", "youtube url", "youtube_url"),
+      port("file", "local file", "video_file"),
+    ],
+    outputs: [
+      port("url", "youtube url", "youtube_url"),
+      port("file", "video file", "video_file"),
+      port("config", "subtitle config", "run_config"),
+    ],
+    tags: ["subtitle", "srt", "transcription", "output"],
+  }),
+  workflowNode("song-fingerprinter", 1080, 720, {
+    title: "Song Fingerprinter",
+    packageName: "fpcalc / Chromaprint",
+    description: "Creates full-track and chunk fingerprints for local catalog matching.",
+    tone: "rose",
+    inputs: [port("file", "media file", "video_file")],
+    outputs: [port("fingerprint", "fingerprint", "song_fingerprint")],
+    tags: ["song", "fingerprint", "chromaprint"],
+  }),
+  workflowNode("song-catalog-matcher", 1440, 720, {
+    title: "Catalog Matcher",
+    packageName: "rusqlite",
+    description: "Compares song fingerprints with the local SQLite catalog and emits ranked candidates.",
+    tone: "rose",
+    inputs: [
+      port("fingerprint", "fingerprint", "song_fingerprint"),
+      port("config", "catalog config", "run_config"),
+    ],
+    outputs: [port("matches", "matches", "song_match")],
+    tags: ["song", "catalog", "matching"],
+  }),
+  workflowNode("song-music-analyzer", 1440, 980, {
+    title: "Music Analyzer",
+    packageName: "librosa command",
+    description: "Estimates global and windowed BPM and key from extracted mono audio.",
+    tone: "cyan",
+    inputs: [
+      port("file", "media file", "video_file"),
+      port("config", "music config", "run_config"),
+    ],
+    outputs: [port("features", "BPM/key", "music_feature")],
+    tags: ["song", "bpm", "key", "music"],
+  }),
+  workflowNode("song-report-writer", 2180, 820, {
+    title: "Song Report Writer",
+    packageName: "serde_json",
+    description: "Writes identification, lyrics, BPM, key, capabilities, and artifact paths to song-analysis.json.",
+    tone: "zinc",
+    inputs: [
+      port("matches", "matches", "song_match"),
+      port("segments", "lyrics", "transcript_segment"),
+      port("features", "BPM/key", "music_feature"),
+    ],
+    outputs: [port("report", "song-analysis.json", "json_report")],
+    tags: ["song", "report"],
+  }),
+  workflowNode("song-dashboard", 2550, 820, {
+    title: "Song Dashboard",
+    packageName: "@video-analysis-studio/ui",
+    description: "Renders song identity candidates, lyrics, global BPM/key, and segment-level music estimates.",
+    tone: "sky",
+    inputs: [port("report", "song report", "json_report")],
+    outputs: [port("view", "song panels", "dashboard_view")],
+    tags: ["song", "dashboard"],
   }),
   workflowNode("collection-manifest", 1080, -250, {
     title: "Collection Manifest",
@@ -1746,6 +2162,19 @@ const initialWorkflowNodes: WorkflowNodeModel[] = [
       port("events", "text events", "text_event"),
       port("records", "text records", "data_record"),
     ],
+  }),
+  workflowNode("subtitle-writer", 2180, 1040, {
+    title: "Subtitle Writer",
+    packageName: "studio-core / fs",
+    description: "Formats transcript segments as SRT and writes the subtitle file into the source video's folder.",
+    tone: "indigo",
+    inputs: [
+      port("file", "video file", "video_file"),
+      port("segments", "segments", "transcript_segment"),
+      port("config", "subtitle config", "run_config"),
+    ],
+    outputs: [port("report", "subtitle report", "json_report")],
+    tags: ["subtitle", "srt", "transcript", "output"],
   }),
   workflowNode("buckets", 2180, 560, {
     title: "Bucket Aggregator",
@@ -2288,7 +2717,22 @@ const initialWorkflowEdges: Edge[] = [
   workflowEdge("source", "collection", "use-case", "collection"),
   workflowEdge("source", "file", "use-case", "file"),
   workflowEdge("vite-api", "args", "use-case", "args"),
+  workflowEdge("source", "url", "song-use-case", "url"),
+  workflowEdge("source", "file", "song-use-case", "file"),
+  workflowEdge("vite-api", "args", "song-use-case", "args"),
+  workflowEdge("source", "url", "subtitle-use-case", "url"),
+  workflowEdge("source", "file", "subtitle-use-case", "file"),
+  workflowEdge("vite-api", "args", "subtitle-use-case", "args"),
+  workflowEdge("song-use-case", "file", "song-fingerprinter", "file"),
+  workflowEdge("song-use-case", "file", "song-music-analyzer", "file"),
+  workflowEdge("song-use-case", "file", "ffmpeg", "file"),
+  workflowEdge("song-use-case", "config", "song-catalog-matcher", "config"),
+  workflowEdge("song-use-case", "config", "song-music-analyzer", "config"),
+  workflowEdge("song-fingerprinter", "fingerprint", "song-catalog-matcher", "fingerprint"),
+  workflowEdge("song-catalog-matcher", "matches", "song-report-writer", "matches"),
+  workflowEdge("song-music-analyzer", "features", "song-report-writer", "features"),
   workflowEdge("use-case", "url", "download", "url"),
+  workflowEdge("subtitle-use-case", "url", "download", "url"),
   workflowEdge("use-case", "collection", "collection-manifest", "url"),
   workflowEdge("collection-manifest", "manifest", "collection-download-loop", "manifest"),
   workflowEdge("use-case", "config", "collection-download-loop", "config"),
@@ -2296,7 +2740,11 @@ const initialWorkflowEdges: Edge[] = [
   workflowEdge("collection-download-loop", "items", "collection-report", "items"),
   workflowEdge("report-writer", "report", "collection-report", "reports"),
   workflowEdge("use-case", "file", "ffmpeg", "file"),
+  workflowEdge("subtitle-use-case", "file", "ffmpeg", "file"),
+  workflowEdge("subtitle-use-case", "file", "subtitle-writer", "file"),
+  workflowEdge("subtitle-use-case", "config", "subtitle-writer", "config"),
   workflowEdge("download", "file", "ffmpeg", "file"),
+  workflowEdge("download", "file", "subtitle-writer", "file"),
   workflowEdge("use-case", "config", "video-pipeline", "config"),
   workflowEdge("use-case", "config", "content-detector", "config"),
   workflowEdge("use-case", "config", "model-sampler", "config"),
@@ -2315,6 +2763,8 @@ const initialWorkflowEdges: Edge[] = [
   workflowEdge("audio-pipeline", "events", "report-writer", "audio"),
   workflowEdge("transcriber", "segments", "text-pipeline", "segments"),
   workflowEdge("transcriber", "segments", "report-writer", "segments"),
+  workflowEdge("transcriber", "segments", "song-report-writer", "segments"),
+  workflowEdge("transcriber", "segments", "subtitle-writer", "segments"),
   workflowEdge("text-pipeline", "events", "report-writer", "text"),
   workflowEdge("video-pipeline", "records", "buckets", "records"),
   workflowEdge("audio-pipeline", "records", "buckets", "records"),
@@ -2327,6 +2777,16 @@ const initialWorkflowEdges: Edge[] = [
   workflowEdge("report-writer", "report", "database-result-sink", "report"),
   workflowEdge("report-writer", "report", "http-result-sink", "report"),
   workflowEdge("collection-report", "report", "dashboard", "collection"),
+  workflowEdge("song-report-writer", "report", "song-dashboard", "report"),
+  workflowEdge("song-report-writer", "report", "react-page", "report"),
+  workflowEdge("song-report-writer", "report", "disk-result-sink", "report"),
+  workflowEdge("song-report-writer", "report", "database-result-sink", "report"),
+  workflowEdge("song-report-writer", "report", "http-result-sink", "report"),
+  workflowEdge("subtitle-writer", "report", "react-page", "report"),
+  workflowEdge("subtitle-writer", "report", "dashboard", "report"),
+  workflowEdge("subtitle-writer", "report", "disk-result-sink", "report"),
+  workflowEdge("subtitle-writer", "report", "database-result-sink", "report"),
+  workflowEdge("subtitle-writer", "report", "http-result-sink", "report"),
 ];
 
 function WorkflowBuilder({
@@ -5138,7 +5598,7 @@ function persistSavedWorkflowRuns(runs: SavedWorkflowRun[]) {
 
 function createSavedWorkflowRun(
   workflow: SavedWorkflow,
-  request: YoutubeRunRequest | YoutubeCollectionRunRequest,
+  request: YoutubeRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest,
   inputSummary: string,
 ): SavedWorkflowRun {
   const createdAt = new Date().toISOString();
@@ -5363,7 +5823,10 @@ function isSavedWorkflowRun(value: unknown): value is SavedWorkflowRun {
     typeof value.updatedAt === "string" &&
     isRunStatus(value.status) &&
     typeof value.inputSummary === "string" &&
-    (isYoutubeRunRequest(value.request) || isYoutubeCollectionRunRequest(value.request)) &&
+    (isYoutubeRunRequest(value.request) ||
+      isYoutubeCollectionRunRequest(value.request) ||
+      isSongAnalysisRunRequest(value.request) ||
+      isSubtitleGenerationRunRequest(value.request)) &&
     backendRunIdValid &&
     reportPathValid &&
     messageValid
@@ -5591,6 +6054,45 @@ function isYoutubeCollectionRunRequest(value: unknown): value is YoutubeCollecti
     isRecord(value.analysis.transcription) &&
     typeof value.analysis.transcription.enabled === "boolean" &&
     isRecord(value.analysis.models)
+  );
+}
+
+function isSongAnalysisRunRequest(value: unknown): value is SongAnalysisRunRequest {
+  if (!isRecord(value) || !isRecord(value.source) || !isRecord(value.catalog) || !isRecord(value.identification) || !isRecord(value.transcription) || !isRecord(value.music)) {
+    return false;
+  }
+  const sourceValid =
+    (value.source.kind === "youtube_url" && typeof value.source.url === "string") ||
+    (value.source.kind === "local_file" && typeof value.source.path === "string");
+  return (
+    sourceValid &&
+    (value.work_dir === undefined || value.work_dir === null || typeof value.work_dir === "string") &&
+    (value.catalog.db_path === undefined || value.catalog.db_path === null || typeof value.catalog.db_path === "string") &&
+    typeof value.identification.enabled === "boolean" &&
+    typeof value.identification.min_score === "number" &&
+    typeof value.identification.ambiguous_margin === "number" &&
+    typeof value.identification.max_candidates === "number" &&
+    typeof value.transcription.enabled === "boolean" &&
+    typeof value.music.enabled === "boolean" &&
+    typeof value.music.window_seconds === "number" &&
+    typeof value.music.hop_seconds === "number" &&
+    typeof value.music.min_bpm === "number" &&
+    typeof value.music.max_bpm === "number"
+  );
+}
+
+function isSubtitleGenerationRunRequest(value: unknown): value is SubtitleGenerationRunRequest {
+  if (!isRecord(value) || !isRecord(value.source) || !isRecord(value.transcription)) {
+    return false;
+  }
+  const sourceValid =
+    (value.source.kind === "youtube_url" && typeof value.source.url === "string") ||
+    (value.source.kind === "local_file" && typeof value.source.path === "string");
+  return (
+    sourceValid &&
+    (value.work_dir === undefined || value.work_dir === null || typeof value.work_dir === "string") &&
+    typeof value.transcription.enabled === "boolean" &&
+    typeof value.overwrite === "boolean"
   );
 }
 
@@ -6594,6 +7096,7 @@ function effectiveSourceMode(form: UseCaseForm, inputModel?: WorkflowRunInputMod
 function UseCaseControls({
   form,
   inputModel,
+  selectedUseCase,
   onChange,
   onFocusWorkflowInput,
   onRun,
@@ -6603,6 +7106,7 @@ function UseCaseControls({
 }: {
   form: UseCaseForm;
   inputModel: WorkflowRunInputModel;
+  selectedUseCase: UseCaseId;
   onChange: (form: UseCaseForm) => void;
   onFocusWorkflowInput: (input: WorkflowRunInput) => void;
   onRun: () => void;
@@ -6615,12 +7119,19 @@ function UseCaseControls({
   const setWorkflowInput = (key: string, value: string) =>
     onChange({ ...form, workflowInputs: { ...form.workflowInputs, [key]: value } });
   const sourceModes =
-    form.sourceMode === "collection"
+    selectedUseCase === "song-analysis" || selectedUseCase === "subtitle-generation"
+      ? (["url", "file"] as SourceMode[])
+      : form.sourceMode === "collection"
       ? (["collection"] as SourceMode[])
       : inputModel.sourceModes.length > 0
         ? inputModel.sourceModes
         : (["url", "file"] as SourceMode[]);
-  const selectedSourceMode = form.sourceMode === "collection" ? "collection" : effectiveSourceMode(form, inputModel);
+  const selectedSourceMode =
+    selectedUseCase === "song-analysis" || selectedUseCase === "subtitle-generation"
+      ? form.sourceMode === "file"
+        ? "file"
+        : "url"
+      : form.sourceMode === "collection" ? "collection" : effectiveSourceMode(form, inputModel);
   const showSourceSelector = sourceModes.length > 1;
   const urlInput = workflowRunInputForType(inputModel, "youtube_url");
   const collectionInput = workflowRunInputForType(inputModel, "youtube_collection_url");
@@ -6778,6 +7289,36 @@ function UseCaseControls({
               />
             </Field>
 
+            {selectedUseCase === "subtitle-generation" ? (
+              <>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label={workflowInputFieldLabel("Transcription engine", runConfigInput)}>
+                    <TranscriptionEngineSelect
+                      value={form.transcriptionEngine}
+                      onChange={(value) => set("transcriptionEngine", value)}
+                    />
+                  </Field>
+                  <Field label="Transcriber command">
+                    <input
+                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                      value={form.transcriptionCommand}
+                      placeholder={defaultTranscriptionCommand(form.transcriptionEngine)}
+                      onChange={(event) => set("transcriptionCommand", event.target.value)}
+                    />
+                  </Field>
+                </div>
+                <label className="flex items-center gap-3 rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-800">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-zinc-300 text-zinc-950 focus:ring-zinc-950"
+                    checked
+                    readOnly
+                  />
+                  <span>Write SRT next to video file</span>
+                </label>
+              </>
+            ) : selectedUseCase !== "song-analysis" ? (
+              <>
             <div className="grid gap-3 sm:grid-cols-2">
               <Field
                 label={workflowInputFieldLabel("Scene threshold", runConfigInput)}
@@ -6847,6 +7388,26 @@ function UseCaseControls({
               <span>Skip transcription</span>
             </label>
 
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field
+                label={workflowInputFieldLabel("Transcription engine", runConfigInput)}
+                action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
+              >
+                <TranscriptionEngineSelect
+                  value={form.transcriptionEngine}
+                  onChange={(value) => set("transcriptionEngine", value)}
+                />
+              </Field>
+              <Field label={workflowInputFieldLabel("Transcriber command", runConfigInput)}>
+                <input
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={form.transcriptionCommand}
+                  placeholder={defaultTranscriptionCommand(form.transcriptionEngine)}
+                  onChange={(event) => set("transcriptionCommand", event.target.value)}
+                />
+              </Field>
+            </div>
+
             <Field
               label={workflowInputFieldLabel("Object command", runConfigInput)}
               action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
@@ -6880,6 +7441,130 @@ function UseCaseControls({
                 onChange={(event) => set("textCommand", event.target.value)}
               />
             </Field>
+              </>
+            ) : (
+              <>
+                <Field label={workflowInputFieldLabel("Catalog DB", runConfigInput)}>
+                  <input
+                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                    value={form.songCatalogPath}
+                    placeholder="default app catalog"
+                    onChange={(event) => set("songCatalogPath", event.target.value)}
+                  />
+                </Field>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <Field label="Min score">
+                    <input
+                      type="number"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                      value={form.songMinScore}
+                      onChange={(event) => set("songMinScore", Number(event.target.value))}
+                    />
+                  </Field>
+                  <Field label="Ambiguous margin">
+                    <input
+                      type="number"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                      value={form.songAmbiguousMargin}
+                      onChange={(event) => set("songAmbiguousMargin", Number(event.target.value))}
+                    />
+                  </Field>
+                  <Field label="Candidates">
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                      value={form.songMaxCandidates}
+                      onChange={(event) => set("songMaxCandidates", Number(event.target.value))}
+                    />
+                  </Field>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Window seconds">
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                      value={form.songWindowSeconds}
+                      onChange={(event) => set("songWindowSeconds", Number(event.target.value))}
+                    />
+                  </Field>
+                  <Field label="Hop seconds">
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                      value={form.songHopSeconds}
+                      onChange={(event) => set("songHopSeconds", Number(event.target.value))}
+                    />
+                  </Field>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Minimum BPM">
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                      value={form.songMinBpm}
+                      onChange={(event) => set("songMinBpm", Number(event.target.value))}
+                    />
+                  </Field>
+                  <Field label="Maximum BPM">
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                      value={form.songMaxBpm}
+                      onChange={(event) => set("songMaxBpm", Number(event.target.value))}
+                    />
+                  </Field>
+                </div>
+                <label className="flex items-center gap-3 rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-800">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-zinc-300 text-zinc-950 focus:ring-zinc-950"
+                    checked={form.skipTranscription}
+                    onChange={(event) => set("skipTranscription", event.target.checked)}
+                  />
+                  <span>Skip lyrics transcription</span>
+                </label>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label={workflowInputFieldLabel("Lyrics engine", runConfigInput)}>
+                    <TranscriptionEngineSelect
+                      value={form.transcriptionEngine}
+                      onChange={(value) => set("transcriptionEngine", value)}
+                    />
+                  </Field>
+                  <Field label="Lyrics transcriber command">
+                    <input
+                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                      value={form.transcriptionCommand}
+                      placeholder={defaultTranscriptionCommand(form.transcriptionEngine)}
+                      onChange={(event) => set("transcriptionCommand", event.target.value)}
+                    />
+                  </Field>
+                </div>
+                <Field label="Music analyzer command">
+                  <input
+                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                    value={form.musicCommand}
+                    placeholder="optional"
+                    onChange={(event) => set("musicCommand", event.target.value)}
+                  />
+                </Field>
+              </>
+            )}
 
             <Field
               label={workflowInputFieldLabel("Output JSON", runConfigInput)}
@@ -6912,7 +7597,7 @@ function UseCaseControls({
 
         <div className="rounded-lg bg-zinc-950 p-3">
           <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-zinc-100">
-            {buildCommand(form, inputModel).map(shellQuote).join(" ")}
+            {buildCommand(form, inputModel, selectedUseCase).map(shellQuote).join(" ")}
           </pre>
         </div>
 
@@ -6985,6 +7670,26 @@ function RunInputFocusButton({
     >
       <WorkflowIcon className="h-3.5 w-3.5" />
     </button>
+  );
+}
+
+function TranscriptionEngineSelect({
+  value,
+  onChange,
+}: {
+  value: Exclude<TranscriptionEngine, "fast_whisper">;
+  onChange: (value: Exclude<TranscriptionEngine, "fast_whisper">) => void;
+}) {
+  return (
+    <select
+      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+      value={value}
+      onChange={(event) => onChange(event.target.value as Exclude<TranscriptionEngine, "fast_whisper">)}
+    >
+      <option value="whisper">Whisper</option>
+      <option value="faster_whisper">Faster Whisper</option>
+      <option value="whisperx">WhisperX</option>
+    </select>
   );
 }
 
@@ -7066,8 +7771,21 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function buildCommand(form: UseCaseForm, inputModel?: WorkflowRunInputModel): string[] {
-  if (form.sourceMode === "collection") {
+function durationLabel(value?: number | null): string {
+  if (value == null || !Number.isFinite(value)) {
+    return "n/a";
+  }
+  const minutes = Math.floor(value / 60);
+  const seconds = Math.max(0, Math.round(value - minutes * 60));
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function scoreLabel(value?: number | null): string {
+  return value == null || !Number.isFinite(value) ? "n/a" : `${Math.round(value * 100)}%`;
+}
+
+function buildCommand(form: UseCaseForm, inputModel?: WorkflowRunInputModel, useCase: UseCaseId = "youtube-video"): string[] {
+  if (useCase === "youtube-collection" || form.sourceMode === "collection") {
     const command = [
       "studio-api",
       "POST",
@@ -7097,6 +7815,51 @@ function buildCommand(form: UseCaseForm, inputModel?: WorkflowRunInputModel): st
     command.push("--already-downloaded", form.alreadyDownloaded);
     return command;
   }
+  if (useCase === "song-analysis") {
+    const sourceMode = form.sourceMode === "file" ? "file" : "url";
+    const command = [
+      "studio-api",
+      "POST",
+      "/api/workflows/song-analysis/runs",
+      "--work-dir",
+      form.workDir,
+      "--catalog",
+      form.songCatalogPath || "default",
+      "--window-seconds",
+      String(form.songWindowSeconds),
+      "--hop-seconds",
+      String(form.songHopSeconds),
+    ];
+    command.push(sourceMode === "url" ? "--url" : "--input", sourceMode === "url" ? form.url : form.input);
+    if (form.skipTranscription) {
+      command.push("--skip-transcription");
+    }
+    command.push("--transcription-engine", form.transcriptionEngine);
+    if (form.transcriptionCommand.trim()) {
+      command.push("--transcriber-command", form.transcriptionCommand.trim());
+    }
+    if (form.musicCommand.trim()) {
+      command.push("--music-command", form.musicCommand.trim());
+    }
+    return command;
+  }
+  if (useCase === "subtitle-generation") {
+    const sourceMode = effectiveSourceMode(form, inputModel);
+    const command = [
+      "studio-api",
+      "POST",
+      "/api/workflows/subtitle-generation/runs",
+      "--work-dir",
+      form.workDir,
+    ];
+    command.push(sourceMode === "url" ? "--url" : "--input", sourceMode === "url" ? form.url : form.input);
+    command.push("--transcription-engine", form.transcriptionEngine);
+    if (form.transcriptionCommand.trim()) {
+      command.push("--transcriber-command", form.transcriptionCommand.trim());
+    }
+    command.push("--write-to-video-folder");
+    return command;
+  }
   const sourceMode = effectiveSourceMode(form, inputModel);
   const command = [
     "studio-api",
@@ -7122,6 +7885,10 @@ function buildCommand(form: UseCaseForm, inputModel?: WorkflowRunInputModel): st
   }
   if (form.skipTranscription) {
     command.push("--skip-transcription");
+  }
+  command.push("--transcription-engine", form.transcriptionEngine);
+  if (form.transcriptionCommand.trim()) {
+    command.push("--transcriber-command", form.transcriptionCommand.trim());
   }
   if (form.objectCommand.trim()) {
     command.push("--object-command", form.objectCommand.trim());
@@ -7150,7 +7917,8 @@ function buildYoutubeRunRequest(form: UseCaseForm, inputModel?: WorkflowRunInput
     visual_sample_every: form.visualSampleEvery,
     transcription: {
       enabled: !form.skipTranscription,
-      command: null,
+      engine: form.transcriptionEngine,
+      command: commandConfig(form.transcriptionCommand),
     },
     models: {
       object: commandConfig(form.objectCommand),
@@ -7184,7 +7952,8 @@ function buildYoutubeCollectionRunRequest(form: UseCaseForm): YoutubeCollectionR
       visual_sample_every: form.visualSampleEvery,
       transcription: {
         enabled: !form.skipTranscription,
-        command: null,
+        engine: form.transcriptionEngine,
+        command: commandConfig(form.transcriptionCommand),
       },
       models: {
         object: commandConfig(form.objectCommand),
@@ -7195,6 +7964,56 @@ function buildYoutubeCollectionRunRequest(form: UseCaseForm): YoutubeCollectionR
     delete_filtered_downloads: false,
     work_dir: form.workDir.trim() || null,
     max_items: optionalInteger(form.collectionMaxItems),
+  };
+}
+
+function buildSongAnalysisRunRequest(form: UseCaseForm, inputModel?: WorkflowRunInputModel): SongAnalysisRunRequest {
+  const sourceMode = form.sourceMode === "file" ? "file" : effectiveSourceMode(form, inputModel) === "file" ? "file" : "url";
+  return {
+    source:
+      sourceMode === "url"
+        ? { kind: "youtube_url", url: form.url.trim() }
+        : { kind: "local_file", path: form.input.trim() },
+    work_dir: form.workDir.trim() || null,
+    catalog: {
+      db_path: form.songCatalogPath.trim() || null,
+    },
+    identification: {
+      enabled: true,
+      min_score: form.songMinScore,
+      ambiguous_margin: form.songAmbiguousMargin,
+      max_candidates: form.songMaxCandidates,
+    },
+    transcription: {
+      enabled: !form.skipTranscription,
+      engine: form.transcriptionEngine,
+      command: commandConfig(form.transcriptionCommand),
+    },
+    music: {
+      enabled: true,
+      command: commandConfig(form.musicCommand),
+      window_seconds: form.songWindowSeconds,
+      hop_seconds: form.songHopSeconds,
+      min_bpm: form.songMinBpm,
+      max_bpm: form.songMaxBpm,
+    },
+  };
+}
+
+function buildSubtitleGenerationRunRequest(form: UseCaseForm, inputModel?: WorkflowRunInputModel): SubtitleGenerationRunRequest {
+  const sourceMode = effectiveSourceMode(form, inputModel);
+  return {
+    source:
+      sourceMode === "url"
+        ? { kind: "youtube_url", url: form.url.trim() }
+        : { kind: "local_file", path: form.input.trim() },
+    work_dir: form.workDir.trim() || null,
+    transcription: {
+      enabled: true,
+      engine: form.transcriptionEngine,
+      command: commandConfig(form.transcriptionCommand),
+    },
+    overwrite: true,
   };
 }
 
@@ -7210,6 +8029,8 @@ function formFromYoutubeRunRequest(request: YoutubeRunRequest): UseCaseForm {
     maxFrames: request.max_frames ? String(request.max_frames) : "",
     visualSampleEvery: request.visual_sample_every,
     skipTranscription: !request.transcription.enabled,
+    transcriptionEngine: normalizedTranscriptionEngine(request.transcription.engine),
+    transcriptionCommand: commandConfigToInput(request.transcription.command),
     objectCommand: commandConfigToInput(request.models.object),
     ocrCommand: commandConfigToInput(request.models.ocr),
     textCommand: commandConfigToInput(request.models.text),
@@ -7227,6 +8048,8 @@ function formFromYoutubeCollectionRunRequest(request: YoutubeCollectionRunReques
     maxFrames: request.analysis.max_frames ? String(request.analysis.max_frames) : "",
     visualSampleEvery: request.analysis.visual_sample_every,
     skipTranscription: !request.analysis.transcription.enabled,
+    transcriptionEngine: normalizedTranscriptionEngine(request.analysis.transcription.engine),
+    transcriptionCommand: commandConfigToInput(request.analysis.transcription.command),
     objectCommand: commandConfigToInput(request.analysis.models.object),
     ocrCommand: commandConfigToInput(request.analysis.models.ocr),
     textCommand: commandConfigToInput(request.analysis.models.text),
@@ -7238,6 +8061,45 @@ function formFromYoutubeCollectionRunRequest(request: YoutubeCollectionRunReques
     localDurationMax: request.local_file_filter.duration_seconds_max ? String(request.local_file_filter.duration_seconds_max) : "",
     localExtensions: request.local_file_filter.extension_allowlist?.join(",") ?? initialForm.localExtensions,
     alreadyDownloaded: request.metadata_filter.already_downloaded ?? "reuse",
+  };
+}
+
+function formFromSongAnalysisRunRequest(request: SongAnalysisRunRequest): UseCaseForm {
+  return {
+    ...initialForm,
+    sourceMode: request.source.kind === "youtube_url" ? "url" : "file",
+    url: request.source.kind === "youtube_url" ? request.source.url : "",
+    input: request.source.kind === "local_file" ? request.source.path : initialForm.input,
+    workDir: request.work_dir ?? "use-case-output/song-analysis",
+    output: request.work_dir ? `${request.work_dir.replace(/\/$/, "")}/song-analysis.json` : "use-case-output/song-analysis/song-analysis.json",
+    songCatalogPath: request.catalog.db_path ?? "",
+    songMinScore: request.identification.min_score,
+    songAmbiguousMargin: request.identification.ambiguous_margin,
+    songMaxCandidates: request.identification.max_candidates,
+    skipTranscription: !request.transcription.enabled,
+    transcriptionEngine: normalizedTranscriptionEngine(request.transcription.engine),
+    transcriptionCommand: commandConfigToInput(request.transcription.command),
+    songWindowSeconds: request.music.window_seconds,
+    songHopSeconds: request.music.hop_seconds,
+    songMinBpm: request.music.min_bpm,
+    songMaxBpm: request.music.max_bpm,
+    musicCommand: commandConfigToInput(request.music.command),
+  };
+}
+
+function formFromSubtitleGenerationRunRequest(request: SubtitleGenerationRunRequest): UseCaseForm {
+  return {
+    ...initialForm,
+    sourceMode: request.source.kind === "youtube_url" ? "url" : "file",
+    url: request.source.kind === "youtube_url" ? request.source.url : "",
+    input: request.source.kind === "local_file" ? request.source.path : initialForm.input,
+    workDir: request.work_dir ?? "use-case-output/subtitle-generation",
+    output: request.work_dir
+      ? `${request.work_dir.replace(/\/$/, "")}/subtitle-generation.json`
+      : "use-case-output/subtitle-generation/subtitle-generation.json",
+    skipTranscription: false,
+    transcriptionEngine: normalizedTranscriptionEngine(request.transcription.engine),
+    transcriptionCommand: commandConfigToInput(request.transcription.command),
   };
 }
 
@@ -7256,11 +8118,26 @@ function commandConfig(command: string) {
   return trimmed ? { command: trimmed, args: [] } : null;
 }
 
-function commandConfigToInput(config: YoutubeRunRequest["models"]["object"]): string {
+function commandConfigToInput(config: { command: string; args: string[] } | null | undefined): string {
   if (!config) {
     return "";
   }
   return [config.command, ...config.args].filter(Boolean).join(" ");
+}
+
+function normalizedTranscriptionEngine(value: TranscriptionEngine | undefined): Exclude<TranscriptionEngine, "fast_whisper"> {
+  return value === "whisperx" ? "whisperx" : value === "faster_whisper" || value === "fast_whisper" ? "faster_whisper" : "whisper";
+}
+
+function defaultTranscriptionCommand(engine: Exclude<TranscriptionEngine, "fast_whisper">): string {
+  switch (engine) {
+    case "faster_whisper":
+      return "whisper-ctranslate2";
+    case "whisperx":
+      return "whisperx";
+    case "whisper":
+      return "whisper";
+  }
 }
 
 function youtubeCollectionSourceKind(url: string): "playlist_url" | "channel_url" | "youtube_url" {
@@ -7317,9 +8194,15 @@ function workflowRunToCliRun(run: SavedWorkflowRun): CliRun {
   };
 }
 
-function reportPathForRequest(request: YoutubeRunRequest | YoutubeCollectionRunRequest): string {
+function reportPathForRequest(request: YoutubeRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest): string {
   if (isYoutubeCollectionRunRequest(request)) {
     return request.work_dir ? `${request.work_dir.replace(/\/$/, "")}/collection-analysis.json` : "collection-analysis.json";
+  }
+  if (isSubtitleGenerationRunRequest(request)) {
+    return request.work_dir ? `${request.work_dir.replace(/\/$/, "")}/subtitle-generation.json` : "subtitle-generation.json";
+  }
+  if (isSongAnalysisRunRequest(request)) {
+    return request.work_dir ? `${request.work_dir.replace(/\/$/, "")}/song-analysis.json` : "song-analysis.json";
   }
   return request.work_dir ? `${request.work_dir.replace(/\/$/, "")}/analysis.json` : initialForm.output;
 }
@@ -7334,8 +8217,10 @@ function downloadReport(report: StudioReport) {
   URL.revokeObjectURL(url);
 }
 
-function getRunValidation(form: UseCaseForm, inputModel?: WorkflowRunInputModel): string | null {
-  if (form.sourceMode === "collection") {
+function getRunValidation(form: UseCaseForm, inputModel?: WorkflowRunInputModel, useCase: UseCaseId = "youtube-video"): string | null {
+  const isSong = useCase === "song-analysis";
+  const isSubtitle = useCase === "subtitle-generation";
+  if (useCase === "youtube-collection" && form.sourceMode === "collection") {
     const url = form.url.trim();
     if (!url) {
       return "Enter a YouTube playlist or channel URL.";
@@ -7365,7 +8250,7 @@ function getRunValidation(form: UseCaseForm, inputModel?: WorkflowRunInputModel)
     }
     return null;
   }
-  const sourceMode = effectiveSourceMode(form, inputModel);
+  const sourceMode = isSong || isSubtitle ? (form.sourceMode === "file" ? "file" : "url") : effectiveSourceMode(form, inputModel);
   if (sourceMode === "url") {
     const url = form.url.trim();
     if (!url) {
@@ -7393,6 +8278,30 @@ function getRunValidation(form: UseCaseForm, inputModel?: WorkflowRunInputModel)
   if (!form.workDir.trim()) {
     return "Enter a work directory.";
   }
+  if (isSong) {
+    if (!Number.isFinite(form.songMinScore) || form.songMinScore < 0 || form.songMinScore > 1) {
+      return "Song match score must be between 0 and 1.";
+    }
+    if (!Number.isFinite(form.songAmbiguousMargin) || form.songAmbiguousMargin < 0) {
+      return "Song ambiguous margin must be non-negative.";
+    }
+    if (!Number.isFinite(form.songMaxCandidates) || form.songMaxCandidates < 1) {
+      return "Song candidates must be at least 1.";
+    }
+    if (!Number.isFinite(form.songWindowSeconds) || form.songWindowSeconds <= 0) {
+      return "Window seconds must be positive.";
+    }
+    if (!Number.isFinite(form.songHopSeconds) || form.songHopSeconds <= 0) {
+      return "Hop seconds must be positive.";
+    }
+    if (!Number.isFinite(form.songMinBpm) || !Number.isFinite(form.songMaxBpm) || form.songMinBpm >= form.songMaxBpm) {
+      return "Minimum BPM must be lower than maximum BPM.";
+    }
+    return null;
+  }
+  if (isSubtitle) {
+    return null;
+  }
   if (!Number.isFinite(form.sceneThreshold) || form.sceneThreshold < 0) {
     return "Scene threshold must be zero or greater.";
   }
@@ -7410,6 +8319,32 @@ function getRunValidation(form: UseCaseForm, inputModel?: WorkflowRunInputModel)
 
 function currentUseCase(id: UseCaseId) {
   return useCases.find((useCase) => useCase.id === id) ?? useCases[0];
+}
+
+function defaultWorkDirForUseCase(id: UseCaseId): string {
+  switch (id) {
+    case "youtube-collection":
+      return "use-case-output/youtube-collection";
+    case "song-analysis":
+      return "use-case-output/song-analysis";
+    case "subtitle-generation":
+      return "use-case-output/subtitle-generation";
+    case "youtube-video":
+      return "use-case-output/youtube-video";
+  }
+}
+
+function defaultOutputForUseCase(id: UseCaseId): string {
+  switch (id) {
+    case "youtube-collection":
+      return "use-case-output/youtube-collection/collection-analysis.json";
+    case "song-analysis":
+      return "use-case-output/song-analysis/song-analysis.json";
+    case "subtitle-generation":
+      return "use-case-output/subtitle-generation/subtitle-generation.json";
+    case "youtube-video":
+      return "use-case-output/youtube-video/analysis.json";
+  }
 }
 
 function appPageFromPath(pathname: string): AppPage {

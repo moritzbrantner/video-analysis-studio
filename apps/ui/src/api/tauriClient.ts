@@ -5,8 +5,15 @@ import type {
   WorkflowClient,
   YoutubeRunRequest,
 } from "./client";
-import { isYoutubeCollectionReport, isYoutubeVideoReport } from "./client";
-import type { StudioReport, YoutubeCollectionManifest } from "../types";
+import { isSongAnalysisReport, isSubtitleGenerationReport, isYoutubeCollectionReport, isYoutubeVideoReport } from "./client";
+import type {
+  SongAnalysisRunRequest,
+  SongCatalogImportRequest,
+  SongCatalogImportResponse,
+  StudioReport,
+  SubtitleGenerationRunRequest,
+  YoutubeCollectionManifest,
+} from "../types";
 
 declare global {
   interface Window {
@@ -28,6 +35,12 @@ export function createTauriClient(): WorkflowClient {
       invoke<RunRecord>("start_youtube_video_run", { request }),
     startYoutubeCollectionRun: async (request) =>
       invoke<RunRecord>("start_youtube_collection_run", { request }),
+    startSongAnalysisRun: async (request: SongAnalysisRunRequest) =>
+      invoke<RunRecord>("start_song_analysis_run", { request }),
+    startSubtitleGenerationRun: async (request: SubtitleGenerationRunRequest) =>
+      invoke<RunRecord>("start_subtitle_generation_run", { request }),
+    importSongCatalogItems: async (request: SongCatalogImportRequest) =>
+      invoke<SongCatalogImportResponse>("import_song_catalog_items", { request }),
     getRun: async (runId) => invoke<RunRecord>("get_run", { runId }),
     getReport: async (runId) => invoke<StudioReport>("get_report", { runId }),
     getYoutubeVideoReport: async (runId) => {
@@ -41,6 +54,20 @@ export function createTauriClient(): WorkflowClient {
       const report = await invoke<StudioReport>("get_report", { runId });
       if (!isYoutubeCollectionReport(report)) {
         throw new Error("Run report is not a YouTube collection report");
+      }
+      return report;
+    },
+    getSongAnalysisReport: async (runId) => {
+      const report = await invoke<StudioReport>("get_report", { runId });
+      if (!isSongAnalysisReport(report)) {
+        throw new Error("Run report is not a song analysis report");
+      }
+      return report;
+    },
+    getSubtitleGenerationReport: async (runId) => {
+      const report = await invoke<StudioReport>("get_report", { runId });
+      if (!isSubtitleGenerationReport(report)) {
+        throw new Error("Run report is not a subtitle generation report");
       }
       return report;
     },

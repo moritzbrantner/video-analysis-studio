@@ -5,8 +5,21 @@ import type {
   WorkflowClient,
   YoutubeRunRequest,
 } from "./client";
-import type { StudioReport, YoutubeCollectionManifest } from "../types";
-import { isYoutubeCollectionReport as collectionReport, isYoutubeVideoReport as videoReport } from "./client";
+import type {
+  SongAnalysisRunRequest,
+  SongCatalogImportRequest,
+  SongCatalogImportResponse,
+  StudioReport,
+  SubtitleGenerationReport,
+  SubtitleGenerationRunRequest,
+  YoutubeCollectionManifest,
+} from "../types";
+import {
+  isSubtitleGenerationReport as subtitleReport,
+  isSongAnalysisReport as songReport,
+  isYoutubeCollectionReport as collectionReport,
+  isYoutubeVideoReport as videoReport,
+} from "./client";
 
 const defaultBaseUrl = "http://127.0.0.1:5179";
 
@@ -29,6 +42,21 @@ export function createHttpClient(baseUrl = import.meta.env.VITE_STUDIO_API_URL ?
         method: "POST",
         body: JSON.stringify(payload),
       }),
+    startSongAnalysisRun: (payload: SongAnalysisRunRequest) =>
+      request<RunRecord>(baseUrl, "/api/workflows/song-analysis/runs", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    startSubtitleGenerationRun: (payload: SubtitleGenerationRunRequest) =>
+      request<RunRecord>(baseUrl, "/api/workflows/subtitle-generation/runs", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    importSongCatalogItems: (payload: SongCatalogImportRequest) =>
+      request<SongCatalogImportResponse>(baseUrl, "/api/song-catalog/imports", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
     getRun: (runId) => request<RunRecord>(baseUrl, `/api/runs/${runId}`),
     getReport: (runId) => request<StudioReport>(baseUrl, `/api/runs/${runId}/report`),
     getYoutubeVideoReport: async (runId) => {
@@ -42,6 +70,20 @@ export function createHttpClient(baseUrl = import.meta.env.VITE_STUDIO_API_URL ?
       const report = await request<StudioReport>(baseUrl, `/api/runs/${runId}/report`);
       if (!collectionReport(report)) {
         throw new Error("Run report is not a YouTube collection report");
+      }
+      return report;
+    },
+    getSongAnalysisReport: async (runId) => {
+      const report = await request<StudioReport>(baseUrl, `/api/runs/${runId}/report`);
+      if (!songReport(report)) {
+        throw new Error("Run report is not a song analysis report");
+      }
+      return report;
+    },
+    getSubtitleGenerationReport: async (runId): Promise<SubtitleGenerationReport> => {
+      const report = await request<StudioReport>(baseUrl, `/api/runs/${runId}/report`);
+      if (!subtitleReport(report)) {
+        throw new Error("Run report is not a subtitle generation report");
       }
       return report;
     },

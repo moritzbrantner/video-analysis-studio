@@ -11,8 +11,8 @@ use futures::Stream;
 use serde::Serialize;
 use studio_core::{
     check_system_dependencies, discover_youtube_collection_manifest, RunEvent, RunId, RunManager,
-    StudioError, WorkflowKind, YoutubeCollectionManifestRequest, YoutubeCollectionRunRequest,
-    YoutubeRunRequest,
+    SongAnalysisRunRequest, SongCatalogImportRequest, StudioError, SubtitleGenerationRunRequest,
+    WorkflowKind, YoutubeCollectionManifestRequest, YoutubeCollectionRunRequest, YoutubeRunRequest,
 };
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
@@ -42,6 +42,15 @@ pub fn build_app(manager: RunManager) -> Router {
             "/api/workflows/youtube-collection/runs",
             post(start_youtube_collection_run),
         )
+        .route(
+            "/api/workflows/song-analysis/runs",
+            post(start_song_analysis_run),
+        )
+        .route(
+            "/api/workflows/subtitle-generation/runs",
+            post(start_subtitle_generation_run),
+        )
+        .route("/api/song-catalog/imports", post(import_song_catalog_items))
         .route("/api/runs/{run_id}", get(get_run))
         .route("/api/runs/{run_id}/events", get(get_events))
         .route("/api/runs/{run_id}/report", get(get_report))
@@ -76,6 +85,16 @@ async fn workflows() -> Json<Vec<WorkflowDescriptor>> {
             name: "YouTube Collection",
             kind: WorkflowKind::YoutubeCollection,
         },
+        WorkflowDescriptor {
+            id: "song-analysis",
+            name: "Song Analysis",
+            kind: WorkflowKind::SongAnalysis,
+        },
+        WorkflowDescriptor {
+            id: "subtitle-generation",
+            name: "Subtitle Generation",
+            kind: WorkflowKind::SubtitleGeneration,
+        },
     ])
 }
 
@@ -97,6 +116,29 @@ async fn start_youtube_collection_run(
     Json(request): Json<YoutubeCollectionRunRequest>,
 ) -> Result<Json<studio_core::RunRecord>, ApiError> {
     Ok(Json(state.manager.start_youtube_collection(request).await?))
+}
+
+async fn start_song_analysis_run(
+    State(state): State<AppState>,
+    Json(request): Json<SongAnalysisRunRequest>,
+) -> Result<Json<studio_core::RunRecord>, ApiError> {
+    Ok(Json(state.manager.start_song_analysis(request).await?))
+}
+
+async fn start_subtitle_generation_run(
+    State(state): State<AppState>,
+    Json(request): Json<SubtitleGenerationRunRequest>,
+) -> Result<Json<studio_core::RunRecord>, ApiError> {
+    Ok(Json(
+        state.manager.start_subtitle_generation(request).await?,
+    ))
+}
+
+async fn import_song_catalog_items(
+    State(state): State<AppState>,
+    Json(request): Json<SongCatalogImportRequest>,
+) -> Result<Json<studio_core::SongCatalogImportResponse>, ApiError> {
+    Ok(Json(state.manager.import_song_catalog_items(request)?))
 }
 
 async fn get_run(
@@ -175,9 +217,10 @@ impl IntoResponse for ApiError {
             StudioError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
             StudioError::RunNotFound(_) | StudioError::ReportNotFound(_) => StatusCode::NOT_FOUND,
             StudioError::MissingDependency(_) => StatusCode::FAILED_DEPENDENCY,
-            StudioError::Workflow(_) | StudioError::Io(_) | StudioError::Json(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            StudioError::Workflow(_)
+            | StudioError::Io(_)
+            | StudioError::Json(_)
+            | StudioError::Sqlite(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (
             status,
@@ -287,6 +330,132 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn workflows_include_song_analysis() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = build_app(RunManager::new(dir.path().to_path_buf()));
+        let response = app
+            .oneshot(Request::get("/api/workflows").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(value
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == "song-analysis" && item["kind"] == "song_analysis"));
+    }
+
+    #[tokio::test]
+    async fn workflows_include_subtitle_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = build_app(RunManager::new(dir.path().to_path_buf()));
+        let response = app
+            .oneshot(Request::get("/api/workflows").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(value.as_array().unwrap().iter().any(|item| {
+            item["id"] == "subtitle-generation" && item["kind"] == "subtitle_generation"
+        }));
+    }
+
+    #[tokio::test]
+    async fn invalid_subtitle_generation_request_returns_400() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = build_app(RunManager::new(dir.path().to_path_buf()));
+        let response = app
+            .oneshot(
+                Request::post("/api/workflows/subtitle-generation/runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "source": { "kind": "local_file", "path": "" },
+                            "transcription": { "enabled": true },
+                            "overwrite": true
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn invalid_song_analysis_request_returns_400() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = build_app(RunManager::new(dir.path().to_path_buf()));
+        let response = app
+            .oneshot(
+                Request::post("/api/workflows/song-analysis/runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "source": { "kind": "local_file", "path": "" },
+                            "catalog": {},
+                            "identification": { "enabled": true, "min_score": 0.82, "ambiguous_margin": 0.03, "max_candidates": 5 },
+                            "transcription": { "enabled": true },
+                            "music": { "enabled": true, "window_seconds": 30, "hop_seconds": 15, "min_bpm": 60, "max_bpm": 200 }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn song_run_creation_returns_run_id_and_missing_report_404() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = build_app(RunManager::new(dir.path().to_path_buf()));
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/workflows/song-analysis/runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "source": { "kind": "local_file", "path": dir.path().join("missing.mp3") },
+                            "work_dir": dir.path().join("song-work"),
+                            "catalog": {},
+                            "identification": { "enabled": true, "min_score": 0.82, "ambiguous_margin": 0.03, "max_candidates": 5 },
+                            "transcription": { "enabled": true },
+                            "music": { "enabled": true, "window_seconds": 30, "hop_seconds": 15, "min_bpm": 60, "max_bpm": 200 }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let record: studio_core::RunRecord = serde_json::from_slice(&bytes).unwrap();
+        let report_response = app
+            .oneshot(
+                Request::get(format!("/api/runs/{}/report", record.run_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(report_response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

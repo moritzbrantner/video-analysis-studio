@@ -23,7 +23,7 @@ pub struct DependencyStatus {
 pub fn check_system_dependencies(
     optional_commands: &[ExternalCommandConfig],
 ) -> SystemDependencyReport {
-    let mut dependencies = ["ffmpeg", "ffprobe", "yt-dlp"]
+    let mut dependencies = ["ffmpeg", "ffprobe", "yt-dlp", "fpcalc", "python3"]
         .into_iter()
         .map(|name| dependency_status(name, true))
         .collect::<Vec<_>>();

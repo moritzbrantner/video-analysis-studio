@@ -1,7 +1,9 @@
 use studio_core::{
     check_system_dependencies, discover_youtube_collection_manifest, RunEvent, RunId, RunManager,
-    RunRecord, RunStatus, StudioReport, SystemDependencyReport, YoutubeCollectionManifest,
-    YoutubeCollectionManifestRequest, YoutubeCollectionRunRequest, YoutubeRunRequest,
+    RunRecord, RunStatus, SongAnalysisRunRequest, SongCatalogImportRequest,
+    SongCatalogImportResponse, StudioReport, SubtitleGenerationRunRequest, SystemDependencyReport,
+    YoutubeCollectionManifest, YoutubeCollectionManifestRequest, YoutubeCollectionRunRequest,
+    YoutubeRunRequest,
 };
 use tauri::{AppHandle, Emitter, State};
 
@@ -49,6 +51,47 @@ pub async fn start_youtube_collection_run(
         .map_err(error_string)?;
     attach_run_event_forwarder(app, state.manager.clone(), record.run_id).await;
     Ok(record)
+}
+
+#[tauri::command]
+pub async fn start_song_analysis_run(
+    app: AppHandle,
+    state: State<'_, StudioState>,
+    request: SongAnalysisRunRequest,
+) -> Result<RunRecord, String> {
+    let record = state
+        .manager
+        .start_song_analysis(request)
+        .await
+        .map_err(error_string)?;
+    attach_run_event_forwarder(app, state.manager.clone(), record.run_id).await;
+    Ok(record)
+}
+
+#[tauri::command]
+pub async fn start_subtitle_generation_run(
+    app: AppHandle,
+    state: State<'_, StudioState>,
+    request: SubtitleGenerationRunRequest,
+) -> Result<RunRecord, String> {
+    let record = state
+        .manager
+        .start_subtitle_generation(request)
+        .await
+        .map_err(error_string)?;
+    attach_run_event_forwarder(app, state.manager.clone(), record.run_id).await;
+    Ok(record)
+}
+
+#[tauri::command]
+pub async fn import_song_catalog_items(
+    state: State<'_, StudioState>,
+    request: SongCatalogImportRequest,
+) -> Result<SongCatalogImportResponse, String> {
+    state
+        .manager
+        .import_song_catalog_items(request)
+        .map_err(error_string)
 }
 
 #[tauri::command]

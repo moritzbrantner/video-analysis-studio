@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 use video_analysis_core::{
@@ -21,12 +21,13 @@ use video_analysis_models::{
 };
 
 use crate::error::{Result, StudioError};
+use crate::media::transcribe_media;
 use crate::report::{
     AppliedCollectionFilters, AssetReport, AudioReport, CapabilityReport, CollectionAssetReport,
     CollectionItemReport, CollectionItemStatus, CollectionSummary, DataBucketReport, EventReport,
     ObservationReport, RegionReport, SceneReport, SourceReport, StreamBucketReport, TextReport,
-    TranscriptSegmentReport, TranscriptionReport, VideoReport, YoutubeCollectionReport,
-    YoutubeCollectionSourceReport, YoutubeVideoReport,
+    TranscriptionReport, VideoReport, YoutubeCollectionReport, YoutubeCollectionSourceReport,
+    YoutubeVideoReport,
 };
 use crate::system::resolve_command;
 
@@ -51,6 +52,8 @@ pub struct ExternalCommandConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TranscriptionConfig {
     pub enabled: bool,
+    #[serde(default)]
+    pub engine: TranscriptionEngine,
     pub command: Option<ExternalCommandConfig>,
 }
 
@@ -58,8 +61,24 @@ impl Default for TranscriptionConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            engine: TranscriptionEngine::default(),
             command: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptionEngine {
+    Whisper,
+    #[serde(alias = "fast_whisper")]
+    FasterWhisper,
+    WhisperX,
+}
+
+impl Default for TranscriptionEngine {
+    fn default() -> Self {
+        Self::Whisper
     }
 }
 
@@ -163,9 +182,7 @@ pub enum YoutubeCollectionSource {
 impl YoutubeCollectionSource {
     pub fn url(&self) -> &str {
         match self {
-            Self::PlaylistUrl { url } | Self::ChannelUrl { url } | Self::YoutubeUrl { url } => {
-                url
-            }
+            Self::PlaylistUrl { url } | Self::ChannelUrl { url } | Self::YoutubeUrl { url } => url,
         }
     }
 
@@ -679,8 +696,11 @@ pub fn run_youtube_collection_workflow(
             },
             analysis_work_dir,
         );
-        match run_youtube_video_workflow(item_request, item_dir.join("analysis-work"), item_report_path)
-        {
+        match run_youtube_video_workflow(
+            item_request,
+            item_dir.join("analysis-work"),
+            item_report_path,
+        ) {
             Ok(report) => item_reports.push(collection_item_report(
                 item,
                 Some(&local_video_path),
@@ -1107,12 +1127,20 @@ fn metadata_filter_matches(
     filter: &ManifestFilterSpec,
 ) -> bool {
     if let Some(needle) = filter.title_contains.as_deref().map(normalize_text_filter) {
-        let title = item.title.as_deref().map(normalize_text_filter).unwrap_or_default();
+        let title = item
+            .title
+            .as_deref()
+            .map(normalize_text_filter)
+            .unwrap_or_default();
         if !title.contains(&needle) {
             return false;
         }
     }
-    let title = item.title.as_deref().map(normalize_text_filter).unwrap_or_default();
+    let title = item
+        .title
+        .as_deref()
+        .map(normalize_text_filter)
+        .unwrap_or_default();
     for excluded in &filter.title_excludes {
         if !excluded.trim().is_empty() && title.contains(&normalize_text_filter(excluded)) {
             return false;
@@ -1129,12 +1157,20 @@ fn metadata_filter_matches(
         }
     }
     if let Some(min) = filter.duration_seconds_min {
-        if item.duration_seconds.map(|duration| duration < min).unwrap_or(true) {
+        if item
+            .duration_seconds
+            .map(|duration| duration < min)
+            .unwrap_or(true)
+        {
             return false;
         }
     }
     if let Some(max) = filter.duration_seconds_max {
-        if item.duration_seconds.map(|duration| duration > max).unwrap_or(true) {
+        if item
+            .duration_seconds
+            .map(|duration| duration > max)
+            .unwrap_or(true)
+        {
             return false;
         }
     }
@@ -1274,8 +1310,7 @@ fn validate_local_file_filter(filter: &LocalFileFilterSpec) -> Result<()> {
     if let (Some(min), Some(max)) = (filter.file_size_bytes_min, filter.file_size_bytes_max) {
         if min > max {
             return Err(StudioError::InvalidRequest(
-                "file_size_bytes_min must be less than or equal to file_size_bytes_max"
-                    .to_string(),
+                "file_size_bytes_min must be less than or equal to file_size_bytes_max".to_string(),
             ));
         }
     }
@@ -1302,7 +1337,10 @@ fn manifest_filter_needs_enrichment(filter: &ManifestFilterSpec) -> bool {
 
 fn describe_manifest_filter(filter: &ManifestFilterSpec) -> Vec<String> {
     let mut descriptions = Vec::new();
-    if let Some(value) = filter.title_contains.as_deref().filter(|value| !value.trim().is_empty())
+    if let Some(value) = filter
+        .title_contains
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
     {
         descriptions.push(format!("title contains '{value}'"));
     }
@@ -1356,10 +1394,7 @@ fn describe_local_file_filter(filter: &LocalFileFilterSpec) -> Vec<String> {
             filter.extension_allowlist.join(", ")
         ));
     }
-    descriptions.push(format!(
-        "failed probe: {:?}",
-        filter.failed_probe_behavior
-    ));
+    descriptions.push(format!("failed probe: {:?}", filter.failed_probe_behavior));
     descriptions
 }
 
@@ -1512,156 +1547,7 @@ fn transcribe_video(
     video_path: &Path,
     work_dir: &Path,
 ) -> (TranscriptionReport, Option<PathBuf>) {
-    if !request.transcription.enabled {
-        return (
-            TranscriptionReport {
-                status: "skipped".to_string(),
-                text: None,
-                segments: Vec::new(),
-                message: Some("disabled".to_string()),
-            },
-            None,
-        );
-    }
-
-    let command = match &request.transcription.command {
-        Some(config) => config.clone(),
-        None => {
-            let default = PathBuf::from("whisper");
-            if resolve_command(&default).is_none() {
-                return (
-                    TranscriptionReport {
-                        status: "skipped".to_string(),
-                        text: None,
-                        segments: Vec::new(),
-                        message: Some("install whisper or configure a transcriber".to_string()),
-                    },
-                    None,
-                );
-            }
-            ExternalCommandConfig {
-                command: default,
-                args: Vec::new(),
-            }
-        }
-    };
-
-    match extract_audio_wav(video_path, work_dir)
-        .and_then(|audio_path| run_whisper_command(&command, &audio_path))
-    {
-        Ok((report, audio_path)) => (report, Some(audio_path)),
-        Err(err) => (
-            TranscriptionReport {
-                status: "skipped".to_string(),
-                text: None,
-                segments: Vec::new(),
-                message: Some(err.to_string()),
-            },
-            None,
-        ),
-    }
-}
-
-fn extract_audio_wav(video_path: &Path, work_dir: &Path) -> Result<PathBuf> {
-    let path = work_dir.join("audio.wav");
-    let status = Command::new("ffmpeg")
-        .arg("-y")
-        .arg("-v")
-        .arg("error")
-        .arg("-i")
-        .arg(video_path)
-        .arg("-vn")
-        .arg("-ac")
-        .arg("1")
-        .arg("-ar")
-        .arg("16000")
-        .arg("-f")
-        .arg("wav")
-        .arg(&path)
-        .status()?;
-    if !status.success() {
-        return Err(StudioError::Workflow(
-            "ffmpeg failed to extract transcription audio".to_string(),
-        ));
-    }
-    Ok(path)
-}
-
-fn run_whisper_command(
-    config: &ExternalCommandConfig,
-    audio_path: &Path,
-) -> Result<(TranscriptionReport, PathBuf)> {
-    let output_dir = audio_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join("transcript");
-    fs::create_dir_all(&output_dir)?;
-
-    let status = Command::new(&config.command)
-        .arg(audio_path)
-        .args(&config.args)
-        .arg("--output_format")
-        .arg("json")
-        .arg("--output_dir")
-        .arg(&output_dir)
-        .stdin(Stdio::null())
-        .status()?;
-    if !status.success() {
-        return Err(StudioError::Workflow(format!(
-            "transcriber command `{}` failed",
-            config.command.display()
-        )));
-    }
-
-    let transcript_path = find_transcript_json(&output_dir).ok_or_else(|| {
-        StudioError::Workflow("transcriber completed but no JSON transcript was found".to_string())
-    })?;
-    let bytes = fs::read(&transcript_path)?;
-    let parsed: WhisperOutput = serde_json::from_slice(&bytes)?;
-    let segments = parsed
-        .segments
-        .into_iter()
-        .enumerate()
-        .map(|(index, segment)| TranscriptSegmentReport {
-            index: index as u64,
-            start_seconds: segment.start,
-            end_seconds: segment.end,
-            text: segment.text.trim().to_string(),
-        })
-        .collect::<Vec<_>>();
-    Ok((
-        TranscriptionReport {
-            status: "completed".to_string(),
-            text: parsed.text.map(|text| text.trim().to_string()),
-            segments,
-            message: Some(display_path(&transcript_path)),
-        },
-        audio_path.to_path_buf(),
-    ))
-}
-
-#[derive(Debug, Deserialize)]
-struct WhisperOutput {
-    text: Option<String>,
-    #[serde(default)]
-    segments: Vec<WhisperSegment>,
-}
-
-#[derive(Debug, Deserialize)]
-struct WhisperSegment {
-    start: Option<f64>,
-    end: Option<f64>,
-    text: String,
-}
-
-fn find_transcript_json(output_dir: &Path) -> Option<PathBuf> {
-    let mut candidates = fs::read_dir(output_dir)
-        .ok()?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
-        .collect::<Vec<_>>();
-    candidates.sort();
-    candidates.pop()
+    transcribe_media(&request.transcription, video_path, work_dir)
 }
 
 fn analyze_audio(
@@ -2261,17 +2147,5 @@ mod tests {
         };
         assert_eq!(config.args.len(), 2);
         assert_eq!(config.args[0], "hello world");
-    }
-
-    #[test]
-    fn parses_whisper_json_segments() {
-        let parsed: WhisperOutput = serde_json::from_str(
-            r#"{"text":"hello world","segments":[{"start":0.0,"end":1.5,"text":" hello"}]}"#,
-        )
-        .unwrap();
-
-        assert_eq!(parsed.text.as_deref(), Some("hello world"));
-        assert_eq!(parsed.segments.len(), 1);
-        assert_eq!(parsed.segments[0].start, Some(0.0));
     }
 }

@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 pub enum StudioReport {
     YoutubeCollection(YoutubeCollectionReport),
     YoutubeVideo(YoutubeVideoReport),
+    SongAnalysis(SongAnalysisReport),
+    SubtitleGeneration(SubtitleGenerationReport),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -103,6 +105,32 @@ pub struct TranscriptSegmentReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SubtitleGenerationReport {
+    pub use_case: String,
+    pub source: SourceReport,
+    pub assets: SubtitleAssetReport,
+    pub capabilities: CapabilityReport,
+    pub transcription: TranscriptionReport,
+    pub subtitle: SubtitleReport,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SubtitleAssetReport {
+    pub work_dir: String,
+    pub report_path: String,
+    pub audio_wav: Option<String>,
+    pub subtitle_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SubtitleReport {
+    pub format: String,
+    pub path: String,
+    pub segments: u64,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AudioReport {
     pub status: String,
     pub frames_processed: u64,
@@ -143,6 +171,98 @@ pub struct StreamBucketReport {
     pub video_frames: u64,
     pub audio_frames: u64,
     pub text_segments: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SongAnalysisReport {
+    pub use_case: String,
+    pub source: SongSourceReport,
+    pub assets: SongAssetReport,
+    pub capabilities: CapabilityReport,
+    pub identification: SongIdentificationReport,
+    pub lyrics: TranscriptionReport,
+    pub music: MusicAnalysisReport,
+    pub data_buckets: Vec<DataBucketReport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SongSourceReport {
+    pub url: Option<String>,
+    pub local_media: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SongAssetReport {
+    pub work_dir: String,
+    pub report_path: String,
+    pub transcription_wav: Option<String>,
+    pub music_analysis_wav: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SongIdentificationReport {
+    pub status: String,
+    pub query: Option<SongFingerprintQueryReport>,
+    pub catalog_path: String,
+    pub top_match: Option<SongMatchCandidateReport>,
+    pub candidates: Vec<SongMatchCandidateReport>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SongFingerprintQueryReport {
+    pub duration_seconds: f64,
+    pub fingerprint: String,
+    pub chunk_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SongMatchCandidateReport {
+    pub track_id: String,
+    pub title: String,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub isrc: Option<String>,
+    pub source_uri: Option<String>,
+    pub duration_seconds: f64,
+    pub score: f32,
+    pub matched_segment: Option<SongMatchedSegmentReport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SongMatchedSegmentReport {
+    pub query_start_seconds: Option<f64>,
+    pub catalog_start_seconds: Option<f64>,
+    pub duration_seconds: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MusicAnalysisReport {
+    pub status: String,
+    pub global: Option<MusicFeatureReport>,
+    pub segments: Vec<MusicSegmentReport>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MusicFeatureReport {
+    pub bpm: Option<f32>,
+    pub bpm_confidence: Option<f32>,
+    pub key: Option<String>,
+    pub mode: Option<String>,
+    pub key_confidence: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MusicSegmentReport {
+    pub index: u64,
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+    pub bpm: Option<f32>,
+    pub bpm_confidence: Option<f32>,
+    pub key: Option<String>,
+    pub mode: Option<String>,
+    pub key_confidence: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -1,5 +1,12 @@
 import type {
   StudioReport,
+  SongAnalysisReport,
+  SongAnalysisRunRequest,
+  SongCatalogImportRequest,
+  SongCatalogImportResponse,
+  TranscriptionEngine,
+  SubtitleGenerationReport,
+  SubtitleGenerationRunRequest,
   YoutubeCollectionManifest,
   YoutubeCollectionManifestRequest,
   YoutubeCollectionReport,
@@ -13,7 +20,7 @@ export type RunStatus = "pending" | "running" | "succeeded" | "failed" | "cancel
 
 export interface RunRecord {
   run_id: string;
-  workflow: "youtube_video" | "youtube_collection";
+  workflow: "youtube_video" | "youtube_collection" | "song_analysis" | "subtitle_generation";
   status: RunStatus;
   work_dir: string;
   report_path: string;
@@ -59,6 +66,7 @@ export interface YoutubeRunRequest {
   visual_sample_every: number;
   transcription: {
     enabled: boolean;
+    engine?: TranscriptionEngine;
     command?: ExternalCommandConfig | null;
   };
   models: {
@@ -74,10 +82,15 @@ export interface WorkflowClient {
   discoverYoutubeCollectionManifest(request: YoutubeCollectionManifestRequest): Promise<YoutubeCollectionManifest>;
   startYoutubeVideoRun(request: YoutubeRunRequest): Promise<RunRecord>;
   startYoutubeCollectionRun(request: YoutubeCollectionRunRequest): Promise<RunRecord>;
+  startSongAnalysisRun(request: SongAnalysisRunRequest): Promise<RunRecord>;
+  startSubtitleGenerationRun(request: SubtitleGenerationRunRequest): Promise<RunRecord>;
+  importSongCatalogItems(request: SongCatalogImportRequest): Promise<SongCatalogImportResponse>;
   getRun(runId: string): Promise<RunRecord>;
   getReport(runId: string): Promise<StudioReport>;
   getYoutubeVideoReport(runId: string): Promise<YoutubeVideoReport>;
   getYoutubeCollectionReport(runId: string): Promise<YoutubeCollectionReport>;
+  getSongAnalysisReport(runId: string): Promise<SongAnalysisReport>;
+  getSubtitleGenerationReport(runId: string): Promise<SubtitleGenerationReport>;
   cancelRun(runId: string): Promise<void>;
   subscribeRunEvents?(runId: string, onEvent: (event: RunEvent) => void): Promise<() => void>;
 }
@@ -92,6 +105,14 @@ export function isYoutubeCollectionReport(report: StudioReport): report is Youtu
 
 export function isYoutubeVideoReport(report: StudioReport): report is YoutubeVideoReport {
   return "video" in report && "source" in report && "data_buckets" in report;
+}
+
+export function isSongAnalysisReport(report: StudioReport): report is SongAnalysisReport {
+  return report.use_case === "song_analysis" && "identification" in report && "music" in report;
+}
+
+export function isSubtitleGenerationReport(report: StudioReport): report is SubtitleGenerationReport {
+  return report.use_case === "subtitle_generation" && "subtitle" in report && "transcription" in report;
 }
 
 export async function waitForRunCompletion(
