@@ -1776,7 +1776,10 @@ const initialWorkflowNodes: WorkflowNodeModel[] = [
     packageName: "@video-analysis-studio/ui",
     description: "Renders summary, scenes, signals, data buckets, and split plans.",
     tone: "sky",
-    inputs: [port("report", "report json", "json_report")],
+    inputs: [
+      port("report", "report json", "json_report"),
+      port("collection", "collection report", "collection_report", { optional: true }),
+    ],
     outputs: [port("view", "visible panels", "dashboard_view")],
   }),
   workflowNode("templated-data-save", 3640, -180, {
@@ -2323,7 +2326,7 @@ const initialWorkflowEdges: Edge[] = [
   workflowEdge("report-writer", "report", "disk-result-sink", "report"),
   workflowEdge("report-writer", "report", "database-result-sink", "report"),
   workflowEdge("report-writer", "report", "http-result-sink", "report"),
-  workflowEdge("collection-report", "report", "dashboard", "report"),
+  workflowEdge("collection-report", "report", "dashboard", "collection"),
 ];
 
 function WorkflowBuilder({
