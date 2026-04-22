@@ -1031,6 +1031,24 @@ function DependencyStatusPanel() {
 
 type PortDirection = "in" | "out";
 type FlowTone = "sky" | "rose" | "amber" | "emerald" | "violet" | "cyan" | "indigo" | "fuchsia" | "slate" | "zinc";
+type WorkflowComponentCategory =
+  | "Application"
+  | "Input"
+  | "API"
+  | "Pipeline"
+  | "Ingest"
+  | "Detection"
+  | "Models"
+  | "Audio"
+  | "Text"
+  | "Data"
+  | "Report"
+  | "Dashboard"
+  | "Output"
+  | "Generator"
+  | "Control Flow"
+  | "Reusable";
+type WorkflowBlockCategoryDraft = WorkflowComponentCategory | "Auto";
 type PortType =
   | "run_request"
   | "run_config"
@@ -1099,6 +1117,7 @@ interface WorkflowNodeData extends Record<string, unknown> {
   title: string;
   packageName: string;
   description: string;
+  category?: WorkflowComponentCategory;
   tone: FlowTone;
   inputs: FlowPort[];
   outputs: FlowPort[];
@@ -1106,6 +1125,7 @@ interface WorkflowNodeData extends Record<string, unknown> {
   size?: WorkflowNodeSize;
   kind?: "step" | "group";
   group?: WorkflowGroupMetadata;
+  groupOpen?: boolean;
   minimized?: boolean;
 }
 
@@ -1128,6 +1148,7 @@ interface SavedWorkflowBlock {
   id: string;
   name: string;
   createdAt: string;
+  category?: WorkflowComponentCategory;
   tags?: string[];
   nodes: SavedWorkflowBlockNode[];
   edges: SavedWorkflowBlockEdge[];
@@ -1620,6 +1641,225 @@ const initialWorkflowNodes: WorkflowNodeModel[] = [
   }),
 ];
 
+const dashboardWorkflowNodes: WorkflowNodeModel[] = [
+  workflowNode("json-report-loader", 0, 0, {
+    title: "JSON Report Loader",
+    packageName: "@video-analysis-studio/ui",
+    description: "Loads a saved analysis JSON file and emits a report payload for preview or downstream panels.",
+    category: "Input",
+    tone: "sky",
+    inputs: [],
+    outputs: [port("report", "report json", "json_report")],
+    tags: ["dashboard", "report", "json", "loader", "input"],
+  }),
+  workflowNode("video-summary-cards", 0, 0, {
+    title: "Video Summary Cards",
+    packageName: "@video-analysis-studio/ui/core",
+    description: "Renders resolution, duration, frame count, and scene count as compact dashboard metrics.",
+    category: "Dashboard",
+    tone: "sky",
+    inputs: [
+      port("metadata", "metadata", "video_metadata"),
+      port("scenes", "scenes", "scene_result"),
+    ],
+    outputs: [port("view", "summary cards", "dashboard_view")],
+    tags: ["dashboard", "summary", "metrics", "video"],
+  }),
+  workflowNode("media-metadata-panel", 0, 0, {
+    title: "Media Metadata Panel",
+    packageName: "@video-analysis-studio/ui/ffmpeg",
+    description: "Shows probed media dimensions, duration, frame rate, sample rate, and channel count.",
+    category: "Dashboard",
+    tone: "amber",
+    inputs: [port("metadata", "metadata", "video_metadata")],
+    outputs: [port("view", "metadata panel", "dashboard_view")],
+    tags: ["dashboard", "ffmpeg", "metadata", "media"],
+  }),
+  workflowNode("source-summary", 0, 0, {
+    title: "Source Summary",
+    packageName: "@video-analysis-studio/ui/ingest",
+    description: "Displays the original source URL and local media path from the report.",
+    category: "Dashboard",
+    tone: "sky",
+    inputs: [port("report", "source report", "json_report")],
+    outputs: [port("view", "source panel", "dashboard_view")],
+    tags: ["dashboard", "source", "ingest", "report"],
+  }),
+  workflowNode("asset-summary", 0, 0, {
+    title: "Asset Summary",
+    packageName: "@video-analysis-studio/ui/ingest",
+    description: "Lists generated artifacts such as the work directory, report path, and extracted audio.",
+    category: "Dashboard",
+    tone: "emerald",
+    inputs: [port("report", "asset report", "json_report")],
+    outputs: [port("view", "asset panel", "dashboard_view")],
+    tags: ["dashboard", "assets", "output", "report"],
+  }),
+  workflowNode("capability-panel", 0, 0, {
+    title: "Capability Panel",
+    packageName: "@video-analysis-studio/ui/models",
+    description: "Shows completed and skipped analysis capabilities from the report.",
+    category: "Dashboard",
+    tone: "violet",
+    inputs: [port("report", "capabilities", "json_report")],
+    outputs: [port("view", "capability panel", "dashboard_view")],
+    tags: ["dashboard", "capabilities", "models", "status"],
+  }),
+  workflowNode("scene-panel", 0, 0, {
+    title: "Scene Panel",
+    packageName: "@video-analysis-studio/ui/core",
+    description: "Combines scene timeline and scene table views for detected scene spans.",
+    category: "Dashboard",
+    tone: "emerald",
+    inputs: [port("scenes", "scenes", "scene_result")],
+    outputs: [port("view", "scene panel", "dashboard_view")],
+    tags: ["dashboard", "scenes", "timeline", "table"],
+  }),
+  workflowNode("scene-timeline", 0, 0, {
+    title: "Scene Timeline",
+    packageName: "@video-analysis-studio/ui/core",
+    description: "Renders detected scene spans as a compact horizontal timeline.",
+    category: "Dashboard",
+    tone: "emerald",
+    inputs: [port("scenes", "scenes", "scene_result")],
+    outputs: [port("view", "scene timeline", "dashboard_view")],
+    tags: ["dashboard", "scenes", "timeline"],
+  }),
+  workflowNode("scene-table", 0, 0, {
+    title: "Scene Table",
+    packageName: "@video-analysis-studio/ui/core",
+    description: "Renders scene index, start/end time, frames, and duration in a sortable table shape.",
+    category: "Dashboard",
+    tone: "emerald",
+    inputs: [port("scenes", "scenes", "scene_result")],
+    outputs: [port("view", "scene table", "dashboard_view")],
+    tags: ["dashboard", "scenes", "table"],
+  }),
+  workflowNode("detection-summary", 0, 0, {
+    title: "Detection Summary",
+    packageName: "@video-analysis-studio/ui/detectors",
+    description: "Shows scene detector totals, processed frame counts, and optional cut details.",
+    category: "Dashboard",
+    tone: "emerald",
+    inputs: [port("scenes", "detection result", "scene_result")],
+    outputs: [port("view", "detection summary", "dashboard_view")],
+    tags: ["dashboard", "detection", "cuts", "scenes"],
+  }),
+  workflowNode("cut-table", 0, 0, {
+    title: "Cut Table",
+    packageName: "@video-analysis-studio/ui/detectors",
+    description: "Lists individual detector cut points with frame, time, detector, and score columns.",
+    category: "Dashboard",
+    tone: "emerald",
+    inputs: [port("cuts", "cuts", "scene_result")],
+    outputs: [port("view", "cut table", "dashboard_view")],
+    tags: ["dashboard", "cuts", "detection", "table"],
+  }),
+  workflowNode("observation-list", 0, 0, {
+    title: "Observation List",
+    packageName: "@video-analysis-studio/ui/core",
+    description: "Displays visual observations with labels, analyzer names, timestamps, regions, and scores.",
+    category: "Dashboard",
+    tone: "violet",
+    inputs: [port("observations", "observations", "video_observation")],
+    outputs: [port("view", "observation list", "dashboard_view")],
+    tags: ["dashboard", "observations", "visual", "scores"],
+  }),
+  workflowNode("model-observation-grid", 0, 0, {
+    title: "Model Observation Grid",
+    packageName: "@video-analysis-studio/ui/models",
+    description: "Highlights scored model observations as cards with analyzer labels and score meters.",
+    category: "Dashboard",
+    tone: "violet",
+    inputs: [port("observations", "scored observations", "video_observation")],
+    outputs: [port("view", "model grid", "dashboard_view")],
+    tags: ["dashboard", "models", "observations", "scores"],
+  }),
+  workflowNode("transcript-panel", 0, 0, {
+    title: "Transcript Panel",
+    packageName: "@video-analysis-studio/ui/use-cases",
+    description: "Displays transcript segments with timestamps and transcription status.",
+    category: "Dashboard",
+    tone: "indigo",
+    inputs: [port("segments", "segments", "transcript_segment")],
+    outputs: [port("view", "transcript panel", "dashboard_view")],
+    tags: ["dashboard", "transcript", "segments", "text"],
+  }),
+  workflowNode("audio-event-list", 0, 0, {
+    title: "Audio Event List",
+    packageName: "@video-analysis-studio/ui/core",
+    description: "Displays timestamped audio events with analyzer, label, and score columns.",
+    category: "Dashboard",
+    tone: "cyan",
+    inputs: [port("events", "audio events", "audio_event")],
+    outputs: [port("view", "audio events", "dashboard_view")],
+    tags: ["dashboard", "audio", "events", "table"],
+  }),
+  workflowNode("text-event-list", 0, 0, {
+    title: "Text Event List",
+    packageName: "@video-analysis-studio/ui/core",
+    description: "Displays transcript-derived text events with analyzer, label, and score columns.",
+    category: "Dashboard",
+    tone: "fuchsia",
+    inputs: [port("events", "text events", "text_event")],
+    outputs: [port("view", "text events", "dashboard_view")],
+    tags: ["dashboard", "text", "events", "table"],
+  }),
+  workflowNode("data-bucket-overview", 0, 0, {
+    title: "Data Bucket Overview",
+    packageName: "@video-analysis-studio/ui/data",
+    description: "Summarizes bounded data buckets with record counts, estimated bytes, and stream breakdowns.",
+    category: "Dashboard",
+    tone: "slate",
+    inputs: [port("buckets", "buckets", "data_bucket")],
+    outputs: [port("view", "bucket overview", "dashboard_view")],
+    tags: ["dashboard", "data", "buckets", "streams"],
+  }),
+  workflowNode("stream-summary-table", 0, 0, {
+    title: "Stream Summary Table",
+    packageName: "@video-analysis-studio/ui/data",
+    description: "Shows per-stream payload counts, record totals, byte estimates, and media/text counts.",
+    category: "Dashboard",
+    tone: "slate",
+    inputs: [port("buckets", "streams", "data_bucket")],
+    outputs: [port("view", "stream table", "dashboard_view")],
+    tags: ["dashboard", "data", "streams", "table"],
+  }),
+  workflowNode("split-plan-table", 0, 0, {
+    title: "Split Plan Table",
+    packageName: "@video-analysis-studio/ui/split",
+    description: "Previews scene clip output names, start times, durations, and frame ranges.",
+    category: "Dashboard",
+    tone: "emerald",
+    inputs: [
+      port("scenes", "scenes", "scene_result"),
+      port("template", "name template", "template_string", { optional: true }),
+    ],
+    outputs: [port("view", "split plan", "dashboard_view")],
+    tags: ["dashboard", "split", "scenes", "clips", "template"],
+  }),
+  workflowNode("result-persistence-panel", 0, 0, {
+    title: "Result Persistence Panel",
+    packageName: "@video-analysis-studio/ui/output",
+    description: "Provides disk, IndexedDB, and HTTP save controls for a JSON result payload.",
+    category: "Dashboard",
+    tone: "emerald",
+    inputs: [port("result", "result", "json_report")],
+    outputs: [port("view", "save controls", "dashboard_view")],
+    tags: ["dashboard", "save", "disk", "database", "http", "output"],
+  }),
+  workflowNode("cli-run-panel", 0, 0, {
+    title: "CLI Run Panel",
+    packageName: "@video-analysis-studio/ui/cli",
+    description: "Displays command arguments, run status, messages, and generated output file paths.",
+    category: "Dashboard",
+    tone: "zinc",
+    inputs: [port("run", "run", "run_request")],
+    outputs: [port("view", "run panel", "dashboard_view")],
+    tags: ["dashboard", "cli", "run", "status", "outputs"],
+  }),
+];
+
 const generatorWorkflowNodes: WorkflowNodeModel[] = [
   workflowNode("string-generator", 0, 0, {
     title: "String Generator",
@@ -1677,7 +1917,115 @@ const generatorWorkflowNodes: WorkflowNodeModel[] = [
   }),
 ];
 
-const workflowNodeTemplates: WorkflowNodeModel[] = initialWorkflowNodes.concat(generatorWorkflowNodes);
+const controlFlowWorkflowNodes: WorkflowNodeModel[] = [
+  workflowNode("boolean-not", 0, 0, {
+    title: "Boolean NOT",
+    packageName: "Control Flow",
+    description: "Inverts a boolean value before it is used by gates, switches, or route conditions.",
+    tone: "amber",
+    inputs: [port("value", "boolean", "boolean_value")],
+    outputs: [port("inverted", "not", "boolean_value")],
+    tags: ["control", "flow", "boolean", "not", "invert", "condition"],
+  }),
+  workflowNode("boolean-and", 0, 0, {
+    title: "Boolean AND",
+    packageName: "Control Flow",
+    description: "Combines two boolean conditions and emits true only when both inputs are true.",
+    tone: "amber",
+    inputs: [
+      port("left", "left", "boolean_value"),
+      port("right", "right", "boolean_value"),
+    ],
+    outputs: [port("value", "and", "boolean_value")],
+    tags: ["control", "flow", "boolean", "and", "all", "condition"],
+  }),
+  workflowNode("boolean-or", 0, 0, {
+    title: "Boolean OR",
+    packageName: "Control Flow",
+    description: "Combines two boolean conditions and emits true when either input is true.",
+    tone: "amber",
+    inputs: [
+      port("left", "left", "boolean_value"),
+      port("right", "right", "boolean_value"),
+    ],
+    outputs: [port("value", "or", "boolean_value")],
+    tags: ["control", "flow", "boolean", "or", "any", "condition"],
+  }),
+  workflowNode("number-compare", 0, 0, {
+    title: "Number Compare",
+    packageName: "Control Flow",
+    description: "Compares two numbers and emits boolean conditions for equality and ordering.",
+    tone: "emerald",
+    inputs: [
+      port("left", "left number", "number_value"),
+      port("right", "right number", "number_value"),
+    ],
+    outputs: [
+      port("equal", "equal", "boolean_value"),
+      port("greater", "greater than", "boolean_value"),
+      port("less", "less than", "boolean_value"),
+    ],
+    tags: ["control", "flow", "compare", "number", "boolean", "condition", "threshold"],
+  }),
+  workflowNode("boolean-switch", 0, 0, {
+    title: "Boolean Switch",
+    packageName: "Control Flow",
+    description: "Routes incoming data to true and false branches based on a boolean condition.",
+    tone: "indigo",
+    inputs: [
+      port("condition", "condition", "boolean_value"),
+      port("data", "data", "data_value"),
+    ],
+    outputs: [
+      port("true", "true branch", "data_value"),
+      port("false", "false branch", "data_value"),
+    ],
+    tags: ["control", "flow", "boolean", "switch", "branch", "if", "else", "route"],
+  }),
+  workflowNode("conditional-select", 0, 0, {
+    title: "Conditional Select",
+    packageName: "Control Flow",
+    description: "Selects one of two incoming values based on a boolean condition.",
+    tone: "indigo",
+    inputs: [
+      port("condition", "condition", "boolean_value"),
+      port("true", "true value", "data_value"),
+      port("false", "false value", "data_value"),
+    ],
+    outputs: [port("value", "selected", "data_value")],
+    tags: ["control", "flow", "boolean", "select", "conditional", "ternary", "if", "else"],
+  }),
+  workflowNode("data-gate", 0, 0, {
+    title: "Data Gate",
+    packageName: "Control Flow",
+    description: "Passes incoming data only when a boolean condition allows the route.",
+    tone: "slate",
+    inputs: [
+      port("condition", "condition", "boolean_value"),
+      port("data", "data", "data_value"),
+    ],
+    outputs: [port("allowed", "allowed data", "data_value")],
+    tags: ["control", "flow", "boolean", "gate", "guard", "filter", "data"],
+  }),
+  workflowNode("run-gate", 0, 0, {
+    title: "Run Gate",
+    packageName: "Control Flow",
+    description: "Passes a run request only when a boolean condition allows execution.",
+    tone: "zinc",
+    inputs: [
+      port("condition", "condition", "boolean_value"),
+      port("run", "run request", "run_request"),
+    ],
+    outputs: [port("run", "allowed run", "run_request")],
+    tags: ["control", "flow", "boolean", "gate", "run", "execution", "guard"],
+  }),
+];
+
+const workflowNodeTemplates: WorkflowNodeModel[] = initialWorkflowNodes.concat(
+  dashboardWorkflowNodes,
+  generatorWorkflowNodes,
+  controlFlowWorkflowNodes,
+);
 
 const initialWorkflowEdges: Edge[] = [
   workflowEdge("react-page", "run", "vite-api", "run"),
@@ -1742,6 +2090,7 @@ function WorkflowBuilder({
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [savedBlocks, setSavedBlocks] = useState<SavedWorkflowBlock[]>(loadSavedWorkflowBlocks);
   const [blockName, setBlockName] = useState("");
+  const [blockCategory, setBlockCategory] = useState<WorkflowBlockCategoryDraft>("Auto");
   const [blockTags, setBlockTags] = useState("");
   const [blockLibraryMessage, setBlockLibraryMessage] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<WorkflowContextMenuState | null>(null);
@@ -2056,7 +2405,7 @@ function WorkflowBuilder({
   );
 
   const saveNodesAsBlock = useCallback((nodesToSave: WorkflowNodeModel[]) => {
-    const block = createSavedWorkflowBlock(nodesToSave, edges, blockName, blockTags);
+    const block = createSavedWorkflowBlock(nodesToSave, edges, blockName, blockTags, blockCategory);
     if (!block) {
       return;
     }
@@ -2066,11 +2415,12 @@ function WorkflowBuilder({
       return nextBlocks;
     });
     setBlockName("");
+    setBlockCategory("Auto");
     setBlockTags("");
     setBlockLibraryMessage("Saved component");
     setContextMenu(null);
     setOutputConnectorMenu(null);
-  }, [blockName, blockTags, edges]);
+  }, [blockCategory, blockName, blockTags, edges]);
 
   const saveSelectedBlock = useCallback(() => {
     saveNodesAsBlock(selectedNodes);
@@ -2092,6 +2442,7 @@ function WorkflowBuilder({
       setEdges(grouped.edges);
       setSelectedNodeIds([grouped.node.id]);
       setBlockName("");
+      setBlockCategory("Auto");
       setBlockTags("");
       setBlockLibraryMessage(`Grouped ${grouped.groupedNodeCount} components`);
       setContextMenu(null);
@@ -2117,6 +2468,29 @@ function WorkflowBuilder({
           };
         }),
       );
+    },
+    [setNodes],
+  );
+
+  const setGroupOpen = useCallback(
+    (nodeId: string, groupOpen: boolean) => {
+      setNodes((currentNodes) =>
+        currentNodes.map((node) => {
+          if (node.id !== nodeId || !node.data.group) {
+            return node;
+          }
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              groupOpen,
+              minimized: groupOpen ? false : node.data.minimized,
+            },
+          };
+        }),
+      );
+      setContextMenu(null);
+      setOutputConnectorMenu(null);
     },
     [setNodes],
   );
@@ -2664,9 +3038,17 @@ function WorkflowBuilder({
                   canGroup={contextNodes.length >= 2}
                   canSave={contextNodes.length >= 2}
                   canUngroup={Boolean(contextGroupNode)}
+                  canOpenGroup={Boolean(contextGroupNode)}
+                  groupOpen={contextGroupNode?.data.groupOpen === true}
+                  groupOpenLabel={contextGroupNode?.data.groupOpen ? "Close group" : "Open group"}
                   minimizeLabel={contextNodesAllMinimized ? "Expand selected" : "Minimize selected"}
                   onGroup={() => groupNodes(contextMenu.nodeIds)}
                   onSave={() => saveNodesAsBlock(contextNodes)}
+                  onToggleGroupOpen={() => {
+                    if (contextGroupNode) {
+                      setGroupOpen(contextGroupNode.id, !contextGroupNode.data.groupOpen);
+                    }
+                  }}
                   onUngroup={() => {
                     if (contextGroupNode) {
                       ungroupNode(contextGroupNode.id);
@@ -2700,8 +3082,10 @@ function WorkflowBuilder({
           selectedNodes={selectedNodes}
           selectedInternalEdgeCount={selectedInternalEdgeCount}
           blockName={blockName}
+          blockCategory={blockCategory}
           blockTags={blockTags}
           onBlockNameChange={setBlockName}
+          onBlockCategoryChange={setBlockCategory}
           onBlockTagsChange={setBlockTags}
           onSelectWorkflow={selectWorkflow}
           onCreateWorkflow={createBlankWorkflow}
@@ -2714,6 +3098,12 @@ function WorkflowBuilder({
           onGroupSelected={() => groupNodes(selectedNodeIds)}
           onDeleteSelected={() => deleteWorkflowNodes(selectedNodeIds)}
           onUpdateSelectedGroup={updateGroupDetails}
+          onToggleSelectedGroupOpen={() => {
+            const groupNode = selectedNodes.length === 1 && selectedNodes[0].data.group ? selectedNodes[0] : null;
+            if (groupNode) {
+              setGroupOpen(groupNode.id, !groupNode.data.groupOpen);
+            }
+          }}
           onToggleSelectedMinimized={() => setWorkflowNodesMinimized(selectedNodeIds, !selectedNodes.every((node) => node.data.minimized))}
           onUngroupSelected={() => {
             const groupNode = selectedNodes.length === 1 && selectedNodes[0].data.group ? selectedNodes[0] : null;
@@ -2758,6 +3148,9 @@ function WorkflowComponentSelector({
   onExportSavedBlocks: () => void;
   onImportSavedBlocks: () => void;
 }) {
+  const primitiveGroups = useMemo(() => groupWorkflowNodeTemplatesByCategory(primitiveNodes), [primitiveNodes]);
+  const savedBlockGroups = useMemo(() => groupSavedWorkflowBlocksByCategory(savedBlocks), [savedBlocks]);
+
   return (
     <aside className="min-h-0 rounded-lg border border-zinc-200 bg-white shadow-sm">
       <div className="border-b border-zinc-200 px-4 py-3">
@@ -2778,17 +3171,26 @@ function WorkflowComponentSelector({
                 No components
               </div>
             ) : (
-              primitiveNodes.map((node) => (
-                <WorkflowComponentTile
-                  key={node.id}
-                  title={node.data.title}
-                  subtitle={node.data.packageName}
-                  tone={node.data.tone}
-                  portSummary={`${node.data.inputs.length} in · ${node.data.outputs.length} out`}
-                  tags={node.data.tags ?? []}
-                  dragPayload={{ type: "primitive", id: node.id }}
-                  onAdd={() => onAddPrimitive(node)}
-                />
+              primitiveGroups.map((group) => (
+                <WorkflowComponentCategoryGroup
+                  key={group.category}
+                  category={group.category}
+                  count={group.items.length}
+                >
+                  {group.items.map((node) => (
+                    <WorkflowComponentTile
+                      key={node.id}
+                      title={node.data.title}
+                      subtitle={node.data.packageName}
+                      category={node.data.category ?? "Reusable"}
+                      tone={node.data.tone}
+                      portSummary={`${node.data.inputs.length} in · ${node.data.outputs.length} out`}
+                      tags={node.data.tags ?? []}
+                      dragPayload={{ type: "primitive", id: node.id }}
+                      onAdd={() => onAddPrimitive(node)}
+                    />
+                  ))}
+                </WorkflowComponentCategoryGroup>
               ))
             )}
           </div>
@@ -2830,17 +3232,26 @@ function WorkflowComponentSelector({
                 No saved components
               </div>
             ) : (
-              savedBlocks.map((block) => (
-                <WorkflowComponentTile
-                  key={block.id}
-                  title={block.name}
-                  subtitle={`${block.nodes.length} components`}
-                  portSummary={`${block.edges.length} connections`}
-                  tags={block.tags ?? []}
-                  dragPayload={{ type: "block", id: block.id }}
-                  onAdd={() => onAddSavedBlock(block)}
-                  onDelete={() => onDeleteSavedBlock(block.id)}
-                />
+              savedBlockGroups.map((group) => (
+                <WorkflowComponentCategoryGroup
+                  key={group.category}
+                  category={group.category}
+                  count={group.items.length}
+                >
+                  {group.items.map((block) => (
+                    <WorkflowComponentTile
+                      key={block.id}
+                      title={block.name}
+                      subtitle={`${block.nodes.length} components`}
+                      category={block.category ?? "Reusable"}
+                      portSummary={`${block.edges.length} connections`}
+                      tags={block.tags ?? []}
+                      dragPayload={{ type: "block", id: block.id }}
+                      onAdd={() => onAddSavedBlock(block)}
+                      onDelete={() => onDeleteSavedBlock(block.id)}
+                    />
+                  ))}
+                </WorkflowComponentCategoryGroup>
               ))
             )}
           </div>
@@ -2850,9 +3261,30 @@ function WorkflowComponentSelector({
   );
 }
 
+function WorkflowComponentCategoryGroup({
+  category,
+  count,
+  children,
+}: {
+  category: WorkflowComponentCategory;
+  count: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2 px-1 text-[11px] font-semibold uppercase text-zinc-500">
+        <span className="truncate">{category}</span>
+        <span className="shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-600">{count}</span>
+      </div>
+      <div className="space-y-2">{children}</div>
+    </div>
+  );
+}
+
 function WorkflowComponentTile({
   title,
   subtitle,
+  category,
   portSummary,
   tags,
   tone = "zinc",
@@ -2862,6 +3294,7 @@ function WorkflowComponentTile({
 }: {
   title: string;
   subtitle: string;
+  category: WorkflowComponentCategory;
   portSummary: string;
   tags: string[];
   tone?: FlowTone;
@@ -2885,6 +3318,7 @@ function WorkflowComponentTile({
             <span className="min-w-0 truncate font-semibold">{title}</span>
           </span>
           <span className="mt-1 block truncate text-[10px] text-zinc-500">{subtitle}</span>
+          <span className="mt-1 block truncate text-[10px] font-semibold uppercase text-zinc-500">{category}</span>
           <span className="mt-1 block text-[10px] text-zinc-500">{portSummary}</span>
           {tags.length > 0 && (
             <span className="mt-2 flex flex-wrap gap-1">
@@ -2928,9 +3362,11 @@ function WorkflowDetailsPanel({
   selectedNodes,
   selectedInternalEdgeCount,
   blockName,
+  blockCategory,
   blockTags,
   workflowNameDraft,
   onBlockNameChange,
+  onBlockCategoryChange,
   onBlockTagsChange,
   onSelectWorkflow,
   onCreateWorkflow,
@@ -2942,6 +3378,7 @@ function WorkflowDetailsPanel({
   onGroupSelected,
   onDeleteSelected,
   onUpdateSelectedGroup,
+  onToggleSelectedGroupOpen,
   onToggleSelectedMinimized,
   onUngroupSelected,
   onSaveWorkflowVersion,
@@ -2954,9 +3391,11 @@ function WorkflowDetailsPanel({
   selectedNodes: WorkflowNodeModel[];
   selectedInternalEdgeCount: number;
   blockName: string;
+  blockCategory: WorkflowBlockCategoryDraft;
   blockTags: string;
   workflowNameDraft: string;
   onBlockNameChange: (value: string) => void;
+  onBlockCategoryChange: (value: WorkflowBlockCategoryDraft) => void;
   onBlockTagsChange: (value: string) => void;
   onSelectWorkflow: (workflowId: string) => void;
   onCreateWorkflow: () => void;
@@ -2968,6 +3407,7 @@ function WorkflowDetailsPanel({
   onGroupSelected: () => void;
   onDeleteSelected: () => void;
   onUpdateSelectedGroup: (nodeId: string, updates: Pick<WorkflowNodeData, "title" | "description">) => void;
+  onToggleSelectedGroupOpen: () => void;
   onToggleSelectedMinimized: () => void;
   onUngroupSelected: () => void;
   onSaveWorkflowVersion: () => void;
@@ -3026,6 +3466,16 @@ function WorkflowDetailsPanel({
               ) : (
                 <p className="text-sm leading-6 text-zinc-700">{selectedNode.data.description}</p>
               )}
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                <span className="rounded bg-zinc-950 px-2 py-1 text-[10px] font-semibold uppercase text-white">
+                  {selectedNode.data.category ?? "Reusable"}
+                </span>
+                {(selectedNode.data.tags ?? []).slice(0, 5).map((tag) => (
+                  <span key={tag} className="rounded bg-zinc-100 px-2 py-1 text-[10px] font-medium text-zinc-600">
+                    {tag}
+                  </span>
+                ))}
+              </div>
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <Metric label="Inputs" value={String(selectedNode.data.inputs.length)} />
                 <Metric label="Outputs" value={String(selectedNode.data.outputs.length)} />
@@ -3039,9 +3489,22 @@ function WorkflowDetailsPanel({
                 <div className="mt-2 text-sm font-medium text-zinc-900">
                   {selectedGroupNode.data.group.memberCount} components
                 </div>
+                <div className="mt-1 text-xs text-zinc-500">
+                  {selectedGroupNode.data.group.edges.length} internal connections
+                </div>
               </div>
             )}
             <div className="grid grid-cols-2 gap-2">
+              {selectedGroupNode && (
+                <button
+                  className="col-span-2 inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-zinc-950 px-3 text-xs font-medium text-white shadow-sm hover:bg-zinc-800"
+                  onClick={onToggleSelectedGroupOpen}
+                  title={selectedGroupNode.data.groupOpen ? "Close selected group" : "Open selected group"}
+                >
+                  {selectedGroupNode.data.groupOpen ? <PanelCollapseIcon className="h-4 w-4" /> : <PanelExpandIcon className="h-4 w-4" />}
+                  {selectedGroupNode.data.groupOpen ? "Close Group" : "Open Group"}
+                </button>
+              )}
               <button
                 className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
                 onClick={onToggleSelectedMinimized}
@@ -3083,6 +3546,20 @@ function WorkflowDetailsPanel({
                 placeholder="Component name"
                 onChange={(event) => onBlockNameChange(event.target.value)}
               />
+            </Field>
+            <Field label="Category">
+              <select
+                className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={blockCategory}
+                onChange={(event) => onBlockCategoryChange(event.target.value as WorkflowBlockCategoryDraft)}
+              >
+                <option value="Auto">Auto</option>
+                {workflowComponentCategoryOrder.map((category) => (
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
+                ))}
+              </select>
             </Field>
             <Field label="Tags">
               <input
@@ -3485,6 +3962,7 @@ function createSavedWorkflowBlock(
   edges: Edge[],
   requestedName: string,
   requestedTags = "",
+  requestedCategory: WorkflowBlockCategoryDraft = "Auto",
 ): SavedWorkflowBlock | null {
   if (selectedNodes.length < 2) {
     return null;
@@ -3495,11 +3973,14 @@ function createSavedWorkflowBlock(
   const minY = Math.min(...selectedNodes.map((node) => node.position.y));
   const name = requestedName.trim() || defaultWorkflowBlockName(selectedNodes);
   const tags = parseWorkflowTags(requestedTags);
+  const category =
+    requestedCategory === "Auto" ? categoryForWorkflowNodes(selectedNodes) : workflowComponentCategory(requestedCategory);
 
   return {
     id: createWorkflowBlockId(),
     name,
     createdAt: new Date().toISOString(),
+    category,
     tags: tags.length > 0 ? tags : tagsForWorkflowNodes(selectedNodes),
     nodes: selectedNodes.map((node) => ({
       id: node.id,
@@ -3538,6 +4019,7 @@ function createWorkflowClipboardState(
       id: createWorkflowBlockId(),
       name,
       createdAt: new Date().toISOString(),
+      category: categoryForWorkflowNodes(selectedNodes),
       tags: tagsForWorkflowNodes(selectedNodes),
       nodes: selectedNodes.map((node) => ({
         id: node.id,
@@ -3617,6 +4099,7 @@ function createWorkflowGroup(
       title: name,
       packageName: "Component Group",
       description: `${selectedNodes.length} components abstracted behind boundary ports.`,
+      category: categoryForWorkflowNodes(selectedNodes),
       tone: "zinc",
       inputs: dedupePorts(inputPorts),
       outputs: dedupePorts(outputPorts),
@@ -3848,6 +4331,7 @@ function cloneWorkflowNodeData(data: WorkflowNodeData): WorkflowNodeData {
     title: data.title,
     packageName: data.packageName,
     description: data.description,
+    category: workflowComponentCategory(data.category ?? categoryForWorkflowNodeData(data)),
     tone: data.tone,
     inputs: data.inputs.map(cloneFlowPort),
     outputs: data.outputs.map(cloneFlowPort),
@@ -3863,6 +4347,9 @@ function cloneWorkflowNodeData(data: WorkflowNodeData): WorkflowNodeData {
   }
   if (data.group) {
     cloned.group = cloneWorkflowGroupMetadata(data.group);
+  }
+  if (data.groupOpen) {
+    cloned.groupOpen = true;
   }
   if (data.minimized) {
     cloned.minimized = true;
@@ -4489,6 +4976,7 @@ function cloneImportedSavedWorkflowBlock(block: SavedWorkflowBlock): SavedWorkfl
     id: createWorkflowBlockId(),
     name: block.name,
     createdAt: new Date().toISOString(),
+    category: workflowComponentCategory(block.category ?? categoryForSavedWorkflowBlock(block)),
     tags: normalizeWorkflowTags(block.tags ?? tagsForSavedWorkflowBlock(block)),
     nodes: block.nodes.map((node) => ({
       id: node.id,
@@ -4502,6 +4990,7 @@ function cloneImportedSavedWorkflowBlock(block: SavedWorkflowBlock): SavedWorkfl
 function normalizeSavedWorkflowBlock(block: SavedWorkflowBlock): SavedWorkflowBlock {
   return {
     ...block,
+    category: workflowComponentCategory(block.category ?? categoryForSavedWorkflowBlock(block)),
     tags: normalizeWorkflowTags(block.tags ?? tagsForSavedWorkflowBlock(block)),
     nodes: block.nodes.map((node) => ({
       id: node.id,
@@ -4531,6 +5020,7 @@ function isSavedWorkflowBlock(value: unknown): value is SavedWorkflowBlock {
     typeof value.id === "string" &&
     typeof value.name === "string" &&
     typeof value.createdAt === "string" &&
+    (value.category === undefined || isWorkflowComponentCategory(value.category)) &&
     (value.tags === undefined || isWorkflowTags(value.tags)) &&
     Array.isArray(value.nodes) &&
     value.nodes.every(isSavedWorkflowBlockNode) &&
@@ -4659,13 +5149,16 @@ function isWorkflowNodeData(value: unknown): value is WorkflowNodeData {
   }
   const kindValid = value.kind === undefined || value.kind === "step" || value.kind === "group";
   const groupValid = value.group === undefined || isWorkflowGroupMetadata(value.group);
+  const groupOpenValid = value.groupOpen === undefined || typeof value.groupOpen === "boolean";
   const minimizedValid = value.minimized === undefined || typeof value.minimized === "boolean";
+  const categoryValid = value.category === undefined || isWorkflowComponentCategory(value.category);
   const tagsValid = value.tags === undefined || isWorkflowTags(value.tags);
   const sizeValid = value.size === undefined || isWorkflowNodeSize(value.size);
   return (
     typeof value.title === "string" &&
     typeof value.packageName === "string" &&
     typeof value.description === "string" &&
+    categoryValid &&
     isFlowTone(value.tone) &&
     Array.isArray(value.inputs) &&
     value.inputs.every(isFlowPort) &&
@@ -4675,6 +5168,7 @@ function isWorkflowNodeData(value: unknown): value is WorkflowNodeData {
     sizeValid &&
     kindValid &&
     groupValid &&
+    groupOpenValid &&
     minimizedValid
   );
 }
@@ -4718,6 +5212,27 @@ function isFlowPort(value: unknown): value is FlowPort {
     typeof value.type === "string" &&
     isPortType(value.type) &&
     (value.optional === undefined || typeof value.optional === "boolean")
+  );
+}
+
+function isWorkflowComponentCategory(value: unknown): value is WorkflowComponentCategory {
+  return (
+    value === "Application" ||
+    value === "Input" ||
+    value === "API" ||
+    value === "Pipeline" ||
+    value === "Ingest" ||
+    value === "Detection" ||
+    value === "Models" ||
+    value === "Audio" ||
+    value === "Text" ||
+    value === "Data" ||
+    value === "Report" ||
+    value === "Dashboard" ||
+    value === "Output" ||
+    value === "Generator" ||
+    value === "Control Flow" ||
+    value === "Reusable"
   );
 }
 
@@ -4822,15 +5337,25 @@ function WorkflowNode({ id, data, selected, isConnectable }: NodeProps) {
   const { updateNodeData } = useReactFlow<WorkflowNodeModel, Edge>();
   const updateNodeInternals = useUpdateNodeInternals();
   const isGroup = nodeData.kind === "group";
+  const groupOpen = isGroup && nodeData.groupOpen === true;
   const groupSize = isGroup ? normalizedWorkflowNodeSize(nodeData.size) : null;
 
   useEffect(() => {
     updateNodeInternals(id);
-  }, [groupSize?.height, groupSize?.width, id, minimized, nodeData.inputs.length, nodeData.outputs.length, updateNodeInternals]);
+  }, [groupOpen, groupSize?.height, groupSize?.width, id, minimized, nodeData.inputs.length, nodeData.outputs.length, updateNodeInternals]);
 
   const toggleMinimized = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     updateNodeData(id, { minimized: !minimized });
+    requestAnimationFrame(() => updateNodeInternals(id));
+  };
+
+  const toggleGroupOpen = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    updateNodeData(id, {
+      groupOpen: !groupOpen,
+      minimized: groupOpen ? minimized : false,
+    });
     requestAnimationFrame(() => updateNodeInternals(id));
   };
 
@@ -4888,6 +5413,17 @@ function WorkflowNode({ id, data, selected, isConnectable }: NodeProps) {
               </span>
             )}
             <span className={classNames("h-2.5 w-2.5 rounded-full", flowToneClass(nodeData.tone))} />
+            {isGroup && !minimized && (
+              <button
+                type="button"
+                className="nodrag nopan inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-300 bg-white/80 text-zinc-700 hover:bg-white focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-1"
+                onClick={toggleGroupOpen}
+                title={groupOpen ? "Close group" : "Open group"}
+                aria-label={groupOpen ? "Close group" : "Open group"}
+              >
+                {groupOpen ? <PanelCollapseIcon className="h-3.5 w-3.5" /> : <PanelExpandIcon className="h-3.5 w-3.5" />}
+              </button>
+            )}
             <button
               type="button"
               className="nodrag nopan inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-300 bg-white/80 text-zinc-700 hover:bg-white focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-1"
@@ -4909,23 +5445,93 @@ function WorkflowNode({ id, data, selected, isConnectable }: NodeProps) {
           isConnectable={isConnectable}
         />
       ) : (
-        <div className="grid grid-cols-2 gap-3 p-3">
-          <PortColumn
-            nodeId={id}
-            title="Inputs"
-            direction="in"
-            ports={nodeData.inputs}
-            isConnectable={isConnectable}
-          />
-          <PortColumn
-            nodeId={id}
-            title="Outputs"
-            direction="out"
-            ports={nodeData.outputs}
-            isConnectable={isConnectable}
-          />
-        </div>
+        <>
+          <div className="grid grid-cols-2 gap-3 p-3">
+            <PortColumn
+              nodeId={id}
+              title="Inputs"
+              direction="in"
+              ports={nodeData.inputs}
+              isConnectable={isConnectable}
+            />
+            <PortColumn
+              nodeId={id}
+              title="Outputs"
+              direction="out"
+              ports={nodeData.outputs}
+              isConnectable={isConnectable}
+            />
+          </div>
+          {isGroup && groupOpen && nodeData.group && <WorkflowGroupOpenView group={nodeData.group} />}
+        </>
       )}
+    </div>
+  );
+}
+
+const workflowGroupPreviewNodeWidth = 148;
+const workflowGroupPreviewNodeHeight = 62;
+const workflowGroupPreviewPadding = 22;
+
+function WorkflowGroupOpenView({ group }: { group: WorkflowGroupMetadata }) {
+  const colors = usePortTypeColors();
+  const layout = useMemo(() => workflowGroupOpenViewLayout(group), [group]);
+
+  return (
+    <div className="border-t border-zinc-100 bg-white p-3">
+      <div className="mb-2 flex items-center justify-between gap-3 text-[11px] font-semibold uppercase text-zinc-500">
+        <span>Members</span>
+        <span className="shrink-0">
+          {group.nodes.length} / {group.edges.length}
+        </span>
+      </div>
+      <div className="nodrag nopan max-h-72 overflow-auto rounded-md border border-zinc-200 bg-zinc-50">
+        <div className="relative" style={{ width: layout.width, height: layout.height }}>
+          <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${layout.width} ${layout.height}`}>
+            {layout.edges.map((edge) => {
+              const color = portTypeColor(edge.type, colors);
+              return (
+                <path
+                  key={edge.id}
+                  d={edge.path}
+                  fill="none"
+                  stroke={color}
+                  strokeLinecap="round"
+                  strokeWidth={2}
+                  opacity={0.82}
+                />
+              );
+            })}
+          </svg>
+          {layout.nodes.map((member) => (
+            <div
+              key={member.node.id}
+              className="absolute overflow-hidden rounded-md border border-zinc-200 bg-white text-left shadow-sm"
+              style={{
+                left: member.x,
+                top: member.y,
+                width: workflowGroupPreviewNodeWidth,
+                height: workflowGroupPreviewNodeHeight,
+              }}
+              title={member.node.data.title}
+            >
+              <div className={classNames("h-1.5", flowToneClass(member.node.data.tone))} />
+              <div className="p-2">
+                <div className="flex items-center gap-1.5">
+                  <span className={classNames("h-2 w-2 shrink-0 rounded-full", flowToneClass(member.node.data.tone))} />
+                  <span className="min-w-0 truncate text-[11px] font-semibold text-zinc-900">
+                    {member.node.data.title}
+                  </span>
+                </div>
+                <div className="mt-1 truncate text-[10px] text-zinc-500">{member.node.data.packageName}</div>
+                <div className="mt-1 text-[10px] font-medium text-zinc-500">
+                  {member.node.data.inputs.length} in · {member.node.data.outputs.length} out
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -5124,9 +5730,13 @@ function WorkflowContextMenu({
   canGroup,
   canSave,
   canUngroup,
+  canOpenGroup,
+  groupOpen,
+  groupOpenLabel,
   minimizeLabel,
   onGroup,
   onSave,
+  onToggleGroupOpen,
   onUngroup,
   onToggleMinimized,
   onDelete,
@@ -5138,9 +5748,13 @@ function WorkflowContextMenu({
   canGroup: boolean;
   canSave: boolean;
   canUngroup: boolean;
+  canOpenGroup: boolean;
+  groupOpen: boolean;
+  groupOpenLabel: string;
   minimizeLabel: string;
   onGroup: () => void;
   onSave: () => void;
+  onToggleGroupOpen: () => void;
   onUngroup: () => void;
   onToggleMinimized: () => void;
   onDelete: () => void;
@@ -5161,6 +5775,13 @@ function WorkflowContextMenu({
       </ContextMenuButton>
       <ContextMenuButton icon={<SaveIcon className="h-4 w-4" />} disabled={!canSave} onClick={onSave}>
         Save as component
+      </ContextMenuButton>
+      <ContextMenuButton
+        icon={groupOpen ? <PanelCollapseIcon className="h-4 w-4" /> : <PanelExpandIcon className="h-4 w-4" />}
+        disabled={!canOpenGroup}
+        onClick={onToggleGroupOpen}
+      >
+        {groupOpenLabel}
       </ContextMenuButton>
       <ContextMenuButton icon={<MinimizeIcon className="h-4 w-4" />} onClick={onToggleMinimized}>
         {minimizeLabel}
@@ -5335,6 +5956,7 @@ function workflowNode(id: string, x: number, y: number, data: WorkflowNodeData):
     position: { x, y },
     data: {
       ...data,
+      category: workflowComponentCategory(data.category ?? categoryForWorkflowNodeData(data)),
       tags: normalizeWorkflowTags(data.tags ?? tagsForWorkflowNodeData(data)),
     },
   };
@@ -6200,6 +6822,61 @@ function clampedFixedPosition(x: number, y: number, width: number, height: numbe
   };
 }
 
+const workflowComponentCategoryOrder: WorkflowComponentCategory[] = [
+  "Application",
+  "Input",
+  "API",
+  "Pipeline",
+  "Ingest",
+  "Detection",
+  "Models",
+  "Audio",
+  "Text",
+  "Data",
+  "Report",
+  "Dashboard",
+  "Output",
+  "Generator",
+  "Control Flow",
+  "Reusable",
+];
+
+function groupWorkflowNodeTemplatesByCategory(
+  nodes: WorkflowNodeModel[],
+): Array<{ category: WorkflowComponentCategory; items: WorkflowNodeModel[] }> {
+  return groupWorkflowComponentsByCategory(nodes, (node) => node.data.category ?? "Reusable");
+}
+
+function groupSavedWorkflowBlocksByCategory(
+  blocks: SavedWorkflowBlock[],
+): Array<{ category: WorkflowComponentCategory; items: SavedWorkflowBlock[] }> {
+  return groupWorkflowComponentsByCategory(blocks, (block) => block.category ?? "Reusable");
+}
+
+function groupWorkflowComponentsByCategory<T>(
+  items: T[],
+  getCategory: (item: T) => WorkflowComponentCategory,
+): Array<{ category: WorkflowComponentCategory; items: T[] }> {
+  const groups = new Map<WorkflowComponentCategory, T[]>();
+  for (const item of items) {
+    const category = workflowComponentCategory(getCategory(item));
+    const group = groups.get(category);
+    if (group) {
+      group.push(item);
+    } else {
+      groups.set(category, [item]);
+    }
+  }
+  return Array.from(groups.entries())
+    .map(([category, groupItems]) => ({ category, items: groupItems }))
+    .sort((left, right) => workflowComponentCategorySortIndex(left.category) - workflowComponentCategorySortIndex(right.category));
+}
+
+function workflowComponentCategorySortIndex(category: WorkflowComponentCategory): number {
+  const index = workflowComponentCategoryOrder.indexOf(category);
+  return index === -1 ? workflowComponentCategoryOrder.length : index;
+}
+
 function filterWorkflowNodeTemplates(nodes: WorkflowNodeModel[], query: string): WorkflowNodeModel[] {
   const normalized = query.trim().toLowerCase();
   if (!normalized) {
@@ -6210,6 +6887,7 @@ function filterWorkflowNodeTemplates(nodes: WorkflowNodeModel[], query: string):
       node.data.title,
       node.data.packageName,
       node.data.description,
+      node.data.category ?? "",
       ...(node.data.tags ?? []),
       ...node.data.inputs.map((portValue) => portValue.label),
       ...node.data.outputs.map((portValue) => portValue.label),
@@ -6266,11 +6944,13 @@ function filterSavedWorkflowBlocks(blocks: SavedWorkflowBlock[], query: string):
   return blocks.filter((block) =>
     [
       block.name,
+      block.category ?? "",
       ...(block.tags ?? []),
       ...block.nodes.flatMap((node) => [
         node.data.title,
         node.data.packageName,
         node.data.description,
+        node.data.category ?? "",
         ...(node.data.tags ?? []),
       ]),
     ]
@@ -6278,6 +6958,92 @@ function filterSavedWorkflowBlocks(blocks: SavedWorkflowBlock[], query: string):
       .toLowerCase()
       .includes(normalized),
   );
+}
+
+function workflowComponentCategory(value: unknown): WorkflowComponentCategory {
+  return isWorkflowComponentCategory(value) ? value : "Reusable";
+}
+
+function categoryForWorkflowNodes(nodes: WorkflowNodeModel[]): WorkflowComponentCategory {
+  const categories = nodes.map((node) => node.data.category ?? categoryForWorkflowNodeData(node.data));
+  const uniqueCategories = new Set(categories);
+  if (uniqueCategories.size === 1) {
+    return workflowComponentCategory(categories[0]);
+  }
+  if (categories.some((category) => category === "Dashboard")) {
+    return "Dashboard";
+  }
+  if (categories.some((category) => category === "Output")) {
+    return "Output";
+  }
+  return "Reusable";
+}
+
+function categoryForSavedWorkflowBlock(block: SavedWorkflowBlock): WorkflowComponentCategory {
+  return categoryForWorkflowNodes(
+    block.nodes.map((node) => ({
+      id: node.id,
+      type: "workflow" as const,
+      position: { ...node.position },
+      data: cloneWorkflowNodeData(node.data),
+    })),
+  );
+}
+
+function categoryForWorkflowNodeData(data: WorkflowNodeData): WorkflowComponentCategory {
+  const packageName = data.packageName.toLowerCase();
+  const title = data.title.toLowerCase();
+  const text = `${title} ${packageName} ${data.description.toLowerCase()}`;
+
+  if (data.category) {
+    return workflowComponentCategory(data.category);
+  }
+  if (packageName.includes("@video-analysis-studio/ui") || title.includes("dashboard") || title.includes("panel") || title.includes("table")) {
+    return "Dashboard";
+  }
+  if (packageName.includes("generator")) {
+    return "Generator";
+  }
+  if (packageName.includes("control flow")) {
+    return "Control Flow";
+  }
+  if (packageName.includes("studio-api") || title.includes("api")) {
+    return "API";
+  }
+  if (packageName === "input" || title.includes("source picker") || title.includes("loader")) {
+    return "Input";
+  }
+  if (title.includes("use case") || title.includes("pipeline")) {
+    return "Pipeline";
+  }
+  if (title.includes("sink") || title.includes("save") || text.includes("webhook")) {
+    return "Output";
+  }
+  if (text.includes("ffmpeg") || text.includes("ingest") || text.includes("download")) {
+    return "Ingest";
+  }
+  if (text.includes("detector") || text.includes("scene")) {
+    return "Detection";
+  }
+  if (text.includes("model") || text.includes("ocr") || text.includes("object")) {
+    return "Models";
+  }
+  if (text.includes("audio")) {
+    return "Audio";
+  }
+  if (text.includes("transcript") || text.includes("text")) {
+    return "Text";
+  }
+  if (text.includes("report") || text.includes("serde_json")) {
+    return "Report";
+  }
+  if (text.includes("bucket") || text.includes("data")) {
+    return "Data";
+  }
+  if (title.includes("user story")) {
+    return "Application";
+  }
+  return "Pipeline";
 }
 
 function parseWorkflowTags(value: string): string[] {
@@ -6319,6 +7085,7 @@ function tagsForWorkflowNodeData(data: WorkflowNodeData): string[] {
   return normalizeWorkflowTags([
     data.title,
     data.packageName,
+    data.category ?? categoryForWorkflowNodeData(data),
     data.tone,
     ...data.inputs.map((portValue) => portValue.type),
     ...data.outputs.map((portValue) => portValue.type),
@@ -6342,6 +7109,86 @@ function normalizedWorkflowNodeSize(size: WorkflowNodeSize | undefined): Workflo
     width: Math.max(minWorkflowGroupWidth, Math.round(size.width)),
     height: Math.max(minWorkflowGroupHeight, Math.round(size.height)),
   };
+}
+
+function workflowGroupOpenViewLayout(group: WorkflowGroupMetadata): {
+  width: number;
+  height: number;
+  nodes: Array<{ node: SavedWorkflowBlockNode; x: number; y: number }>;
+  edges: Array<{ id: string; path: string; type: PortType }>;
+} {
+  if (group.nodes.length === 0) {
+    return { width: 240, height: 150, nodes: [], edges: [] };
+  }
+
+  const xGroups = workflowGroupCoordinateGroups(group.nodes.map((node) => node.position.x), 120);
+  const yGroups = workflowGroupCoordinateGroups(group.nodes.map((node) => node.position.y), 90);
+  const cellCounts = new Map<string, number>();
+  const layoutNodes = group.nodes.map((node) => {
+    const xRank = workflowGroupCoordinateRank(node.position.x, xGroups);
+    const yRank = workflowGroupCoordinateRank(node.position.y, yGroups);
+    const cellKey = `${xRank}:${yRank}`;
+    const cellIndex = cellCounts.get(cellKey) ?? 0;
+    cellCounts.set(cellKey, cellIndex + 1);
+    return {
+      node,
+      x: workflowGroupPreviewPadding + xRank * 190,
+      y: workflowGroupPreviewPadding + yRank * 96 + cellIndex * 74,
+    };
+  });
+  const layoutNodeById = new Map(layoutNodes.map((node) => [node.node.id, node]));
+  const layoutEdges = group.edges.flatMap((edge, index) => {
+    const source = layoutNodeById.get(edge.source);
+    const target = layoutNodeById.get(edge.target);
+    if (!source || !target) {
+      return [];
+    }
+    const sourceX = source.x + workflowGroupPreviewNodeWidth;
+    const sourceY = source.y + workflowGroupPreviewNodeHeight / 2;
+    const targetX = target.x;
+    const targetY = target.y + workflowGroupPreviewNodeHeight / 2;
+    const distance = Math.max(36, Math.abs(targetX - sourceX) * 0.45);
+    const path = `M ${sourceX} ${sourceY} C ${sourceX + distance} ${sourceY}, ${targetX - distance} ${targetY}, ${targetX} ${targetY}`;
+    const type = parseHandleId(edge.sourceHandle ?? "")?.type ?? parseHandleId(edge.targetHandle ?? "")?.type ?? "run_config";
+    return [{ id: `${edge.source}-${edge.sourceHandle}-${edge.target}-${edge.targetHandle}-${index}`, path, type }];
+  });
+  const width =
+    Math.max(...layoutNodes.map((node) => node.x)) + workflowGroupPreviewNodeWidth + workflowGroupPreviewPadding;
+  const height =
+    Math.max(...layoutNodes.map((node) => node.y)) + workflowGroupPreviewNodeHeight + workflowGroupPreviewPadding;
+
+  return {
+    width: Math.max(260, width),
+    height: Math.max(150, height),
+    nodes: layoutNodes,
+    edges: layoutEdges,
+  };
+}
+
+function workflowGroupCoordinateGroups(values: number[], threshold: number): number[] {
+  const groups: number[] = [];
+  for (const value of [...values].sort((left, right) => left - right)) {
+    const last = groups.at(-1);
+    if (last === undefined || Math.abs(value - last) > threshold) {
+      groups.push(value);
+    } else {
+      groups[groups.length - 1] = (last + value) / 2;
+    }
+  }
+  return groups;
+}
+
+function workflowGroupCoordinateRank(value: number, groups: number[]): number {
+  let bestIndex = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  groups.forEach((groupValue, index) => {
+    const distance = Math.abs(value - groupValue);
+    if (distance < bestDistance) {
+      bestIndex = index;
+      bestDistance = distance;
+    }
+  });
+  return bestIndex;
 }
 
 function matchesHotkeyBinding(event: KeyboardEvent, binding: HotkeyBinding): boolean {
