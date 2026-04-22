@@ -1142,6 +1142,8 @@ type PortType =
   | "transcript_segment"
   | "audio_event"
   | "text_event"
+  | "http_request"
+  | "http_response"
   | "object_value"
   | "data_value"
   | "data_record"
@@ -1405,6 +1407,8 @@ const portTypes: PortType[] = [
   "transcript_segment",
   "audio_event",
   "text_event",
+  "http_request",
+  "http_response",
   "object_value",
   "data_value",
   "data_record",
@@ -1439,6 +1443,8 @@ const defaultPortTypeColors: PortTypeColors = {
   transcript_segment: "#6366f1",
   audio_event: "#0e7490",
   text_event: "#d946ef",
+  http_request: "#2563eb",
+  http_response: "#0d9488",
   object_value: "#db2777",
   data_value: "#334155",
   data_record: "#64748b",
@@ -1468,6 +1474,8 @@ const dataValueCompatibleSourceTypes: PortType[] = [
   "transcript_segment",
   "audio_event",
   "text_event",
+  "http_request",
+  "http_response",
 ];
 
 const streamablePortTypes: PortType[] = [
@@ -1482,6 +1490,8 @@ const streamablePortTypes: PortType[] = [
   "transcript_segment",
   "audio_event",
   "text_event",
+  "http_request",
+  "http_response",
   "data_value",
   "data_record",
   "data_bucket",
@@ -1499,6 +1509,8 @@ const streamBridgePortDescriptors: Array<{ id: string; label: string; type: Port
   { id: "transcript_segment", label: "transcript segments", type: "transcript_segment" },
   { id: "audio_event", label: "audio events", type: "audio_event" },
   { id: "text_event", label: "text events", type: "text_event" },
+  { id: "http_request", label: "HTTP requests", type: "http_request" },
+  { id: "http_response", label: "HTTP responses", type: "http_response" },
   { id: "data_value", label: "data values", type: "data_value" },
   { id: "data_record", label: "records", type: "data_record" },
   { id: "data_bucket", label: "buckets", type: "data_bucket" },
@@ -2108,6 +2120,52 @@ const streamWorkflowNodes: WorkflowNodeModel[] = [
   }),
 ];
 
+const httpWorkflowNodes: WorkflowNodeModel[] = [
+  workflowNode("http-request-builder", 0, 0, {
+    title: "HTTP Request Builder",
+    packageName: "fetch",
+    description: "Combines URL, method, headers, and an optional payload into a typed HTTP request.",
+    category: "API",
+    tone: "rose",
+    inputs: [
+      port("url", "URL", "string_value"),
+      port("method", "method", "string_value", { optional: true }),
+      port("headers", "headers", "object_value", { optional: true }),
+      port("body", "body", "data_value", { optional: true }),
+    ],
+    outputs: [port("request", "HTTP request", "http_request")],
+    tags: ["http", "request", "api", "fetch", "webhook"],
+  }),
+  workflowNode("http-client", 0, 0, {
+    title: "HTTP Client",
+    packageName: "fetch",
+    description: "Executes a typed HTTP request and emits the full response plus parsed body data.",
+    category: "API",
+    tone: "rose",
+    inputs: [port("request", "HTTP request", "http_request")],
+    outputs: [
+      port("response", "HTTP response", "http_response"),
+      port("body", "response body", "data_value"),
+    ],
+    tags: ["http", "client", "api", "fetch", "response"],
+  }),
+  workflowNode("http-response-reader", 0, 0, {
+    title: "HTTP Response Reader",
+    packageName: "fetch",
+    description: "Extracts status, success state, headers, and body data from an HTTP response.",
+    category: "API",
+    tone: "cyan",
+    inputs: [port("response", "HTTP response", "http_response")],
+    outputs: [
+      port("status", "status", "number_value"),
+      port("ok", "ok", "boolean_value"),
+      port("headers", "headers", "object_value"),
+      port("body", "body", "data_value"),
+    ],
+    tags: ["http", "response", "status", "headers", "body", "api"],
+  }),
+];
+
 const controlFlowWorkflowNodes: WorkflowNodeModel[] = [
   workflowNode("boolean-not", 0, 0, {
     title: "Boolean NOT",
@@ -2216,6 +2274,7 @@ const workflowNodeTemplates: WorkflowNodeModel[] = initialWorkflowNodes.concat(
   dashboardWorkflowNodes,
   generatorWorkflowNodes,
   streamWorkflowNodes,
+  httpWorkflowNodes,
   controlFlowWorkflowNodes,
 );
 
