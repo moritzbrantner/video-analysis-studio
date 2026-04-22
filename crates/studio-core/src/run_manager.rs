@@ -8,8 +8,11 @@ use tokio::sync::{broadcast, Mutex};
 use uuid::Uuid;
 
 use crate::error::{Result, StudioError};
-use crate::report::YoutubeVideoReport;
-use crate::youtube::{run_youtube_video_workflow, YoutubeRunRequest};
+use crate::report::StudioReport;
+use crate::youtube::{
+    run_youtube_collection_workflow, run_youtube_video_workflow, YoutubeCollectionRunRequest,
+    YoutubeRunRequest,
+};
 
 pub type RunId = Uuid;
 
@@ -17,6 +20,7 @@ pub type RunId = Uuid;
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowKind {
     YoutubeVideo,
+    YoutubeCollection,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -152,6 +156,91 @@ impl RunManager {
         Ok(record)
     }
 
+    pub async fn start_youtube_collection(
+        &self,
+        request: YoutubeCollectionRunRequest,
+    ) -> Result<RunRecord> {
+        request.validate()?;
+        let run_id = Uuid::new_v4();
+        let work_dir = request.resolved_work_dir(&self.data_dir, run_id);
+        let report_path = work_dir.join("collection-analysis.json");
+        let now = Utc::now();
+        let record = RunRecord {
+            run_id,
+            workflow: WorkflowKind::YoutubeCollection,
+            status: RunStatus::Pending,
+            work_dir: work_dir.clone(),
+            report_path: report_path.clone(),
+            created_at: now,
+            updated_at: now,
+            started_at: None,
+            finished_at: None,
+            message: Some("queued".to_string()),
+        };
+        let (events, _) = broadcast::channel(128);
+        {
+            let mut runs = self.inner.runs.lock().await;
+            runs.insert(
+                run_id,
+                RunState {
+                    record: record.clone(),
+                    events: events.clone(),
+                },
+            );
+        }
+        self.emit(run_id, RunStatus::Pending, "queued").await;
+
+        let manager = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(async {
+                manager
+                    .update_run(
+                        run_id,
+                        RunStatus::Running,
+                        Some("running collection workflow".to_string()),
+                        false,
+                    )
+                    .await;
+                manager
+                    .emit(run_id, RunStatus::Running, "running collection workflow")
+                    .await;
+            });
+
+            let result = run_youtube_collection_workflow(request, work_dir, report_path);
+            handle.block_on(async {
+                match result {
+                    Ok(_) => {
+                        manager
+                            .update_run(
+                                run_id,
+                                RunStatus::Succeeded,
+                                Some("collection analysis completed".to_string()),
+                                true,
+                            )
+                            .await;
+                        manager
+                            .emit(
+                                run_id,
+                                RunStatus::Succeeded,
+                                "collection analysis completed",
+                            )
+                            .await;
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        manager
+                            .update_run(run_id, RunStatus::Failed, Some(message.clone()), true)
+                            .await;
+                        manager.emit(run_id, RunStatus::Failed, message).await;
+                    }
+                }
+            });
+        });
+
+        Ok(record)
+    }
+
     pub async fn get_run(&self, run_id: RunId) -> Result<RunRecord> {
         let runs = self.inner.runs.lock().await;
         runs.get(&run_id)
@@ -159,7 +248,7 @@ impl RunManager {
             .ok_or_else(|| StudioError::RunNotFound(run_id.to_string()))
     }
 
-    pub async fn get_report(&self, run_id: RunId) -> Result<YoutubeVideoReport> {
+    pub async fn get_report(&self, run_id: RunId) -> Result<StudioReport> {
         let run = self.get_run(run_id).await?;
         if !run.report_path.exists() {
             return Err(StudioError::ReportNotFound(run_id.to_string()));

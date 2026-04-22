@@ -5,7 +5,8 @@ import type {
   WorkflowClient,
   YoutubeRunRequest,
 } from "./client";
-import type { YoutubeVideoReport } from "../types";
+import { isYoutubeCollectionReport, isYoutubeVideoReport } from "./client";
+import type { StudioReport, YoutubeCollectionManifest } from "../types";
 
 declare global {
   interface Window {
@@ -21,10 +22,28 @@ export function createTauriClient(): WorkflowClient {
   return {
     label: "Tauri",
     checkDependencies: async () => invoke<SystemDependencyReport>("check_dependencies"),
+    discoverYoutubeCollectionManifest: async (request) =>
+      invoke<YoutubeCollectionManifest>("discover_youtube_collection_manifest_command", { request }),
     startYoutubeVideoRun: async (request) =>
       invoke<RunRecord>("start_youtube_video_run", { request }),
+    startYoutubeCollectionRun: async (request) =>
+      invoke<RunRecord>("start_youtube_collection_run", { request }),
     getRun: async (runId) => invoke<RunRecord>("get_run", { runId }),
-    getReport: async (runId) => invoke<YoutubeVideoReport>("get_report", { runId }),
+    getReport: async (runId) => invoke<StudioReport>("get_report", { runId }),
+    getYoutubeVideoReport: async (runId) => {
+      const report = await invoke<StudioReport>("get_report", { runId });
+      if (!isYoutubeVideoReport(report)) {
+        throw new Error("Run report is not a YouTube video report");
+      }
+      return report;
+    },
+    getYoutubeCollectionReport: async (runId) => {
+      const report = await invoke<StudioReport>("get_report", { runId });
+      if (!isYoutubeCollectionReport(report)) {
+        throw new Error("Run report is not a YouTube collection report");
+      }
+      return report;
+    },
     cancelRun: async (runId) => invoke<void>("cancel_run", { runId }),
     subscribeRunEvents: async (runId, onEvent) => {
       const { listen } = await import("@tauri-apps/api/event");

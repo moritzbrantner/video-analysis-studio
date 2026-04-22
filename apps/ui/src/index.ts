@@ -1,6 +1,7 @@
 export * from "./types";
 export * from "./core";
 export * from "./cli";
+export * from "./collection";
 export * from "./data";
 export * from "./detectors";
 export * from "./ffmpeg";

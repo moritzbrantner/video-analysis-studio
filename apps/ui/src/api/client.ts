@@ -1,4 +1,11 @@
-import type { YoutubeVideoReport } from "../types";
+import type {
+  StudioReport,
+  YoutubeCollectionManifest,
+  YoutubeCollectionManifestRequest,
+  YoutubeCollectionReport,
+  YoutubeCollectionRunRequest,
+  YoutubeVideoReport,
+} from "../types";
 import { createHttpClient } from "./httpClient";
 import { createTauriClient, isTauriRuntime } from "./tauriClient";
 
@@ -6,7 +13,7 @@ export type RunStatus = "pending" | "running" | "succeeded" | "failed" | "cancel
 
 export interface RunRecord {
   run_id: string;
-  workflow: "youtube_video";
+  workflow: "youtube_video" | "youtube_collection";
   status: RunStatus;
   work_dir: string;
   report_path: string;
@@ -64,15 +71,27 @@ export interface YoutubeRunRequest {
 export interface WorkflowClient {
   label: string;
   checkDependencies(): Promise<SystemDependencyReport>;
+  discoverYoutubeCollectionManifest(request: YoutubeCollectionManifestRequest): Promise<YoutubeCollectionManifest>;
   startYoutubeVideoRun(request: YoutubeRunRequest): Promise<RunRecord>;
+  startYoutubeCollectionRun(request: YoutubeCollectionRunRequest): Promise<RunRecord>;
   getRun(runId: string): Promise<RunRecord>;
-  getReport(runId: string): Promise<YoutubeVideoReport>;
+  getReport(runId: string): Promise<StudioReport>;
+  getYoutubeVideoReport(runId: string): Promise<YoutubeVideoReport>;
+  getYoutubeCollectionReport(runId: string): Promise<YoutubeCollectionReport>;
   cancelRun(runId: string): Promise<void>;
   subscribeRunEvents?(runId: string, onEvent: (event: RunEvent) => void): Promise<() => void>;
 }
 
 export function getWorkflowClient(): WorkflowClient {
   return isTauriRuntime() ? createTauriClient() : createHttpClient();
+}
+
+export function isYoutubeCollectionReport(report: StudioReport): report is YoutubeCollectionReport {
+  return report.use_case === "youtube_collection_analysis" && "items" in report && "collection" in report;
+}
+
+export function isYoutubeVideoReport(report: StudioReport): report is YoutubeVideoReport {
+  return "video" in report && "source" in report && "data_buckets" in report;
 }
 
 export async function waitForRunCompletion(

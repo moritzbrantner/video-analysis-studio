@@ -9,6 +9,10 @@ pub use report::*;
 pub use run_manager::{RunEvent, RunId, RunManager, RunRecord, RunStatus, WorkflowKind};
 pub use system::{check_system_dependencies, DependencyStatus, SystemDependencyReport};
 pub use youtube::{
-    run_youtube_video_workflow, ExternalCommandConfig, ModelCommandConfig, SourceSpec,
-    TranscriptionConfig, YoutubeRunRequest,
+    discover_youtube_collection_manifest, run_youtube_collection_workflow,
+    run_youtube_video_workflow, AlreadyDownloadedPolicy, ExternalCommandConfig,
+    FailedProbeBehavior, LocalFileFilterSpec, ManifestFilterSpec, MetadataDepth,
+    ModelCommandConfig, SourceSpec, TranscriptionConfig, YoutubeCollectionManifest,
+    YoutubeCollectionManifestItem, YoutubeCollectionManifestRequest, YoutubeCollectionRunRequest,
+    YoutubeCollectionSource, YoutubeRunOptions, YoutubeRunRequest,
 };

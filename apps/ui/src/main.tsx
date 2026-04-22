@@ -24,6 +24,7 @@ import {
   AssetSummary,
   CapabilityPanel,
   CliRunPanel,
+  CollectionDashboard,
   DataBucketOverview,
   EventList,
   JsonReportLoader,
@@ -35,6 +36,8 @@ import {
   TranscriptPanel,
   VideoSummaryCards,
   type CliRun,
+  type StudioReport,
+  type YoutubeCollectionRunRequest,
   type YoutubeVideoReport,
 } from "./index";
 
@@ -48,6 +51,8 @@ import {
 } from "./ResultPageEditor";
 import {
   getWorkflowClient,
+  isYoutubeCollectionReport,
+  isYoutubeVideoReport,
   waitForRunCompletion,
   type RunRecord,
   type RunStatus,
@@ -55,8 +60,8 @@ import {
   type YoutubeRunRequest,
 } from "./api/client";
 
-type UseCaseId = "youtube-video";
-type SourceMode = "url" | "file";
+type UseCaseId = "youtube-video" | "youtube-collection";
+type SourceMode = "url" | "file" | "collection";
 type AppPage = "analysis" | "workflow" | "settings";
 type ViewMode = "overview" | "run" | "result" | "scenes" | "signals" | "data";
 
@@ -74,6 +79,14 @@ interface UseCaseForm {
   objectCommand: string;
   ocrCommand: string;
   textCommand: string;
+  collectionMaxItems: string;
+  collectionTitleContains: string;
+  collectionDurationMin: string;
+  collectionDurationMax: string;
+  localDurationMin: string;
+  localDurationMax: string;
+  localExtensions: string;
+  alreadyDownloaded: "include" | "skip" | "reuse";
   workflowInputs: Record<string, string>;
 }
 
@@ -86,6 +99,12 @@ const useCases: Array<{
   {
     id: "youtube-video",
     name: "YouTube Video",
+    packageName: "studio-core",
+    status: "Ready",
+  },
+  {
+    id: "youtube-collection",
+    name: "YouTube Collection",
     packageName: "studio-core",
     status: "Ready",
   },
@@ -105,6 +124,14 @@ const initialForm: UseCaseForm = {
   objectCommand: "",
   ocrCommand: "",
   textCommand: "",
+  collectionMaxItems: "25",
+  collectionTitleContains: "",
+  collectionDurationMin: "",
+  collectionDurationMax: "",
+  localDurationMin: "",
+  localDurationMax: "",
+  localExtensions: "mp4,mkv,webm,mov",
+  alreadyDownloaded: "reuse",
   workflowInputs: {},
 };
 
@@ -113,7 +140,7 @@ const mainSidebarCollapsedStorageKey = "video-analysis.mainSidebarCollapsed.v1";
 function App() {
   const [selectedUseCase, setSelectedUseCase] = useState<UseCaseId>("youtube-video");
   const [form, setForm] = useState<UseCaseForm>(initialForm);
-  const [report, setReport] = useState<YoutubeVideoReport>(sampleReport);
+  const [report, setReport] = useState<StudioReport>(sampleReport);
   const [page, setPage] = useState<AppPage>(() =>
     typeof window === "undefined" ? "analysis" : appPageFromPath(window.location.pathname),
   );
@@ -135,6 +162,13 @@ function App() {
   const activeWorkflowInputModel = useMemo(() => deriveWorkflowRunInputModel(activeWorkflow), [activeWorkflow]);
   const command = useMemo(() => buildCommand(form, activeWorkflowInputModel), [form, activeWorkflowInputModel]);
   const validationMessage = getRunValidation(form, activeWorkflowInputModel);
+  const collectionReport = isYoutubeCollectionReport(report) ? report : null;
+  const videoReport = isYoutubeVideoReport(report)
+    ? report
+    : collectionReport?.items.find((item) => item.report)?.report ?? sampleReport;
+  const reportTitle = collectionReport
+    ? collectionReport.collection.title ?? collectionReport.collection.source_url
+    : videoReport.source.local_video;
   const cliRun: CliRun =
     lastRun ?? {
       command: "studio-api",
@@ -216,13 +250,20 @@ function App() {
   }, [commitWorkflowLibrary, navigateToPage, workflowLibrary]);
 
   const startNewWorkflowRun = useCallback(() => {
-    setForm(initialForm);
+    setForm({
+      ...initialForm,
+      sourceMode: selectedUseCase === "youtube-collection" ? "collection" : "url",
+      workDir:
+        selectedUseCase === "youtube-collection"
+          ? "use-case-output/youtube-collection"
+          : initialForm.workDir,
+    });
     setRunStatus("pending");
     setLastRun(null);
     setRunOutput({});
     navigateToPage("analysis");
     setViewMode("run");
-  }, [navigateToPage]);
+  }, [navigateToPage, selectedUseCase]);
 
   const focusWorkflowInput = useCallback(
     (input: WorkflowRunInput) => {
@@ -291,7 +332,8 @@ function App() {
   const openWorkflowRun = useCallback(
     (run: SavedWorkflowRun) => {
       activateWorkflowDefinition(run.workflowId);
-      setForm(formFromYoutubeRunRequest(run.request));
+      setForm(isYoutubeCollectionRunRequest(run.request) ? formFromYoutubeCollectionRunRequest(run.request) : formFromYoutubeRunRequest(run.request));
+      setSelectedUseCase(isYoutubeCollectionRunRequest(run.request) ? "youtube-collection" : "youtube-video");
       setRunStatus(run.status);
       setLastRun(workflowRunToCliRun(run));
       setRunOutput({});
@@ -303,11 +345,12 @@ function App() {
 
   async function runAnalysis() {
     const message = getRunValidation(form, activeWorkflowInputModel);
+    const workflowKind = selectedUseCase;
     if (message) {
       setRunStatus("failed");
       setLastRun({
         command: "studio-api",
-        args: [activeWorkflow.name, "youtube-video"],
+        args: [activeWorkflow.name, workflowKind],
         status: "failed",
         exit_code: null,
         output_files: [form.output],
@@ -317,12 +360,15 @@ function App() {
     }
 
     setRunStatus("running");
-    const request = buildYoutubeRunRequest(form, activeWorkflowInputModel);
+    const request =
+      workflowKind === "youtube-collection"
+        ? buildYoutubeCollectionRunRequest(form)
+        : buildYoutubeRunRequest(form, activeWorkflowInputModel);
     const localRun = createSavedWorkflowRun(activeWorkflow, request, workflowInputSummaryFromForm(form, activeWorkflowInputModel));
     addWorkflowRun(localRun);
     setLastRun({
       command: "studio-api",
-      args: [activeWorkflow.name, "youtube-video"],
+      args: [activeWorkflow.name, workflowKind],
       status: "running",
       exit_code: null,
       output_files: [form.output],
@@ -332,7 +378,10 @@ function App() {
 
     try {
       const client = getWorkflowClient();
-      const started = await client.startYoutubeVideoRun(request);
+      const started =
+        workflowKind === "youtube-collection"
+          ? await client.startYoutubeCollectionRun(request as YoutubeCollectionRunRequest)
+          : await client.startYoutubeVideoRun(request as YoutubeRunRequest);
       updateWorkflowRun(localRun.id, (run) => workflowRunFromRunRecord(run, started));
       setLastRun(runRecordToCliRun(started, client.label, activeWorkflow.name));
 
@@ -354,7 +403,11 @@ function App() {
         return;
       }
 
-      setReport(await client.getReport(finalRun.run_id));
+      setReport(
+        workflowKind === "youtube-collection"
+          ? await client.getYoutubeCollectionReport(finalRun.run_id)
+          : await client.getYoutubeVideoReport(finalRun.run_id),
+      );
       setRunStatus("succeeded");
       updateWorkflowRun(localRun.id, (run) => workflowRunFromRunRecord(run, finalRun));
       setLastRun(runRecordToCliRun(finalRun, client.label, activeWorkflow.name));
@@ -370,7 +423,7 @@ function App() {
       }));
       setLastRun({
         command: "studio-api",
-        args: [activeWorkflow.name, "youtube-video"],
+        args: [activeWorkflow.name, workflowKind],
         status: "failed",
         exit_code: null,
         output_files: [form.output],
@@ -486,6 +539,14 @@ function App() {
                   )}
                   onClick={() => {
                     setSelectedUseCase(useCase.id);
+                    setForm((current) => ({
+                      ...current,
+                      sourceMode: useCase.id === "youtube-collection" ? "collection" : "url",
+                      workDir:
+                        useCase.id === "youtube-collection"
+                          ? "use-case-output/youtube-collection"
+                          : "use-case-output/youtube-video",
+                    }));
                     navigateToPage("analysis");
                   }}
                   title={useCase.name}
@@ -624,8 +685,14 @@ function App() {
                   className="aspect-[16/9] w-full rounded-md object-cover"
                 />
                 <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-zinc-600">
-                  <Metric label="Scenes" value={String(report.video.scenes.length)} />
-                  <Metric label="Frames" value={String(report.video.frames_processed)} />
+                  <Metric
+                    label={collectionReport ? "Items" : "Scenes"}
+                    value={String(collectionReport?.items.length ?? videoReport.video.scenes.length)}
+                  />
+                  <Metric
+                    label={collectionReport ? "Analyzed" : "Frames"}
+                    value={String(collectionReport?.collection.analyzed_items ?? videoReport.video.frames_processed)}
+                  />
                 </div>
               </div>
             )}
@@ -649,7 +716,7 @@ function App() {
                       ? activeWorkflow.name
                       : page === "settings"
                         ? "Hotkeys and workflow type colors"
-                        : report.source.local_video}
+                        : reportTitle}
                   </p>
                 </div>
                 {page === "analysis" && (
@@ -762,13 +829,13 @@ function App() {
               />
             ) : (
               <section className="min-w-0 space-y-4">
-                {viewMode === "overview" && <Overview report={report} />}
+                {viewMode === "overview" && (collectionReport ? <CollectionDashboard report={collectionReport} /> : <Overview report={videoReport} />)}
                 {viewMode === "result" && (
                   <ResultPageEditor report={report} layout={dashboardLayout} onLayoutChange={setDashboardLayout} />
                 )}
-                {viewMode === "scenes" && <Scenes report={report} />}
-                {viewMode === "signals" && <Signals report={report} />}
-                {viewMode === "data" && <Data report={report} />}
+                {viewMode === "scenes" && (collectionReport ? <CollectionDashboard report={collectionReport} /> : <Scenes report={videoReport} />)}
+                {viewMode === "signals" && (collectionReport ? <CollectionDashboard report={collectionReport} /> : <Signals report={videoReport} />)}
+                {viewMode === "data" && (collectionReport ? <CollectionDashboard report={collectionReport} /> : <Data report={videoReport} />)}
               </section>
             )}
           </div>
@@ -852,7 +919,7 @@ function RunWorkspace({
   onCreateWorkflow: () => void;
   onEditWorkflow: () => void;
   onFocusWorkflowInput: (input: WorkflowRunInput) => void;
-  onLoadReport: (report: YoutubeVideoReport) => void;
+  onLoadReport: (report: StudioReport) => void;
 }) {
   return (
     <div className="grid gap-4 xl:grid-cols-[420px_1fr]">
@@ -886,7 +953,7 @@ function RunWorkspace({
           runDisabled={runDisabled}
           validationMessage={validationMessage}
         />
-        <JsonReportLoader<YoutubeVideoReport> label="Load report JSON" onLoad={onLoadReport} />
+        <JsonReportLoader<StudioReport> label="Load report JSON" onLoad={onLoadReport} />
       </section>
       <section className="min-w-0 space-y-4">
         <CliRunPanel run={cliRun} />
@@ -1058,7 +1125,12 @@ type PortType =
   | "boolean_value"
   | "array_value"
   | "youtube_url"
+  | "youtube_collection_url"
   | "video_file"
+  | "collection_manifest"
+  | "collection_item"
+  | "collection_report"
+  | "collection_table"
   | "video_metadata"
   | "video_frame"
   | "audio_frame"
@@ -1193,7 +1265,7 @@ interface SavedWorkflowRun {
   updatedAt: string;
   status: RunStatus;
   inputSummary: string;
-  request: YoutubeRunRequest;
+  request: YoutubeRunRequest | YoutubeCollectionRunRequest;
   backendRunId?: string;
   reportPath?: string;
   message?: string | null;
@@ -1314,7 +1386,12 @@ const portTypes: PortType[] = [
   "boolean_value",
   "array_value",
   "youtube_url",
+  "youtube_collection_url",
   "video_file",
+  "collection_manifest",
+  "collection_item",
+  "collection_report",
+  "collection_table",
   "video_metadata",
   "video_frame",
   "audio_frame",
@@ -1343,7 +1420,12 @@ const defaultPortTypeColors: PortTypeColors = {
   boolean_value: "#ca8a04",
   array_value: "#9333ea",
   youtube_url: "#0ea5e9",
+  youtube_collection_url: "#0284c7",
   video_file: "#f59e0b",
+  collection_manifest: "#0f766e",
+  collection_item: "#059669",
+  collection_report: "#2563eb",
+  collection_table: "#4f46e5",
   video_metadata: "#d97706",
   video_frame: "#10b981",
   audio_frame: "#06b6d4",
@@ -1369,6 +1451,10 @@ const dataValueCompatibleSourceTypes: PortType[] = [
   "boolean_value",
   "array_value",
   "object_value",
+  "collection_manifest",
+  "collection_item",
+  "collection_report",
+  "collection_table",
   "data_value",
   "data_record",
   "data_bucket",
@@ -1431,6 +1517,7 @@ const initialWorkflowNodes: WorkflowNodeModel[] = [
     inputs: [],
     outputs: [
       port("url", "youtube url", "youtube_url"),
+      port("collection", "playlist/channel", "youtube_collection_url"),
       port("file", "local file", "video_file"),
     ],
   }),
@@ -1453,12 +1540,53 @@ const initialWorkflowNodes: WorkflowNodeModel[] = [
     inputs: [
       port("args", "cargo args", "run_config"),
       port("url", "youtube url", "youtube_url"),
+      port("collection", "playlist/channel", "youtube_collection_url"),
       port("file", "local file", "video_file"),
     ],
     outputs: [
       port("url", "youtube url", "youtube_url"),
+      port("collection", "playlist/channel", "youtube_collection_url"),
       port("file", "video file", "video_file"),
       port("config", "pipeline config", "run_config"),
+    ],
+  }),
+  workflowNode("collection-manifest", 1080, -250, {
+    title: "Collection Manifest",
+    packageName: "yt-dlp",
+    description: "Discovers playlist or channel metadata and emits stable item IDs before download.",
+    tone: "cyan",
+    inputs: [port("url", "playlist/channel", "youtube_collection_url")],
+    outputs: [
+      port("manifest", "manifest", "collection_manifest"),
+      port("items", "items", "collection_item"),
+    ],
+  }),
+  workflowNode("collection-download-loop", 1440, -250, {
+    title: "Collection Download Loop",
+    packageName: "studio-core",
+    description: "Filters manifest items, downloads each selected video, and preserves item identity.",
+    tone: "cyan",
+    inputs: [
+      port("manifest", "manifest", "collection_manifest"),
+      port("config", "filters", "run_config"),
+    ],
+    outputs: [
+      port("files", "video files", "video_file"),
+      port("items", "downloaded items", "collection_item"),
+    ],
+  }),
+  workflowNode("collection-report", 2920, -250, {
+    title: "Collection Report Writer",
+    packageName: "serde_json",
+    description: "Writes the item-centric collection report and derived table-ready data.",
+    tone: "zinc",
+    inputs: [
+      port("items", "items", "collection_item"),
+      port("reports", "item reports", "json_report"),
+    ],
+    outputs: [
+      port("report", "collection report", "collection_report"),
+      port("table", "collection table", "collection_table"),
     ],
   }),
   workflowNode("download", 1080, 30, {
@@ -2031,9 +2159,16 @@ const initialWorkflowEdges: Edge[] = [
   workflowEdge("react-page", "run", "vite-api", "run"),
   workflowEdge("react-page", "config", "vite-api", "config"),
   workflowEdge("source", "url", "use-case", "url"),
+  workflowEdge("source", "collection", "use-case", "collection"),
   workflowEdge("source", "file", "use-case", "file"),
   workflowEdge("vite-api", "args", "use-case", "args"),
   workflowEdge("use-case", "url", "download", "url"),
+  workflowEdge("use-case", "collection", "collection-manifest", "url"),
+  workflowEdge("collection-manifest", "manifest", "collection-download-loop", "manifest"),
+  workflowEdge("use-case", "config", "collection-download-loop", "config"),
+  workflowEdge("collection-download-loop", "files", "ffmpeg", "file"),
+  workflowEdge("collection-download-loop", "items", "collection-report", "items"),
+  workflowEdge("report-writer", "report", "collection-report", "reports"),
   workflowEdge("use-case", "file", "ffmpeg", "file"),
   workflowEdge("download", "file", "ffmpeg", "file"),
   workflowEdge("use-case", "config", "video-pipeline", "config"),
@@ -2065,6 +2200,7 @@ const initialWorkflowEdges: Edge[] = [
   workflowEdge("report-writer", "report", "disk-result-sink", "report"),
   workflowEdge("report-writer", "report", "database-result-sink", "report"),
   workflowEdge("report-writer", "report", "http-result-sink", "report"),
+  workflowEdge("collection-report", "report", "dashboard", "report"),
 ];
 
 function WorkflowBuilder({
@@ -4859,7 +4995,7 @@ function persistSavedWorkflowRuns(runs: SavedWorkflowRun[]) {
 
 function createSavedWorkflowRun(
   workflow: SavedWorkflow,
-  request: YoutubeRunRequest,
+  request: YoutubeRunRequest | YoutubeCollectionRunRequest,
   inputSummary: string,
 ): SavedWorkflowRun {
   const createdAt = new Date().toISOString();
@@ -5084,7 +5220,7 @@ function isSavedWorkflowRun(value: unknown): value is SavedWorkflowRun {
     typeof value.updatedAt === "string" &&
     isRunStatus(value.status) &&
     typeof value.inputSummary === "string" &&
-    isYoutubeRunRequest(value.request) &&
+    (isYoutubeRunRequest(value.request) || isYoutubeCollectionRunRequest(value.request)) &&
     backendRunIdValid &&
     reportPathValid &&
     messageValid
@@ -5284,6 +5420,35 @@ function isYoutubeRunRequest(value: unknown): value is YoutubeRunRequest {
     (value.max_frames === undefined || value.max_frames === null || typeof value.max_frames === "number") &&
     typeof value.visual_sample_every === "number" &&
     typeof value.transcription.enabled === "boolean"
+  );
+}
+
+function isYoutubeCollectionRunRequest(value: unknown): value is YoutubeCollectionRunRequest {
+  if (!isRecord(value) || !isRecord(value.metadata_filter) || !isRecord(value.local_file_filter) || !isRecord(value.analysis)) {
+    return false;
+  }
+  const sourceValid = value.source === undefined || value.source === null || isYoutubeCollectionSource(value.source);
+  return (
+    sourceValid &&
+    (value.manifest === undefined || value.manifest === null || isRecord(value.manifest)) &&
+    (value.work_dir === undefined || value.work_dir === null || typeof value.work_dir === "string") &&
+    (value.max_items === undefined || value.max_items === null || typeof value.max_items === "number") &&
+    typeof value.analysis.scene_threshold === "number" &&
+    typeof value.analysis.min_scene_len === "number" &&
+    typeof value.analysis.visual_sample_every === "number" &&
+    isRecord(value.analysis.transcription) &&
+    typeof value.analysis.transcription.enabled === "boolean" &&
+    isRecord(value.analysis.models)
+  );
+}
+
+function isYoutubeCollectionSource(value: unknown): value is YoutubeCollectionRunRequest["source"] {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.url === "string" &&
+    (value.kind === "playlist_url" || value.kind === "channel_url" || value.kind === "youtube_url")
   );
 }
 
@@ -6180,6 +6345,9 @@ function deriveWorkflowRunInputModel(workflow: SavedWorkflow): WorkflowRunInputM
   if (inputs.some((input) => input.port.type === "youtube_url")) {
     sourceModes.push("url");
   }
+  if (inputs.some((input) => input.port.type === "youtube_collection_url")) {
+    sourceModes.push("collection");
+  }
   if (inputs.some((input) => input.port.type === "video_file")) {
     sourceModes.push("file");
   }
@@ -6228,7 +6396,7 @@ function isWorkflowInputProviderNode(node: SavedWorkflowBlockNode, incomingNodes
 }
 
 function isExecutableWorkflowInputType(type: PortType): boolean {
-  return type === "youtube_url" || type === "video_file" || type === "run_config";
+  return type === "youtube_url" || type === "youtube_collection_url" || type === "video_file" || type === "run_config";
 }
 
 function effectiveSourceMode(form: UseCaseForm, inputModel?: WorkflowRunInputModel): SourceMode {
@@ -6259,10 +6427,16 @@ function UseCaseControls({
     onChange({ ...form, [key]: value });
   const setWorkflowInput = (key: string, value: string) =>
     onChange({ ...form, workflowInputs: { ...form.workflowInputs, [key]: value } });
-  const sourceModes = inputModel.sourceModes.length > 0 ? inputModel.sourceModes : (["url", "file"] as SourceMode[]);
-  const selectedSourceMode = effectiveSourceMode(form, inputModel);
+  const sourceModes =
+    form.sourceMode === "collection"
+      ? (["collection"] as SourceMode[])
+      : inputModel.sourceModes.length > 0
+        ? inputModel.sourceModes
+        : (["url", "file"] as SourceMode[]);
+  const selectedSourceMode = form.sourceMode === "collection" ? "collection" : effectiveSourceMode(form, inputModel);
   const showSourceSelector = sourceModes.length > 1;
   const urlInput = workflowRunInputForType(inputModel, "youtube_url");
+  const collectionInput = workflowRunInputForType(inputModel, "youtube_collection_url");
   const fileInput = workflowRunInputForType(inputModel, "video_file");
   const runConfigInput = workflowRunInputForType(inputModel, "run_config");
 
@@ -6275,12 +6449,111 @@ function UseCaseControls({
         {showSourceSelector && (
           <SegmentedControl<SourceMode>
             value={selectedSourceMode}
-            options={sourceModes.map((mode): [SourceMode, string] => [mode, mode === "url" ? "URL" : "File"])}
+            options={sourceModes.map((mode): [SourceMode, string] => [
+              mode,
+              mode === "url" ? "URL" : mode === "file" ? "File" : "Collection",
+            ])}
             onChange={(value) => set("sourceMode", value)}
           />
         )}
 
-        {selectedSourceMode === "url" ? (
+        {selectedSourceMode === "collection" ? (
+          <>
+            <Field
+              label="Playlist or channel URL"
+              action={<RunInputFocusButton input={collectionInput} onFocus={onFocusWorkflowInput} />}
+            >
+              <input
+                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={form.url}
+                placeholder="https://www.youtube.com/playlist?list=..."
+                onChange={(event) => onChange({ ...form, sourceMode: "collection", url: event.target.value })}
+              />
+            </Field>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Max items">
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={form.collectionMaxItems}
+                  onChange={(event) => set("collectionMaxItems", event.target.value)}
+                />
+              </Field>
+              <Field label="Already downloaded">
+                <select
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={form.alreadyDownloaded}
+                  onChange={(event) => set("alreadyDownloaded", event.target.value as UseCaseForm["alreadyDownloaded"])}
+                >
+                  <option value="reuse">Reuse</option>
+                  <option value="skip">Skip</option>
+                  <option value="include">Include</option>
+                </select>
+              </Field>
+            </div>
+            <Field label="Title contains">
+              <input
+                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={form.collectionTitleContains}
+                placeholder="optional"
+                onChange={(event) => set("collectionTitleContains", event.target.value)}
+              />
+            </Field>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Metadata duration min">
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={form.collectionDurationMin}
+                  onChange={(event) => set("collectionDurationMin", event.target.value)}
+                />
+              </Field>
+              <Field label="Metadata duration max">
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={form.collectionDurationMax}
+                  onChange={(event) => set("collectionDurationMax", event.target.value)}
+                />
+              </Field>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Local duration min">
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={form.localDurationMin}
+                  onChange={(event) => set("localDurationMin", event.target.value)}
+                />
+              </Field>
+              <Field label="Local duration max">
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={form.localDurationMax}
+                  onChange={(event) => set("localDurationMax", event.target.value)}
+                />
+              </Field>
+            </div>
+            <Field label="Local extensions">
+              <input
+                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={form.localExtensions}
+                onChange={(event) => set("localExtensions", event.target.value)}
+              />
+            </Field>
+          </>
+        ) : selectedSourceMode === "url" ? (
           <Field
             label={workflowInputFieldLabel("YouTube URL", urlInput)}
             action={<RunInputFocusButton input={urlInput} onFocus={onFocusWorkflowInput} />}
@@ -6607,6 +6880,36 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 function buildCommand(form: UseCaseForm, inputModel?: WorkflowRunInputModel): string[] {
+  if (form.sourceMode === "collection") {
+    const command = [
+      "studio-api",
+      "POST",
+      "/api/workflows/youtube-collection/runs",
+      "--url",
+      form.url,
+      "--work-dir",
+      form.workDir,
+      "--max-items",
+      form.collectionMaxItems || "all",
+    ];
+    if (form.collectionTitleContains.trim()) {
+      command.push("--title-contains", form.collectionTitleContains.trim());
+    }
+    if (form.collectionDurationMin.trim()) {
+      command.push("--metadata-duration-min", form.collectionDurationMin.trim());
+    }
+    if (form.collectionDurationMax.trim()) {
+      command.push("--metadata-duration-max", form.collectionDurationMax.trim());
+    }
+    if (form.localDurationMin.trim()) {
+      command.push("--local-duration-min", form.localDurationMin.trim());
+    }
+    if (form.localDurationMax.trim()) {
+      command.push("--local-duration-max", form.localDurationMax.trim());
+    }
+    command.push("--already-downloaded", form.alreadyDownloaded);
+    return command;
+  }
   const sourceMode = effectiveSourceMode(form, inputModel);
   const command = [
     "studio-api",
@@ -6670,6 +6973,44 @@ function buildYoutubeRunRequest(form: UseCaseForm, inputModel?: WorkflowRunInput
   };
 }
 
+function buildYoutubeCollectionRunRequest(form: UseCaseForm): YoutubeCollectionRunRequest {
+  return {
+    source: { kind: youtubeCollectionSourceKind(form.url), url: form.url.trim() },
+    manifest: null,
+    metadata_filter: {
+      title_contains: form.collectionTitleContains.trim() || null,
+      title_excludes: [],
+      duration_seconds_min: optionalNumber(form.collectionDurationMin),
+      duration_seconds_max: optionalNumber(form.collectionDurationMax),
+      already_downloaded: form.alreadyDownloaded,
+    },
+    local_file_filter: {
+      duration_seconds_min: optionalNumber(form.localDurationMin),
+      duration_seconds_max: optionalNumber(form.localDurationMax),
+      extension_allowlist: parseCsv(form.localExtensions),
+      failed_probe_behavior: "failed",
+    },
+    analysis: {
+      scene_threshold: form.sceneThreshold,
+      min_scene_len: form.minSceneLen,
+      max_frames: form.maxFrames.trim() ? Number(form.maxFrames.trim()) : null,
+      visual_sample_every: form.visualSampleEvery,
+      transcription: {
+        enabled: !form.skipTranscription,
+        command: null,
+      },
+      models: {
+        object: commandConfig(form.objectCommand),
+        ocr: commandConfig(form.ocrCommand),
+        text: commandConfig(form.textCommand),
+      },
+    },
+    delete_filtered_downloads: false,
+    work_dir: form.workDir.trim() || null,
+    max_items: optionalInteger(form.collectionMaxItems),
+  };
+}
+
 function formFromYoutubeRunRequest(request: YoutubeRunRequest): UseCaseForm {
   return {
     ...initialForm,
@@ -6688,7 +7029,35 @@ function formFromYoutubeRunRequest(request: YoutubeRunRequest): UseCaseForm {
   };
 }
 
+function formFromYoutubeCollectionRunRequest(request: YoutubeCollectionRunRequest): UseCaseForm {
+  return {
+    ...initialForm,
+    sourceMode: "collection",
+    url: request.source?.url ?? "",
+    workDir: request.work_dir ?? "use-case-output/youtube-collection",
+    sceneThreshold: request.analysis.scene_threshold,
+    minSceneLen: request.analysis.min_scene_len,
+    maxFrames: request.analysis.max_frames ? String(request.analysis.max_frames) : "",
+    visualSampleEvery: request.analysis.visual_sample_every,
+    skipTranscription: !request.analysis.transcription.enabled,
+    objectCommand: commandConfigToInput(request.analysis.models.object),
+    ocrCommand: commandConfigToInput(request.analysis.models.ocr),
+    textCommand: commandConfigToInput(request.analysis.models.text),
+    collectionMaxItems: request.max_items ? String(request.max_items) : "",
+    collectionTitleContains: request.metadata_filter.title_contains ?? "",
+    collectionDurationMin: request.metadata_filter.duration_seconds_min ? String(request.metadata_filter.duration_seconds_min) : "",
+    collectionDurationMax: request.metadata_filter.duration_seconds_max ? String(request.metadata_filter.duration_seconds_max) : "",
+    localDurationMin: request.local_file_filter.duration_seconds_min ? String(request.local_file_filter.duration_seconds_min) : "",
+    localDurationMax: request.local_file_filter.duration_seconds_max ? String(request.local_file_filter.duration_seconds_max) : "",
+    localExtensions: request.local_file_filter.extension_allowlist?.join(",") ?? initialForm.localExtensions,
+    alreadyDownloaded: request.metadata_filter.already_downloaded ?? "reuse",
+  };
+}
+
 function workflowInputSummaryFromForm(form: UseCaseForm, inputModel?: WorkflowRunInputModel): string {
+  if (form.sourceMode === "collection") {
+    return form.url.trim() || "YouTube collection";
+  }
   if (effectiveSourceMode(form, inputModel) === "url") {
     return form.url.trim() || "YouTube URL";
   }
@@ -6705,6 +7074,38 @@ function commandConfigToInput(config: YoutubeRunRequest["models"]["object"]): st
     return "";
   }
   return [config.command, ...config.args].filter(Boolean).join(" ");
+}
+
+function youtubeCollectionSourceKind(url: string): "playlist_url" | "channel_url" | "youtube_url" {
+  const normalized = url.toLowerCase();
+  if (normalized.includes("/channel/") || normalized.includes("/@") || normalized.includes("/c/") || normalized.includes("/user/")) {
+    return "channel_url";
+  }
+  if (normalized.includes("list=") || normalized.includes("/playlist")) {
+    return "playlist_url";
+  }
+  return "youtube_url";
+}
+
+function optionalNumber(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function optionalInteger(value: string): number | null {
+  const parsed = optionalNumber(value);
+  return parsed == null ? null : Math.max(1, Math.floor(parsed));
+}
+
+function parseCsv(value: string): string[] {
+  return value
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
 }
 
 function runRecordToCliRun(run: RunRecord, clientLabel: string, workflowName: string): CliRun {
@@ -6729,11 +7130,14 @@ function workflowRunToCliRun(run: SavedWorkflowRun): CliRun {
   };
 }
 
-function reportPathForRequest(request: YoutubeRunRequest): string {
+function reportPathForRequest(request: YoutubeRunRequest | YoutubeCollectionRunRequest): string {
+  if (isYoutubeCollectionRunRequest(request)) {
+    return request.work_dir ? `${request.work_dir.replace(/\/$/, "")}/collection-analysis.json` : "collection-analysis.json";
+  }
   return request.work_dir ? `${request.work_dir.replace(/\/$/, "")}/analysis.json` : initialForm.output;
 }
 
-function downloadReport(report: YoutubeVideoReport) {
+function downloadReport(report: StudioReport) {
   const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -6744,6 +7148,36 @@ function downloadReport(report: YoutubeVideoReport) {
 }
 
 function getRunValidation(form: UseCaseForm, inputModel?: WorkflowRunInputModel): string | null {
+  if (form.sourceMode === "collection") {
+    const url = form.url.trim();
+    if (!url) {
+      return "Enter a YouTube playlist or channel URL.";
+    }
+    try {
+      const parsed = new URL(url);
+      const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+      if (!["youtube.com", "m.youtube.com", "youtu.be", "music.youtube.com"].includes(host)) {
+        return "Use a youtube.com or youtu.be URL.";
+      }
+      if (!["http:", "https:"].includes(parsed.protocol)) {
+        return "Use an http or https URL.";
+      }
+    } catch {
+      return "Enter a valid YouTube URL.";
+    }
+    for (const [label, value] of [
+      ["Max items", form.collectionMaxItems],
+      ["Metadata duration min", form.collectionDurationMin],
+      ["Metadata duration max", form.collectionDurationMax],
+      ["Local duration min", form.localDurationMin],
+      ["Local duration max", form.localDurationMax],
+    ] as const) {
+      if (value.trim() && Number(value) < 0) {
+        return `${label} must be non-negative.`;
+      }
+    }
+    return null;
+  }
   const sourceMode = effectiveSourceMode(form, inputModel);
   if (sourceMode === "url") {
     const url = form.url.trim();

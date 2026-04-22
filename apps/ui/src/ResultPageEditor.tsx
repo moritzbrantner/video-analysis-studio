@@ -10,8 +10,12 @@ import {
 } from "react";
 import {
   AssetSummary,
+  CollectionDashboard,
+  CollectionObjectBrowser,
+  CollectionSummaryCards,
   DataBucketOverview,
   EventList,
+  FlattenedCollectionTable,
   ModelObservationGrid,
   ObservationList,
   ResultPersistencePanel,
@@ -20,8 +24,10 @@ import {
   SplitPlanTable,
   TranscriptPanel,
   VideoSummaryCards,
+  type StudioReport,
   type YoutubeVideoReport,
 } from "./index";
+import { isYoutubeCollectionReport, isYoutubeVideoReport } from "./api/client";
 
 export type DashboardWidgetId =
   | "summary"
@@ -32,6 +38,9 @@ export type DashboardWidgetId =
   | "audio-events"
   | "text-events"
   | "data-buckets"
+  | "collection-summary"
+  | "collection-browser"
+  | "collection-table"
   | "result-delivery"
   | "split-plan"
   | "diagnostics";
@@ -63,7 +72,11 @@ type DashboardDataKind =
   | "data_bucket"
   | "model_prediction"
   | "video_frame"
-  | "json_report";
+  | "json_report"
+  | "collection_manifest"
+  | "collection_item"
+  | "collection_report"
+  | "collection_table";
 
 interface DragPayload {
   source: "palette" | "layout";
@@ -79,6 +92,9 @@ const widgetOptions: Array<{ id: DashboardWidgetId; label: string; dataKinds: Da
   { id: "audio-events", label: "Audio Events", dataKinds: ["audio_event"] },
   { id: "text-events", label: "Text Events", dataKinds: ["text_event"] },
   { id: "data-buckets", label: "Data Buckets", dataKinds: ["data_bucket"] },
+  { id: "collection-summary", label: "Collection Summary", dataKinds: ["collection_report"] },
+  { id: "collection-browser", label: "Collection Browser", dataKinds: ["collection_item"] },
+  { id: "collection-table", label: "Collection Table", dataKinds: ["collection_table"] },
   { id: "result-delivery", label: "Save Results", dataKinds: ["json_report"] },
   { id: "split-plan", label: "Split Plan", dataKinds: ["scene_result"] },
   {
@@ -122,7 +138,7 @@ export function ResultPageEditor({
   layout,
   onLayoutChange,
 }: {
-  report: YoutubeVideoReport;
+  report: StudioReport;
   layout: DashboardLayout;
   onLayoutChange: (layout: DashboardLayout) => void;
 }) {
@@ -316,7 +332,7 @@ function DashboardLayoutNode({
 }: {
   node: DashboardLayout;
   path: number[];
-  report: YoutubeVideoReport;
+  report: StudioReport;
   canRemove: boolean;
   currentDragPayload: DragPayload | null;
   onDragWidget: (event: ReactDragEvent<HTMLElement>, widgetId: DashboardWidgetId) => void;
@@ -376,7 +392,7 @@ function SplitPane({
 }: {
   node: Extract<DashboardLayout, { type: "split" }>;
   path: number[];
-  report: YoutubeVideoReport;
+  report: StudioReport;
   canRemove: boolean;
   currentDragPayload: DragPayload | null;
   onDragWidget: (event: ReactDragEvent<HTMLElement>, widgetId: DashboardWidgetId) => void;
@@ -438,7 +454,7 @@ function ResultWidgetPanel({
   onRemoveWidget,
 }: {
   widgetId: DashboardWidgetId;
-  report: YoutubeVideoReport;
+  report: StudioReport;
   canRemove: boolean;
   currentDragPayload: DragPayload | null;
   onDragWidget: (event: ReactDragEvent<HTMLElement>, widgetId: DashboardWidgetId) => void;
@@ -691,7 +707,32 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-function renderWidget(widgetId: DashboardWidgetId, report: YoutubeVideoReport) {
+function renderWidget(widgetId: DashboardWidgetId, report: StudioReport) {
+  if (isYoutubeCollectionReport(report)) {
+    switch (widgetId) {
+      case "collection-summary":
+      case "summary":
+        return <CollectionSummaryCards report={report} />;
+      case "collection-browser":
+        return <CollectionObjectBrowser report={report} />;
+      case "collection-table":
+      case "data-buckets":
+        return <FlattenedCollectionTable report={report} />;
+      case "result-delivery":
+        return (
+          <ResultPersistencePanel
+            result={report}
+            defaultFilename={basename(report.assets.report_path) || "collection-analysis.json"}
+            defaultLabel={report.collection.title ?? "Collection analysis"}
+          />
+        );
+      default:
+        return <CollectionDashboard report={report} />;
+    }
+  }
+  if (!isYoutubeVideoReport(report)) {
+    return null;
+  }
   switch (widgetId) {
     case "summary":
       return <VideoSummaryCards video={report.video} />;
@@ -719,6 +760,10 @@ function renderWidget(widgetId: DashboardWidgetId, report: YoutubeVideoReport) {
       return <EventList events={report.text.events} title={`Text Events (${report.text.status})`} />;
     case "data-buckets":
       return <DataBucketOverview buckets={report.data_buckets} />;
+    case "collection-summary":
+    case "collection-browser":
+    case "collection-table":
+      return <DiagnosticsPanel report={report} />;
     case "result-delivery":
       return (
         <ResultPersistencePanel

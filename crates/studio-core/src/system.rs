@@ -55,11 +55,17 @@ fn dependency_status(name: &str, required: bool) -> DependencyStatus {
 
 fn dependency_status_for_path(command: &Path, required: bool) -> DependencyStatus {
     let resolved_path = resolve_command(command);
+    let name = command.to_string_lossy().into_owned();
+    let version_arg = if name.ends_with("yt-dlp") {
+        "--version"
+    } else {
+        "-version"
+    };
     let available = resolved_path
         .as_ref()
         .map(|path| {
             Command::new(path)
-                .arg("-version")
+                .arg(version_arg)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -68,19 +74,41 @@ fn dependency_status_for_path(command: &Path, required: bool) -> DependencyStatu
                 .unwrap_or(true)
         })
         .unwrap_or(false);
-    let name = command.to_string_lossy().into_owned();
+    let message = if available {
+        dependency_warning_message(command, &name)
+    } else if required {
+        Some(format!("{name} is required"))
+    } else {
+        Some(format!("{name} is optional"))
+    };
     DependencyStatus {
         name: name.clone(),
         required,
         available,
         resolved_path,
-        message: if available {
-            None
-        } else if required {
-            Some(format!("{name} is required"))
-        } else {
-            Some(format!("{name} is optional"))
-        },
+        message,
+    }
+}
+
+fn dependency_warning_message(command: &Path, name: &str) -> Option<String> {
+    if !name.ends_with("yt-dlp") {
+        return None;
+    }
+    let output = Command::new(command)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if version.as_str() < "2026.03.17" {
+        Some(format!(
+            "yt-dlp {version} is installed; 2026.03.17 or newer is recommended for collection discovery"
+        ))
+    } else {
+        None
     }
 }
 

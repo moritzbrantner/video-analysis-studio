@@ -10,7 +10,8 @@ use axum::{Json, Router};
 use futures::Stream;
 use serde::Serialize;
 use studio_core::{
-    check_system_dependencies, RunEvent, RunId, RunManager, StudioError, WorkflowKind,
+    check_system_dependencies, discover_youtube_collection_manifest, RunEvent, RunId, RunManager,
+    StudioError, WorkflowKind, YoutubeCollectionManifestRequest, YoutubeCollectionRunRequest,
     YoutubeRunRequest,
 };
 use tokio_stream::wrappers::BroadcastStream;
@@ -30,8 +31,16 @@ pub fn build_app(manager: RunManager) -> Router {
         .route("/api/system/dependencies", get(system_dependencies))
         .route("/api/workflows", get(workflows))
         .route(
+            "/api/youtube/collection-manifests",
+            post(discover_collection_manifest),
+        )
+        .route(
             "/api/workflows/youtube-video/runs",
             post(start_youtube_video_run),
+        )
+        .route(
+            "/api/workflows/youtube-collection/runs",
+            post(start_youtube_collection_run),
         )
         .route("/api/runs/{run_id}", get(get_run))
         .route("/api/runs/{run_id}/events", get(get_events))
@@ -56,11 +65,24 @@ async fn system_dependencies() -> Json<studio_core::SystemDependencyReport> {
 }
 
 async fn workflows() -> Json<Vec<WorkflowDescriptor>> {
-    Json(vec![WorkflowDescriptor {
-        id: "youtube-video",
-        name: "YouTube Video",
-        kind: WorkflowKind::YoutubeVideo,
-    }])
+    Json(vec![
+        WorkflowDescriptor {
+            id: "youtube-video",
+            name: "YouTube Video",
+            kind: WorkflowKind::YoutubeVideo,
+        },
+        WorkflowDescriptor {
+            id: "youtube-collection",
+            name: "YouTube Collection",
+            kind: WorkflowKind::YoutubeCollection,
+        },
+    ])
+}
+
+async fn discover_collection_manifest(
+    Json(request): Json<YoutubeCollectionManifestRequest>,
+) -> Result<Json<studio_core::YoutubeCollectionManifest>, ApiError> {
+    Ok(Json(discover_youtube_collection_manifest(request)?))
 }
 
 async fn start_youtube_video_run(
@@ -68,6 +90,13 @@ async fn start_youtube_video_run(
     Json(request): Json<YoutubeRunRequest>,
 ) -> Result<Json<studio_core::RunRecord>, ApiError> {
     Ok(Json(state.manager.start_youtube_video(request).await?))
+}
+
+async fn start_youtube_collection_run(
+    State(state): State<AppState>,
+    Json(request): Json<YoutubeCollectionRunRequest>,
+) -> Result<Json<studio_core::RunRecord>, ApiError> {
+    Ok(Json(state.manager.start_youtube_collection(request).await?))
 }
 
 async fn get_run(
@@ -80,7 +109,7 @@ async fn get_run(
 async fn get_report(
     State(state): State<AppState>,
     Path(run_id): Path<RunId>,
-) -> Result<Json<studio_core::YoutubeVideoReport>, ApiError> {
+) -> Result<Json<studio_core::StudioReport>, ApiError> {
     Ok(Json(state.manager.get_report(run_id).await?))
 }
 
@@ -194,6 +223,62 @@ mod tests {
                             "scene_threshold": 27,
                             "min_scene_len": 15,
                             "visual_sample_every": 30
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn invalid_collection_manifest_request_returns_400() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = build_app(RunManager::new(dir.path().to_path_buf()));
+        let response = app
+            .oneshot(
+                Request::post("/api/youtube/collection-manifests")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "source": { "kind": "playlist_url", "url": "https://example.com/playlist" },
+                            "metadata_filter": {},
+                            "metadata_depth": "fast",
+                            "max_items": 25
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn invalid_collection_run_request_returns_400() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = build_app(RunManager::new(dir.path().to_path_buf()));
+        let response = app
+            .oneshot(
+                Request::post("/api/workflows/youtube-collection/runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "source": null,
+                            "manifest": null,
+                            "metadata_filter": {},
+                            "local_file_filter": {},
+                            "analysis": {
+                                "scene_threshold": 27,
+                                "min_scene_len": 15,
+                                "visual_sample_every": 30,
+                                "transcription": { "enabled": true },
+                                "models": {}
+                            },
+                            "delete_filtered_downloads": false
                         })
                         .to_string(),
                     ))

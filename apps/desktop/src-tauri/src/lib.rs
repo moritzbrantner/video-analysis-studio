@@ -3,7 +3,8 @@ mod commands;
 use std::path::PathBuf;
 
 use commands::{
-    cancel_run, check_dependencies, get_report, get_run, start_youtube_video_run, StudioState,
+    cancel_run, check_dependencies, discover_youtube_collection_manifest_command, get_report,
+    get_run, start_youtube_collection_run, start_youtube_video_run, StudioState,
 };
 use studio_core::RunManager;
 use tauri::Manager;
@@ -24,7 +25,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             check_dependencies,
+            discover_youtube_collection_manifest_command,
             start_youtube_video_run,
+            start_youtube_collection_run,
             get_run,
             get_report,
             cancel_run
