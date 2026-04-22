@@ -1169,6 +1169,34 @@ interface WorkflowContextMenuState {
   nodeIds: string[];
 }
 
+interface WorkflowOutputConnectorMenuState {
+  x: number;
+  y: number;
+  sourceNodeId: string;
+  sourceHandle: string;
+  sourcePort: FlowPort;
+}
+
+interface WorkflowBlockOpenInput {
+  nodeId: string;
+  nodeTitle: string;
+  port: FlowPort;
+}
+
+interface WorkflowPrimitiveConnectorTarget {
+  template: WorkflowNodeModel;
+  input: FlowPort;
+}
+
+interface WorkflowSavedBlockConnectorTarget {
+  block: SavedWorkflowBlock;
+  input: WorkflowBlockOpenInput;
+}
+
+interface WorkflowOutputConnectorContextValue {
+  onOutputDoubleClick: (event: React.MouseEvent, nodeId: string, portValue: FlowPort) => void;
+}
+
 type WorkflowComponentDragPayload =
   | { type: "primitive"; id: string }
   | { type: "block"; id: string };
@@ -1286,6 +1314,9 @@ const defaultHotkeyBindings: HotkeyBindings = {
 };
 
 const PortTypeColorContext = React.createContext<PortTypeColors>(defaultPortTypeColors);
+const WorkflowOutputConnectorContext = React.createContext<WorkflowOutputConnectorContextValue>({
+  onOutputDoubleClick: () => undefined,
+});
 
 const initialWorkflowNodes: WorkflowNodeModel[] = [
   workflowNode("react-page", 0, 180, {
@@ -1569,6 +1600,7 @@ function WorkflowBuilder({
   const [blockTags, setBlockTags] = useState("");
   const [blockLibraryMessage, setBlockLibraryMessage] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<WorkflowContextMenuState | null>(null);
+  const [outputConnectorMenu, setOutputConnectorMenu] = useState<WorkflowOutputConnectorMenuState | null>(null);
   const [componentSearch, setComponentSearch] = useState("");
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<WorkflowNodeModel, Edge> | null>(null);
   const [workflowNameDraft, setWorkflowNameDraft] = useState(activeWorkflow.name);
@@ -1590,6 +1622,7 @@ function WorkflowBuilder({
     setEdges(nextState.edges);
     setSelectedNodeIds([]);
     setContextMenu(null);
+    setOutputConnectorMenu(null);
   }, [activeWorkflow.id, setEdges, setNodes]);
 
   useEffect(() => {
@@ -1678,6 +1711,7 @@ function WorkflowBuilder({
       setEdges(nextState.edges);
       setSelectedNodeIds([]);
       setContextMenu(null);
+      setOutputConnectorMenu(null);
     },
     [commitWorkflowLibrary, setEdges, setNodes, workflowLibrary],
   );
@@ -1694,6 +1728,7 @@ function WorkflowBuilder({
     setEdges([]);
     setSelectedNodeIds([]);
     setContextMenu(null);
+    setOutputConnectorMenu(null);
     setBlockLibraryMessage("Created blank workflow");
   }, [commitWorkflowLibrary, setEdges, setNodes, workflowLibrary]);
 
@@ -1710,6 +1745,7 @@ function WorkflowBuilder({
     setEdges(nextState.edges);
     setSelectedNodeIds([]);
     setContextMenu(null);
+    setOutputConnectorMenu(null);
     setBlockLibraryMessage("Cloned workflow");
   }, [activeWorkflow.name, commitWorkflowLibrary, edges, nodes, setEdges, setNodes, workflowLibrary]);
 
@@ -1742,6 +1778,7 @@ function WorkflowBuilder({
         setEdges(nextState.edges);
         setSelectedNodeIds([]);
         setContextMenu(null);
+        setOutputConnectorMenu(null);
       }
       setBlockLibraryMessage("Deleted workflow");
     },
@@ -1825,6 +1862,7 @@ function WorkflowBuilder({
       setEdges(nextState.edges);
       setSelectedNodeIds([]);
       setContextMenu(null);
+      setOutputConnectorMenu(null);
       setWorkflowNameDraft(version.name);
       setBlockLibraryMessage(`Restored ${version.name} v${version.version}`);
     },
@@ -1845,6 +1883,7 @@ function WorkflowBuilder({
     setBlockTags("");
     setBlockLibraryMessage("Saved component");
     setContextMenu(null);
+    setOutputConnectorMenu(null);
   }, [blockName, blockTags, edges]);
 
   const saveSelectedBlock = useCallback(() => {
@@ -1870,6 +1909,7 @@ function WorkflowBuilder({
       setBlockTags("");
       setBlockLibraryMessage(`Grouped ${grouped.groupedNodeCount} components`);
       setContextMenu(null);
+      setOutputConnectorMenu(null);
     },
     [blockName, edges, nodes, setEdges, setNodes],
   );
@@ -1907,6 +1947,7 @@ function WorkflowBuilder({
       setSelectedNodeIds(restored.restoredNodeIds);
       setBlockLibraryMessage(`Ungrouped ${restored.restoredNodeIds.length} components`);
       setContextMenu(null);
+      setOutputConnectorMenu(null);
     },
     [edges, nodes, setEdges, setNodes],
   );
@@ -1918,6 +1959,7 @@ function WorkflowBuilder({
       setEdges((currentEdges) => currentEdges.filter((edge) => !ids.has(edge.source) && !ids.has(edge.target)));
       setSelectedNodeIds([]);
       setContextMenu(null);
+      setOutputConnectorMenu(null);
     },
     [setEdges, setNodes],
   );
@@ -1939,6 +1981,7 @@ function WorkflowBuilder({
         ),
       );
       setContextMenu(null);
+      setOutputConnectorMenu(null);
     },
     [setNodes],
   );
@@ -1959,6 +2002,7 @@ function WorkflowBuilder({
       );
       setSelectedNodeIds([nodeId]);
       setContextMenu(null);
+      setOutputConnectorMenu(null);
     },
     [setNodes],
   );
@@ -1973,6 +2017,7 @@ function WorkflowBuilder({
       });
       setEdges((currentEdges) => currentEdges.concat(instance.edges));
       setSelectedNodeIds(instance.nodes.map((node) => node.id));
+      setOutputConnectorMenu(null);
     },
     [nodes, setEdges, setNodes],
   );
@@ -1985,6 +2030,7 @@ function WorkflowBuilder({
     workflowClipboardRef.current = clipboard;
     setBlockLibraryMessage(`Copied ${selectedNodes.length} component${selectedNodes.length === 1 ? "" : "s"}`);
     setContextMenu(null);
+    setOutputConnectorMenu(null);
     return true;
   }, [edges, selectedNodes]);
 
@@ -2009,6 +2055,7 @@ function WorkflowBuilder({
     setSelectedNodeIds(instance.nodes.map((node) => node.id));
     setBlockLibraryMessage(`Pasted ${instance.nodes.length} component${instance.nodes.length === 1 ? "" : "s"}`);
     setContextMenu(null);
+    setOutputConnectorMenu(null);
     return instance.nodes.length > 0;
   }, [setEdges, setNodes]);
 
@@ -2068,6 +2115,7 @@ function WorkflowBuilder({
         setEdges(workflow.edges);
         setSelectedNodeIds([]);
         setContextMenu(null);
+        setOutputConnectorMenu(null);
         setBlockLibraryMessage(`Loaded workflow updated ${formatWorkflowTimestamp(workflow.lastUpdated)}`);
       } catch (error) {
         setBlockLibraryMessage(error instanceof Error ? error.message : "Could not load workflow");
@@ -2089,6 +2137,124 @@ function WorkflowBuilder({
   const filteredSavedBlocks = useMemo(
     () => filterSavedWorkflowBlocks(savedBlocks, componentSearch),
     [componentSearch, savedBlocks],
+  );
+  const outputConnectorPrimitiveTargets = useMemo(
+    () =>
+      outputConnectorMenu
+        ? workflowPrimitiveConnectorTargets(initialWorkflowNodes, outputConnectorMenu.sourcePort.type)
+        : [],
+    [outputConnectorMenu?.sourcePort.type],
+  );
+  const outputConnectorSavedBlockTargets = useMemo(
+    () =>
+      outputConnectorMenu
+        ? workflowSavedBlockConnectorTargets(savedBlocks, outputConnectorMenu.sourcePort.type)
+        : [],
+    [outputConnectorMenu?.sourcePort.type, savedBlocks],
+  );
+  const openOutputConnectorMenu = useCallback(
+    (event: React.MouseEvent, nodeId: string, portValue: FlowPort) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setContextMenu(null);
+      setOutputConnectorMenu({
+        x: event.clientX,
+        y: event.clientY,
+        sourceNodeId: nodeId,
+        sourceHandle: handleId("out", portValue),
+        sourcePort: { ...portValue },
+      });
+    },
+    [],
+  );
+  const outputConnectorContextValue = useMemo<WorkflowOutputConnectorContextValue>(
+    () => ({ onOutputDoubleClick: openOutputConnectorMenu }),
+    [openOutputConnectorMenu],
+  );
+  const connectOutputToPrimitive = useCallback(
+    (template: WorkflowNodeModel, targetPort: FlowPort) => {
+      if (!outputConnectorMenu) {
+        return;
+      }
+      const sourceNode = nodes.find((node) => node.id === outputConnectorMenu.sourceNodeId);
+      if (!sourceNode) {
+        setOutputConnectorMenu(null);
+        return;
+      }
+
+      const nodeId = createWorkflowNodeInstanceId(template.id);
+      const position = connectedWorkflowNodePosition(sourceNode, nodes);
+      const nextNode: WorkflowNodeModel = {
+        id: nodeId,
+        type: "workflow",
+        position,
+        data: cloneWorkflowNodeData(template.data),
+        selected: true,
+      };
+      const edge = workflowEdgeFromConnection(
+        {
+          source: outputConnectorMenu.sourceNodeId,
+          sourceHandle: outputConnectorMenu.sourceHandle,
+          target: nodeId,
+          targetHandle: handleId("in", targetPort),
+        },
+        outputConnectorMenu.sourcePort.type,
+      );
+
+      setNodes((currentNodes) => {
+        const nextNodes: WorkflowNodeModel[] = currentNodes.map((node) => ({ ...node, selected: false }));
+        return nextNodes.concat(nextNode);
+      });
+      setEdges((currentEdges) => dedupeEdges(currentEdges.concat(edge)));
+      setSelectedNodeIds([nodeId]);
+      setOutputConnectorMenu(null);
+      setContextMenu(null);
+    },
+    [nodes, outputConnectorMenu, setEdges, setNodes],
+  );
+  const connectOutputToSavedBlock = useCallback(
+    (block: SavedWorkflowBlock, targetInput: WorkflowBlockOpenInput) => {
+      if (!outputConnectorMenu) {
+        return;
+      }
+      const sourceNode = nodes.find((node) => node.id === outputConnectorMenu.sourceNodeId);
+      if (!sourceNode) {
+        setOutputConnectorMenu(null);
+        return;
+      }
+
+      const instance = instantiateSavedWorkflowBlock(block, connectedWorkflowNodePosition(sourceNode, nodes));
+      const targetNodeId = instance.idByOriginalId.get(targetInput.nodeId);
+      const targetNode = targetNodeId ? instance.nodes.find((node) => node.id === targetNodeId) : null;
+      const targetPort = targetNode?.data.inputs.find(
+        (input) => input.id === targetInput.port.id && input.type === targetInput.port.type,
+      );
+      if (!targetNode || !targetPort) {
+        setOutputConnectorMenu(null);
+        return;
+      }
+
+      const edge = workflowEdgeFromConnection(
+        {
+          source: outputConnectorMenu.sourceNodeId,
+          sourceHandle: outputConnectorMenu.sourceHandle,
+          target: targetNode.id,
+          targetHandle: handleId("in", targetPort),
+        },
+        outputConnectorMenu.sourcePort.type,
+      );
+
+      setNodes((currentNodes) =>
+        currentNodes
+          .map((node) => ({ ...node, selected: false }))
+          .concat(instance.nodes.map((node) => ({ ...node, selected: true }))),
+      );
+      setEdges((currentEdges) => dedupeEdges(currentEdges.concat(instance.edges, edge)));
+      setSelectedNodeIds(instance.nodes.map((node) => node.id));
+      setOutputConnectorMenu(null);
+      setContextMenu(null);
+    },
+    [nodes, outputConnectorMenu, setEdges, setNodes],
   );
   const dropComponent = useCallback(
     (event: React.DragEvent) => {
@@ -2185,7 +2351,8 @@ function WorkflowBuilder({
 
   return (
     <PortTypeColorContext.Provider value={portTypeColors}>
-      <section className="grid min-h-[760px] gap-4 xl:grid-cols-[300px_minmax(0,1fr)_340px]" style={portTypeColorStyle}>
+      <WorkflowOutputConnectorContext.Provider value={outputConnectorContextValue}>
+        <section className="grid min-h-[760px] gap-4 xl:grid-cols-[300px_minmax(0,1fr)_340px]" style={portTypeColorStyle}>
         <WorkflowComponentSelector
           search={componentSearch}
           onSearchChange={setComponentSearch}
@@ -2254,6 +2421,7 @@ function WorkflowBuilder({
                   setEdges(initialWorkflowEdges);
                   setSelectedNodeIds([]);
                   setContextMenu(null);
+                  setOutputConnectorMenu(null);
                 }}
                 title="Reset workflow"
               >
@@ -2272,10 +2440,14 @@ function WorkflowBuilder({
               onConnect={onConnect}
               isValidConnection={isValidConnection}
               onSelectionChange={onSelectionChange}
-              onPaneClick={() => setContextMenu(null)}
+              onPaneClick={() => {
+                setContextMenu(null);
+                setOutputConnectorMenu(null);
+              }}
               onNodeContextMenu={(event, node) => {
                 event.preventDefault();
                 const nodeIds = selectedNodeIds.includes(node.id) ? selectedNodeIds : [node.id];
+                setOutputConnectorMenu(null);
                 setContextMenu({ x: event.clientX, y: event.clientY, nodeIds });
               }}
               onInit={setFlowInstance}
@@ -2318,6 +2490,18 @@ function WorkflowBuilder({
                   onClose={() => setContextMenu(null)}
                 />
               )}
+              {outputConnectorMenu && (
+                <WorkflowOutputConnectorMenu
+                  x={outputConnectorMenu.x}
+                  y={outputConnectorMenu.y}
+                  sourcePort={outputConnectorMenu.sourcePort}
+                  primitiveTargets={outputConnectorPrimitiveTargets}
+                  savedBlockTargets={outputConnectorSavedBlockTargets}
+                  onSelectPrimitive={connectOutputToPrimitive}
+                  onSelectSavedBlock={connectOutputToSavedBlock}
+                  onClose={() => setOutputConnectorMenu(null)}
+                />
+              )}
             </ReactFlow>
           </div>
         </section>
@@ -2353,7 +2537,8 @@ function WorkflowBuilder({
           onSaveWorkflowVersion={saveActiveWorkflowVersion}
           onRestoreWorkflowVersion={restoreWorkflowVersion}
         />
-      </section>
+        </section>
+      </WorkflowOutputConnectorContext.Provider>
     </PortTypeColorContext.Provider>
   );
 }
@@ -3428,7 +3613,7 @@ function restoreWorkflowGroup(
 function instantiateSavedWorkflowBlock(
   block: SavedWorkflowBlock,
   anchor: { x: number; y: number },
-): { nodes: WorkflowNodeModel[]; edges: Edge[] } {
+): { nodes: WorkflowNodeModel[]; edges: Edge[]; idByOriginalId: Map<string, string> } {
   const instanceId = createWorkflowBlockId();
   const idByOriginalId = new Map(block.nodes.map((node) => [node.id, `${instanceId}-${safeFlowId(node.id)}`]));
   const nodes = block.nodes.map((node) => ({
@@ -3466,7 +3651,7 @@ function instantiateSavedWorkflowBlock(
     ];
   });
 
-  return { nodes, edges };
+  return { nodes, edges, idByOriginalId };
 }
 
 function cloneWorkflowNodeData(data: WorkflowNodeData): WorkflowNodeData {
@@ -3552,6 +3737,30 @@ function nextBlockAnchor(nodes: WorkflowNodeModel[]): { x: number; y: number } {
   const maxX = Math.max(...nodes.map((node) => node.position.x));
   const minY = Math.min(...nodes.map((node) => node.position.y));
   return { x: maxX + 420, y: Math.max(40, minY) };
+}
+
+function connectedWorkflowNodePosition(sourceNode: WorkflowNodeModel, nodes: WorkflowNodeModel[]): { x: number; y: number } {
+  const sourceSize = normalizedWorkflowNodeSize(sourceNode.data.size);
+  const sourceWidth = sourceNode.data.minimized ? 230 : sourceSize?.width ?? defaultWorkflowNodeWidth;
+  const basePosition = {
+    x: sourceNode.position.x + sourceWidth + 140,
+    y: sourceNode.position.y,
+  };
+  return avoidOccupiedWorkflowPosition(basePosition, nodes);
+}
+
+function avoidOccupiedWorkflowPosition(position: { x: number; y: number }, nodes: WorkflowNodeModel[]): { x: number; y: number } {
+  let y = position.y;
+  for (let attempts = 0; attempts < 12; attempts += 1) {
+    const occupied = nodes.some(
+      (node) => Math.abs(node.position.x - position.x) < 90 && Math.abs(node.position.y - y) < 90,
+    );
+    if (!occupied) {
+      return { x: position.x, y };
+    }
+    y += 96;
+  }
+  return { x: position.x, y };
 }
 
 function defaultWorkflowBlockName(nodes: WorkflowNodeModel[]): string {
@@ -4553,6 +4762,7 @@ function MinimizedPortHandles({
 }
 
 function MinimizedPortHandleStack({
+  nodeId,
   direction,
   ports,
   isConnectable,
@@ -4564,6 +4774,7 @@ function MinimizedPortHandleStack({
 }) {
   const isInput = direction === "in";
   const colors = usePortTypeColors();
+  const { onOutputDoubleClick } = React.useContext(WorkflowOutputConnectorContext);
 
   return (
     <>
@@ -4576,6 +4787,13 @@ function MinimizedPortHandleStack({
             position={isInput ? Position.Left : Position.Right}
             id={handleId(direction, port)}
             isConnectable={isConnectable}
+            onDoubleClick={
+              isInput
+                ? undefined
+                : (event) => {
+                    onOutputDoubleClick(event, nodeId, port);
+                  }
+            }
             className="!h-3 !w-3 !border-2 !border-white"
             style={{
               backgroundColor: color,
@@ -4627,6 +4845,7 @@ function PortColumn({
 }
 
 function PortRow({
+  nodeId,
   direction,
   port,
   isConnectable,
@@ -4638,6 +4857,7 @@ function PortRow({
 }) {
   const isInput = direction === "in";
   const colors = usePortTypeColors();
+  const { onOutputDoubleClick } = React.useContext(WorkflowOutputConnectorContext);
   const color = portTypeColor(port.type, colors);
 
   return (
@@ -4654,6 +4874,13 @@ function PortRow({
         position={isInput ? Position.Left : Position.Right}
         id={handleId(direction, port)}
         isConnectable={isConnectable}
+        onDoubleClick={
+          isInput
+            ? undefined
+            : (event) => {
+                onOutputDoubleClick(event, nodeId, port);
+              }
+        }
         className="!h-3 !w-3 !border-2 !border-white"
         style={{
           backgroundColor: color,
@@ -4736,6 +4963,124 @@ function WorkflowContextMenu({
         <ContextMenuButton onClick={onClose}>Close</ContextMenuButton>
       </div>
     </div>
+  );
+}
+
+function WorkflowOutputConnectorMenu({
+  x,
+  y,
+  sourcePort,
+  primitiveTargets,
+  savedBlockTargets,
+  onSelectPrimitive,
+  onSelectSavedBlock,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  sourcePort: FlowPort;
+  primitiveTargets: WorkflowPrimitiveConnectorTarget[];
+  savedBlockTargets: WorkflowSavedBlockConnectorTarget[];
+  onSelectPrimitive: (template: WorkflowNodeModel, input: FlowPort) => void;
+  onSelectSavedBlock: (block: SavedWorkflowBlock, input: WorkflowBlockOpenInput) => void;
+  onClose: () => void;
+}) {
+  const colors = usePortTypeColors();
+  const color = portTypeColor(sourcePort.type, colors);
+  const hasTargets = primitiveTargets.length > 0 || savedBlockTargets.length > 0;
+
+  return (
+    <div
+      className="fixed z-50 w-72 overflow-hidden rounded-lg border border-zinc-200 bg-white text-sm shadow-xl"
+      style={clampedFixedPosition(x, y, 288, 420)}
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      <div className="flex items-center justify-between gap-3 border-b border-zinc-100 px-3 py-2">
+        <div className="min-w-0">
+          <div className="text-[11px] font-semibold uppercase text-zinc-500">Connect output</div>
+          <div className="mt-1 flex items-center gap-2">
+            <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+            <span className="min-w-0 truncate text-xs font-semibold text-zinc-900">
+              {sourcePort.label} · {formatPortType(sourcePort.type)}
+            </span>
+          </div>
+        </div>
+        <button
+          type="button"
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+          onClick={onClose}
+          title="Close"
+          aria-label="Close"
+        >
+          <CloseIcon className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="max-h-96 overflow-auto py-1">
+        {!hasTargets && <div className="px-3 py-3 text-xs text-zinc-400">No compatible components</div>}
+        {primitiveTargets.length > 0 && (
+          <div>
+            <div className="px-3 py-2 text-[11px] font-semibold uppercase text-zinc-500">Library</div>
+            {primitiveTargets.map(({ template, input }) => (
+              <ConnectorMenuButton
+                key={`primitive-${template.id}-${input.id}`}
+                title={template.data.title}
+                subtitle={template.data.packageName}
+                detail={input.label}
+                tone={template.data.tone}
+                onClick={() => onSelectPrimitive(template, input)}
+              />
+            ))}
+          </div>
+        )}
+        {savedBlockTargets.length > 0 && (
+          <div className={classNames(primitiveTargets.length > 0 && "border-t border-zinc-100")}>
+            <div className="px-3 py-2 text-[11px] font-semibold uppercase text-zinc-500">Reusable</div>
+            {savedBlockTargets.map(({ block, input }) => (
+              <ConnectorMenuButton
+                key={`block-${block.id}-${input.nodeId}-${input.port.id}`}
+                title={block.name}
+                subtitle={`${block.nodes.length} components`}
+                detail={`${input.nodeTitle}: ${input.port.label}`}
+                onClick={() => onSelectSavedBlock(block, input)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ConnectorMenuButton({
+  title,
+  subtitle,
+  detail,
+  tone = "zinc",
+  onClick,
+}: {
+  title: string;
+  subtitle: string;
+  detail: string;
+  tone?: FlowTone;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="flex w-full items-start gap-2 px-3 py-2 text-left text-xs hover:bg-zinc-50"
+      onClick={onClick}
+      title={`${title} - ${detail}`}
+    >
+      <span className={classNames("mt-1 h-2.5 w-2.5 shrink-0 rounded-full", flowToneClass(tone))} />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-semibold text-zinc-900">{title}</span>
+        <span className="mt-0.5 block truncate text-[11px] text-zinc-500">{subtitle}</span>
+        <span className="mt-1 block truncate text-[11px] font-medium text-zinc-700">{detail}</span>
+      </span>
+      <PlusIcon className="mt-0.5 h-4 w-4 shrink-0 text-zinc-400" />
+    </button>
   );
 }
 
@@ -5532,6 +5877,16 @@ function pathForAppPage(page: AppPage): string {
   }
 }
 
+function clampedFixedPosition(x: number, y: number, width: number, height: number): React.CSSProperties {
+  if (typeof window === "undefined") {
+    return { left: x, top: y };
+  }
+  return {
+    left: Math.max(8, Math.min(x, window.innerWidth - width - 8)),
+    top: Math.max(8, Math.min(y, window.innerHeight - height - 8)),
+  };
+}
+
 function filterWorkflowNodeTemplates(nodes: WorkflowNodeModel[], query: string): WorkflowNodeModel[] {
   const normalized = query.trim().toLowerCase();
   if (!normalized) {
@@ -5549,6 +5904,44 @@ function filterWorkflowNodeTemplates(nodes: WorkflowNodeModel[], query: string):
       .join(" ")
       .toLowerCase()
       .includes(normalized),
+  );
+}
+
+function workflowPrimitiveConnectorTargets(
+  nodes: WorkflowNodeModel[],
+  type: PortType,
+): WorkflowPrimitiveConnectorTarget[] {
+  return nodes.flatMap((template) => {
+    const input = template.data.inputs.find((portValue) => portValue.type === type);
+    return input ? [{ template, input }] : [];
+  });
+}
+
+function workflowSavedBlockConnectorTargets(
+  blocks: SavedWorkflowBlock[],
+  type: PortType,
+): WorkflowSavedBlockConnectorTarget[] {
+  return blocks.flatMap((block) => {
+    const input = savedWorkflowBlockOpenInputs(block).find((candidate) => candidate.port.type === type);
+    return input ? [{ block, input }] : [];
+  });
+}
+
+function savedWorkflowBlockOpenInputs(block: SavedWorkflowBlock): WorkflowBlockOpenInput[] {
+  const incomingHandles = new Set(
+    block.edges
+      .filter((edge) => edge.targetHandle)
+      .map((edge) => `${edge.target}:${edge.targetHandle}`),
+  );
+
+  return block.nodes.flatMap((node) =>
+    node.data.inputs
+      .filter((input) => !incomingHandles.has(`${node.id}:${handleId("in", input)}`))
+      .map((input) => ({
+        nodeId: node.id,
+        nodeTitle: node.data.title,
+        port: input,
+      })),
   );
 }
 
