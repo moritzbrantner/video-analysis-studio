@@ -1154,6 +1154,7 @@ interface FlowPort {
   label: string;
   type: PortType;
   optional?: boolean;
+  stream?: boolean;
 }
 
 interface WorkflowNodeSize {
@@ -1283,6 +1284,7 @@ interface WorkflowGroupBoundary {
   nodeId: string;
   handle: string | null | undefined;
   type: PortType;
+  stream?: boolean;
 }
 
 interface WorkflowGroupMetadata {
@@ -1466,6 +1468,40 @@ const dataValueCompatibleSourceTypes: PortType[] = [
   "transcript_segment",
   "audio_event",
   "text_event",
+];
+
+const streamablePortTypes: PortType[] = [
+  "collection_item",
+  "video_file",
+  "video_frame",
+  "audio_frame",
+  "scene_result",
+  "video_observation",
+  "model_request",
+  "model_prediction",
+  "transcript_segment",
+  "audio_event",
+  "text_event",
+  "data_value",
+  "data_record",
+  "data_bucket",
+];
+
+const streamBridgePortDescriptors: Array<{ id: string; label: string; type: PortType }> = [
+  { id: "collection_item", label: "collection items", type: "collection_item" },
+  { id: "video_file", label: "video files", type: "video_file" },
+  { id: "video_frame", label: "video frames", type: "video_frame" },
+  { id: "audio_frame", label: "audio frames", type: "audio_frame" },
+  { id: "scene_result", label: "scenes", type: "scene_result" },
+  { id: "video_observation", label: "observations", type: "video_observation" },
+  { id: "model_request", label: "model requests", type: "model_request" },
+  { id: "model_prediction", label: "predictions", type: "model_prediction" },
+  { id: "transcript_segment", label: "transcript segments", type: "transcript_segment" },
+  { id: "audio_event", label: "audio events", type: "audio_event" },
+  { id: "text_event", label: "text events", type: "text_event" },
+  { id: "data_value", label: "data values", type: "data_value" },
+  { id: "data_record", label: "records", type: "data_record" },
+  { id: "data_bucket", label: "buckets", type: "data_bucket" },
 ];
 
 const hotkeyActions: Array<{
@@ -2045,6 +2081,33 @@ const generatorWorkflowNodes: WorkflowNodeModel[] = [
   }),
 ];
 
+const streamWorkflowNodes: WorkflowNodeModel[] = [
+  workflowNode("stream-sender", 0, 0, {
+    title: "Stream Sender",
+    packageName: "video-analysis-data",
+    description: "Publishes a compatible data payload as a typed stream for chunked downstream processing.",
+    category: "Data",
+    tone: "slate",
+    inputs: streamBridgePortDescriptors.map(({ id, label, type }) => port(id, label, type, { optional: true })),
+    outputs: streamBridgePortDescriptors.map(({ id, label, type }) =>
+      port(id, `${label} stream`, type, { optional: true, stream: true }),
+    ),
+    tags: ["stream", "sender", "publish", "data", "chunked"],
+  }),
+  workflowNode("stream-receiver", 0, 0, {
+    title: "Stream Receiver",
+    packageName: "video-analysis-data",
+    description: "Receives a typed stream and exposes the materialized payload to compatible workflow nodes.",
+    category: "Data",
+    tone: "cyan",
+    inputs: streamBridgePortDescriptors.map(({ id, label, type }) =>
+      port(id, `${label} stream`, type, { optional: true, stream: true }),
+    ),
+    outputs: streamBridgePortDescriptors.map(({ id, label, type }) => port(id, label, type, { optional: true })),
+    tags: ["stream", "receiver", "subscribe", "data", "chunked"],
+  }),
+];
+
 const controlFlowWorkflowNodes: WorkflowNodeModel[] = [
   workflowNode("boolean-not", 0, 0, {
     title: "Boolean NOT",
@@ -2152,6 +2215,7 @@ const controlFlowWorkflowNodes: WorkflowNodeModel[] = [
 const workflowNodeTemplates: WorkflowNodeModel[] = initialWorkflowNodes.concat(
   dashboardWorkflowNodes,
   generatorWorkflowNodes,
+  streamWorkflowNodes,
   controlFlowWorkflowNodes,
 );
 
@@ -2335,12 +2399,12 @@ function WorkflowBuilder({
     (connection: Connection) => {
       const sourcePort = findPort(nodes, connection.source, connection.sourceHandle, "out");
       const targetPort = findPort(nodes, connection.target, connection.targetHandle, "in");
-      if (!sourcePort || !targetPort || !portTypesCompatible(sourcePort.type, targetPort.type)) {
+      if (!sourcePort || !targetPort || !portsCompatible(sourcePort, targetPort)) {
         return;
       }
       setEdges((currentEdges) =>
         addEdge(
-          workflowEdgeFromConnection(connection, sourcePort.type),
+          workflowEdgeFromConnection(connection, sourcePort),
           currentEdges,
         ),
       );
@@ -2837,16 +2901,16 @@ function WorkflowBuilder({
   const outputConnectorPrimitiveTargets = useMemo(
     () =>
       outputConnectorMenu
-        ? workflowPrimitiveConnectorTargets(workflowNodeTemplates, outputConnectorMenu.sourcePort.type)
+        ? workflowPrimitiveConnectorTargets(workflowNodeTemplates, outputConnectorMenu.sourcePort)
         : [],
-    [outputConnectorMenu?.sourcePort.type],
+    [outputConnectorMenu?.sourcePort],
   );
   const outputConnectorSavedBlockTargets = useMemo(
     () =>
       outputConnectorMenu
-        ? workflowSavedBlockConnectorTargets(savedBlocks, outputConnectorMenu.sourcePort.type)
+        ? workflowSavedBlockConnectorTargets(savedBlocks, outputConnectorMenu.sourcePort)
         : [],
-    [outputConnectorMenu?.sourcePort.type, savedBlocks],
+    [outputConnectorMenu?.sourcePort, savedBlocks],
   );
   const openOutputConnectorMenu = useCallback(
     (event: React.MouseEvent, nodeId: string, portValue: FlowPort) => {
@@ -2894,7 +2958,7 @@ function WorkflowBuilder({
           target: nodeId,
           targetHandle: handleId("in", targetPort),
         },
-        outputConnectorMenu.sourcePort.type,
+        outputConnectorMenu.sourcePort,
       );
 
       setNodes((currentNodes) => {
@@ -2937,7 +3001,7 @@ function WorkflowBuilder({
           target: targetNode.id,
           targetHandle: handleId("in", targetPort),
         },
-        outputConnectorMenu.sourcePort.type,
+        outputConnectorMenu.sourcePort,
       );
 
       setNodes((currentNodes) =>
@@ -3864,7 +3928,7 @@ function WorkflowPortList({ title, ports }: { title: string; ports: FlowPort[] }
             const color = portTypeColor(portValue.type, colors);
             return (
               <div
-                key={`${title}-${portValue.id}-${portValue.type}`}
+                key={`${title}-${portValue.id}-${portValue.type}-${portIsStream(portValue) ? "stream" : "value"}`}
                 className="rounded-md border px-3 py-2 text-xs"
                 style={{
                   backgroundColor: hexToRgba(color, 0.08),
@@ -3874,6 +3938,7 @@ function WorkflowPortList({ title, ports }: { title: string; ports: FlowPort[] }
                 <div className="font-medium text-zinc-900">{portValue.label}</div>
                 <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] font-semibold uppercase">
                   <span style={{ color: portTypeBadgeTextColor(color) }}>{formatPortType(portValue.type)}</span>
+                  {portIsStream(portValue) && <span className="text-zinc-900">stream</span>}
                   {portValue.optional && <span className="text-zinc-500">optional</span>}
                 </div>
               </div>
@@ -4209,7 +4274,13 @@ function createWorkflowGroup(
       if (!hasInternalEdge || hasIncomingEdge) {
         const wrapperPort = groupBoundaryPort("in", node, input);
         inputPorts.push(wrapperPort);
-        inputBoundaries.push({ wrapperPortId: wrapperPort.id, nodeId: node.id, handle, type: input.type });
+        inputBoundaries.push({
+          wrapperPortId: wrapperPort.id,
+          nodeId: node.id,
+          handle,
+          type: input.type,
+          ...(portIsStream(input) ? { stream: true } : {}),
+        });
       }
     }
 
@@ -4220,7 +4291,13 @@ function createWorkflowGroup(
       if (!hasInternalEdge || hasOutgoingEdge) {
         const wrapperPort = groupBoundaryPort("out", node, output);
         outputPorts.push(wrapperPort);
-        outputBoundaries.push({ wrapperPortId: wrapperPort.id, nodeId: node.id, handle, type: output.type });
+        outputBoundaries.push({
+          wrapperPortId: wrapperPort.id,
+          nodeId: node.id,
+          handle,
+          type: output.type,
+          ...(portIsStream(output) ? { stream: true } : {}),
+        });
       }
     }
   }
@@ -4282,7 +4359,7 @@ function createWorkflowGroup(
           target: groupId,
           targetHandle: handleId("in", wrapperPort),
         },
-        boundary.type,
+        wrapperPort,
       ),
     ];
   });
@@ -4303,7 +4380,7 @@ function createWorkflowGroup(
           target: edge.target,
           targetHandle: edge.targetHandle ?? null,
         },
-        boundary.type,
+        wrapperPort,
       ),
     ];
   });
@@ -4353,6 +4430,9 @@ function restoreWorkflowGroup(
     if (!source || !target) {
       return [];
     }
+    const sourcePort = findPort(restoredNodes, source, edge.sourceHandle, "out");
+    const targetPort = findPort(restoredNodes, target, edge.targetHandle, "in");
+    const edgePort = sourcePort ?? targetPort ?? "run_config";
     return [
       workflowEdgeFromConnection(
         {
@@ -4361,7 +4441,7 @@ function restoreWorkflowGroup(
           target,
           targetHandle: edge.targetHandle ?? null,
         },
-        parseHandleId(edge.sourceHandle ?? "")?.type ?? parseHandleId(edge.targetHandle ?? "")?.type ?? "run_config",
+        edgePort,
       ),
     ];
   });
@@ -4381,7 +4461,7 @@ function restoreWorkflowGroup(
             target,
             targetHandle: boundary.handle ?? null,
           },
-          boundary.type,
+          port(boundary.wrapperPortId, boundary.wrapperPortId, boundary.type, { stream: boundary.stream }),
         ),
       ];
     }
@@ -4400,7 +4480,7 @@ function restoreWorkflowGroup(
             target: edge.target,
             targetHandle: edge.targetHandle ?? null,
           },
-          boundary.type,
+          port(boundary.wrapperPortId, boundary.wrapperPortId, boundary.type, { stream: boundary.stream }),
         ),
       ];
     }
@@ -4442,7 +4522,7 @@ function instantiateSavedWorkflowBlock(
     }
     const sourcePort = findPort(nodes, source, edge.sourceHandle, "out");
     const targetPort = findPort(nodes, target, edge.targetHandle, "in");
-    const edgeType = sourcePort?.type ?? targetPort?.type ?? "run_config";
+    const edgePort = sourcePort ?? targetPort ?? "run_config";
     if (!nodeById.has(source) || !nodeById.has(target)) {
       return [];
     }
@@ -4454,7 +4534,7 @@ function instantiateSavedWorkflowBlock(
           sourceHandle: edge.sourceHandle ?? null,
           targetHandle: edge.targetHandle ?? null,
         },
-        edgeType,
+        edgePort,
       ),
     ];
   });
@@ -4517,6 +4597,7 @@ function groupBoundaryPort(direction: PortDirection, node: WorkflowNodeModel, po
     label: `${node.data.title}: ${portValue.label}`,
     type: portValue.type,
     optional: portValue.optional,
+    stream: portValue.stream,
   };
 }
 
@@ -4527,7 +4608,7 @@ function boundaryKey(nodeId: string, handle: string | null | undefined): string 
 function dedupePorts(ports: FlowPort[]): FlowPort[] {
   const seen = new Set<string>();
   return ports.filter((portValue) => {
-    const key = `${portValue.id}|${portValue.type}`;
+    const key = `${portValue.id}|${portValue.type}|${portIsStream(portValue) ? "stream" : "value"}`;
     if (seen.has(key)) {
       return false;
     }
@@ -4748,7 +4829,7 @@ function serializeWorkflowEdge(edge: Edge): SavedWorkflowBlockEdge {
 function restoreSavedWorkflowEdge(edge: SavedWorkflowBlockEdge, nodes: WorkflowNodeModel[]): Edge | null {
   const sourcePort = findPort(nodes, edge.source, edge.sourceHandle, "out");
   const targetPort = findPort(nodes, edge.target, edge.targetHandle, "in");
-  if (!sourcePort || !targetPort || !portTypesCompatible(sourcePort.type, targetPort.type)) {
+  if (!sourcePort || !targetPort || !portsCompatible(sourcePort, targetPort)) {
     return null;
   }
 
@@ -4759,7 +4840,7 @@ function restoreSavedWorkflowEdge(edge: SavedWorkflowBlockEdge, nodes: WorkflowN
       sourceHandle: edge.sourceHandle ?? null,
       targetHandle: edge.targetHandle ?? null,
     },
-    sourcePort.type,
+    sourcePort,
   );
 }
 
@@ -5331,23 +5412,32 @@ function isWorkflowGroupBoundary(value: unknown): value is WorkflowGroupBoundary
     return false;
   }
   const handleValid = value.handle === null || value.handle === undefined || typeof value.handle === "string";
+  const streamValid =
+    value.stream === undefined ||
+    (typeof value.stream === "boolean" && (!value.stream || isStreamablePortType(value.type as PortType)));
   return (
     typeof value.wrapperPortId === "string" &&
     typeof value.nodeId === "string" &&
     handleValid &&
     typeof value.type === "string" &&
-    isPortType(value.type)
+    isPortType(value.type) &&
+    streamValid
   );
 }
 
 function isFlowPort(value: unknown): value is FlowPort {
+  const streamValid =
+    isRecord(value) &&
+    (value.stream === undefined ||
+      (typeof value.stream === "boolean" && (!value.stream || isStreamablePortType(value.type as PortType))));
   return (
     isRecord(value) &&
     typeof value.id === "string" &&
     typeof value.label === "string" &&
     typeof value.type === "string" &&
     isPortType(value.type) &&
-    (value.optional === undefined || typeof value.optional === "boolean")
+    (value.optional === undefined || typeof value.optional === "boolean") &&
+    streamValid
   );
 }
 
@@ -5767,7 +5857,7 @@ function MinimizedPortHandleStack({
               right: isInput ? undefined : -7,
               top: `${((index + 1) / (ports.length + 1)) * 100}%`,
             }}
-            title={`${port.label} ${formatPortType(port.type)}`}
+            title={`${port.label} ${formatPortType(port.type, portIsStream(port))}`}
           />
         );
       })}
@@ -5877,6 +5967,11 @@ function PortRow({
           >
             {formatPortType(port.type)}
           </span>
+          {portIsStream(port) && (
+            <span className="rounded bg-zinc-950 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-white">
+              stream
+            </span>
+          )}
           {port.optional && (
             <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-zinc-500">
               optional
@@ -6001,7 +6096,7 @@ function WorkflowOutputConnectorMenu({
           <div className="mt-1 flex items-center gap-2">
             <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
             <span className="min-w-0 truncate text-xs font-semibold text-zinc-900">
-              {sourcePort.label} · {formatPortType(sourcePort.type)}
+              {sourcePort.label} · {formatPortType(sourcePort.type, portIsStream(sourcePort))}
             </span>
           </div>
         </div>
@@ -6127,8 +6222,14 @@ function workflowNode(id: string, x: number, y: number, data: WorkflowNodeData):
   };
 }
 
-function port(id: string, label: string, type: PortType, options: Pick<FlowPort, "optional"> = {}): FlowPort {
-  return options.optional ? { id, label, type, optional: true } : { id, label, type };
+function port(id: string, label: string, type: PortType, options: Pick<FlowPort, "optional" | "stream"> = {}): FlowPort {
+  return {
+    id,
+    label,
+    type,
+    ...(options.optional ? { optional: true } : {}),
+    ...(options.stream ? { stream: true } : {}),
+  };
 }
 
 function workflowEdge(source: string, sourcePortId: string, target: string, targetPortId: string): Edge {
@@ -6136,7 +6237,7 @@ function workflowEdge(source: string, sourcePortId: string, target: string, targ
   const targetNode = initialWorkflowNodes.find((node) => node.id === target);
   const sourcePort = sourceNode?.data.outputs.find((candidate) => candidate.id === sourcePortId);
   const targetPort = targetNode?.data.inputs.find((candidate) => candidate.id === targetPortId);
-  const type = sourcePort?.type ?? targetPort?.type ?? "run_config";
+  const portValue = sourcePort ?? targetPort ?? port("fallback", "fallback", "run_config");
 
   return workflowEdgeFromConnection(
     {
@@ -6145,18 +6246,20 @@ function workflowEdge(source: string, sourcePortId: string, target: string, targ
       sourceHandle: sourcePort ? handleId("out", sourcePort) : null,
       targetHandle: targetPort ? handleId("in", targetPort) : null,
     },
-    type,
+    portValue,
   );
 }
 
-function workflowEdgeFromConnection(connection: Connection | Edge, type: PortType): Edge {
+function workflowEdgeFromConnection(connection: Connection | Edge, portValue: FlowPort | PortType): Edge {
+  const type = typeof portValue === "string" ? portValue : portValue.type;
+  const stream = typeof portValue === "string" ? false : portIsStream(portValue);
   return {
     id: `${connection.source}-${connection.sourceHandle}-${connection.target}-${connection.targetHandle}`,
     source: connection.source ?? "",
     target: connection.target ?? "",
     sourceHandle: connection.sourceHandle,
     targetHandle: connection.targetHandle,
-    label: formatPortType(type),
+    label: formatPortType(type, stream),
     type: "smoothstep",
     markerEnd: { type: MarkerType.ArrowClosed, color: portTypeColorVar(type) },
     style: { stroke: portTypeColorVar(type), strokeWidth: 1.7 },
@@ -6171,11 +6274,33 @@ function compatibleConnection(nodes: WorkflowNodeModel[], connection: Connection
   }
   const sourcePort = findPort(nodes, connection.source, connection.sourceHandle, "out");
   const targetPort = findPort(nodes, connection.target, connection.targetHandle, "in");
-  return Boolean(sourcePort && targetPort && portTypesCompatible(sourcePort.type, targetPort.type));
+  return Boolean(sourcePort && targetPort && portsCompatible(sourcePort, targetPort));
 }
 
 function portTypesCompatible(sourceType: PortType, targetType: PortType): boolean {
   return sourceType === targetType || (targetType === "data_value" && dataValueCompatibleSourceTypes.includes(sourceType));
+}
+
+function portsCompatible(sourcePort: FlowPort, targetPort: FlowPort): boolean {
+  const streamConnection = portIsStream(sourcePort) || portIsStream(targetPort);
+  if (streamConnection) {
+    return (
+      portIsStream(sourcePort) &&
+      portIsStream(targetPort) &&
+      isStreamablePortType(sourcePort.type) &&
+      isStreamablePortType(targetPort.type) &&
+      portTypesCompatible(sourcePort.type, targetPort.type)
+    );
+  }
+  return portTypesCompatible(sourcePort.type, targetPort.type);
+}
+
+function isStreamablePortType(type: PortType): boolean {
+  return streamablePortTypes.includes(type);
+}
+
+function portIsStream(portValue: FlowPort): boolean {
+  return portValue.stream === true;
 }
 
 function findPort(
@@ -6212,8 +6337,8 @@ function isPortType(value: string | undefined): value is PortType {
   return portTypes.includes((value ?? "") as PortType);
 }
 
-function formatPortType(type: PortType): string {
-  return type.replace(/_/g, " ");
+function formatPortType(type: PortType, stream = false): string {
+  return `${type.replace(/_/g, " ")}${stream ? " stream" : ""}`;
 }
 
 function usePortTypeColors(): PortTypeColors {
@@ -7334,20 +7459,20 @@ function filterWorkflowNodeTemplates(nodes: WorkflowNodeModel[], query: string):
 
 function workflowPrimitiveConnectorTargets(
   nodes: WorkflowNodeModel[],
-  type: PortType,
+  sourcePort: FlowPort,
 ): WorkflowPrimitiveConnectorTarget[] {
   return nodes.flatMap((template) => {
-    const input = template.data.inputs.find((portValue) => portTypesCompatible(type, portValue.type));
+    const input = template.data.inputs.find((portValue) => portsCompatible(sourcePort, portValue));
     return input ? [{ template, input }] : [];
   });
 }
 
 function workflowSavedBlockConnectorTargets(
   blocks: SavedWorkflowBlock[],
-  type: PortType,
+  sourcePort: FlowPort,
 ): WorkflowSavedBlockConnectorTarget[] {
   return blocks.flatMap((block) => {
-    const input = savedWorkflowBlockOpenInputs(block).find((candidate) => portTypesCompatible(type, candidate.port.type));
+    const input = savedWorkflowBlockOpenInputs(block).find((candidate) => portsCompatible(sourcePort, candidate.port));
     return input ? [{ block, input }] : [];
   });
 }
