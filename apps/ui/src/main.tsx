@@ -126,6 +126,7 @@ function App() {
   const [workflowRuns, setWorkflowRuns] = useState<SavedWorkflowRun[]>(loadSavedWorkflowRuns);
   const [portTypeColors, setPortTypeColors] = useState<PortTypeColors>(loadPortTypeColors);
   const [hotkeyBindings, setHotkeyBindings] = useState<HotkeyBindings>(loadHotkeyBindings);
+  const [workflowFocusTarget, setWorkflowFocusTarget] = useState<WorkflowFocusTarget | null>(null);
   const [mainSidebarCollapsed, setMainSidebarCollapsed] = useState(() =>
     loadStoredBoolean(mainSidebarCollapsedStorageKey, false),
   );
@@ -222,6 +223,20 @@ function App() {
     navigateToPage("analysis");
     setViewMode("run");
   }, [navigateToPage]);
+
+  const focusWorkflowInput = useCallback(
+    (input: WorkflowRunInput) => {
+      setWorkflowFocusTarget({
+        workflowId: activeWorkflow.id,
+        nodeId: input.nodeId,
+        direction: input.source === "open" ? "in" : "out",
+        portId: input.port.id,
+        portType: input.port.type,
+      });
+      navigateToPage("workflow");
+    },
+    [activeWorkflow.id, navigateToPage],
+  );
 
   const deleteWorkflowDefinition = useCallback(
     (workflowId: string) => {
@@ -688,6 +703,7 @@ function App() {
                 onWorkflowLibraryChange={setWorkflowLibrary}
                 portTypeColors={portTypeColors}
                 hotkeyBindings={hotkeyBindings}
+                focusTarget={workflowFocusTarget?.workflowId === activeWorkflow.id ? workflowFocusTarget : null}
               />
             ) : page === "settings" ? (
               <SettingsPage
@@ -729,6 +745,7 @@ function App() {
                 onSelectWorkflow={activateWorkflowDefinition}
                 onCreateWorkflow={createWorkflowDefinition}
                 onEditWorkflow={() => navigateToPage("workflow")}
+                onFocusWorkflowInput={focusWorkflowInput}
                 onLoadReport={(nextReport) => {
                   setReport(nextReport);
                   setRunStatus("succeeded");
@@ -817,6 +834,7 @@ function RunWorkspace({
   onSelectWorkflow,
   onCreateWorkflow,
   onEditWorkflow,
+  onFocusWorkflowInput,
   onLoadReport,
 }: {
   form: UseCaseForm;
@@ -833,6 +851,7 @@ function RunWorkspace({
   onSelectWorkflow: (workflowId: string) => void;
   onCreateWorkflow: () => void;
   onEditWorkflow: () => void;
+  onFocusWorkflowInput: (input: WorkflowRunInput) => void;
   onLoadReport: (report: YoutubeVideoReport) => void;
 }) {
   return (
@@ -861,6 +880,7 @@ function RunWorkspace({
           form={form}
           inputModel={activeWorkflowInputModel}
           onChange={onFormChange}
+          onFocusWorkflowInput={onFocusWorkflowInput}
           onRun={onRun}
           isRunning={isRunning}
           runDisabled={runDisabled}
@@ -1056,10 +1076,19 @@ interface WorkflowRunInput {
 }
 
 interface WorkflowRunInputModel {
+  inputs: WorkflowRunInput[];
   sourceModes: SourceMode[];
   showRunConfig: boolean;
   openInputs: WorkflowRunInput[];
   genericInputs: WorkflowRunInput[];
+}
+
+interface WorkflowFocusTarget {
+  workflowId: string;
+  nodeId: string;
+  direction: PortDirection;
+  portId: string;
+  portType: PortType;
 }
 
 interface WorkflowNodeData extends Record<string, unknown> {
@@ -1341,6 +1370,7 @@ const PortTypeColorContext = React.createContext<PortTypeColors>(defaultPortType
 const WorkflowOutputConnectorContext = React.createContext<WorkflowOutputConnectorContextValue>({
   onOutputDoubleClick: () => undefined,
 });
+const WorkflowFocusContext = React.createContext<WorkflowFocusTarget | null>(null);
 
 const initialWorkflowNodes: WorkflowNodeModel[] = [
   workflowNode("react-page", 0, 180, {
@@ -1618,11 +1648,13 @@ function WorkflowBuilder({
   onWorkflowLibraryChange,
   portTypeColors,
   hotkeyBindings,
+  focusTarget,
 }: {
   workflowLibrary: SavedWorkflowLibrary;
   onWorkflowLibraryChange: React.Dispatch<React.SetStateAction<SavedWorkflowLibrary>>;
   portTypeColors: PortTypeColors;
   hotkeyBindings: HotkeyBindings;
+  focusTarget: WorkflowFocusTarget | null;
 }) {
   const activeWorkflow = useMemo(() => activeSavedWorkflow(workflowLibrary), [workflowLibrary]);
   const initialWorkflowState = useMemo(
@@ -1646,6 +1678,7 @@ function WorkflowBuilder({
   const workflowFileInputRef = useRef<HTMLInputElement | null>(null);
   const blockFileInputRef = useRef<HTMLInputElement | null>(null);
   const workflowClipboardRef = useRef<WorkflowClipboardState | null>(null);
+  const focusedWorkflowTargetRef = useRef<string | null>(null);
   const portTypeColorStyle = useMemo(() => portTypeColorsStyle(portTypeColors), [portTypeColors]);
 
   useEffect(() => {
@@ -1661,6 +1694,46 @@ function WorkflowBuilder({
     setContextMenu(null);
     setOutputConnectorMenu(null);
   }, [activeWorkflow.id, setEdges, setNodes]);
+
+  useEffect(() => {
+    if (!focusTarget || focusTarget.workflowId !== activeWorkflow.id || !flowInstance) {
+      return;
+    }
+
+    const targetNode = nodes.find((node) => node.id === focusTarget.nodeId);
+    if (!targetNode) {
+      return;
+    }
+
+    const targetKey = workflowFocusTargetKey(focusTarget);
+    if (focusedWorkflowTargetRef.current === targetKey) {
+      return;
+    }
+    focusedWorkflowTargetRef.current = targetKey;
+
+    setNodes((currentNodes) =>
+      currentNodes.map((node) => ({
+        ...node,
+        selected: node.id === focusTarget.nodeId,
+        data:
+          node.id === focusTarget.nodeId && node.data.minimized
+            ? { ...node.data, minimized: false }
+            : node.data,
+      })),
+    );
+    setSelectedNodeIds([focusTarget.nodeId]);
+    setContextMenu(null);
+    setOutputConnectorMenu(null);
+
+    requestAnimationFrame(() => {
+      flowInstance?.fitView({
+        nodes: [{ id: focusTarget.nodeId }],
+        padding: 1.4,
+        maxZoom: 1.05,
+        duration: 350,
+      });
+    });
+  }, [activeWorkflow.id, flowInstance, focusTarget, nodes, setNodes]);
 
   useEffect(() => {
     if (!workflowAutosaveReadyRef.current) {
@@ -2388,7 +2461,8 @@ function WorkflowBuilder({
 
   return (
     <PortTypeColorContext.Provider value={portTypeColors}>
-      <WorkflowOutputConnectorContext.Provider value={outputConnectorContextValue}>
+      <WorkflowFocusContext.Provider value={focusTarget}>
+        <WorkflowOutputConnectorContext.Provider value={outputConnectorContextValue}>
         <section className="grid min-h-[760px] gap-4 xl:grid-cols-[300px_minmax(0,1fr)_340px]" style={portTypeColorStyle}>
         <WorkflowComponentSelector
           search={componentSearch}
@@ -2574,8 +2648,9 @@ function WorkflowBuilder({
           onSaveWorkflowVersion={saveActiveWorkflowVersion}
           onRestoreWorkflowVersion={restoreWorkflowVersion}
         />
-        </section>
-      </WorkflowOutputConnectorContext.Provider>
+      </section>
+        </WorkflowOutputConnectorContext.Provider>
+      </WorkflowFocusContext.Provider>
     </PortTypeColorContext.Provider>
   );
 }
@@ -4902,11 +4977,21 @@ function PortRow({
   const isInput = direction === "in";
   const colors = usePortTypeColors();
   const { onOutputDoubleClick } = React.useContext(WorkflowOutputConnectorContext);
+  const focusTarget = React.useContext(WorkflowFocusContext);
   const color = portTypeColor(port.type, colors);
+  const isFocused =
+    focusTarget?.nodeId === nodeId &&
+    focusTarget.direction === direction &&
+    focusTarget.portId === port.id &&
+    focusTarget.portType === port.type;
 
   return (
     <div
-      className={classNames("relative rounded-md border px-2 py-1.5", isInput ? "pl-3" : "pr-3")}
+      className={classNames(
+        "relative rounded-md border px-2 py-1.5",
+        isInput ? "pl-3" : "pr-3",
+        isFocused && "ring-2 ring-zinc-950 ring-offset-2",
+      )}
       style={{
         backgroundColor: hexToRgba(color, 0.08),
         borderColor: hexToRgba(color, 0.32),
@@ -5402,11 +5487,31 @@ function deriveWorkflowRunInputModel(workflow: SavedWorkflow): WorkflowRunInputM
   }
 
   return {
+    inputs,
     sourceModes,
     showRunConfig: inputs.some((input) => input.port.type === "run_config"),
     openInputs: inputs.filter((input) => input.source === "open"),
     genericInputs: inputs.filter((input) => input.source === "open" && !isExecutableWorkflowInputType(input.port.type)),
   };
+}
+
+function workflowRunInputForType(inputModel: WorkflowRunInputModel, type: PortType): WorkflowRunInput | null {
+  return (
+    inputModel.inputs.find((input) => input.source === "open" && input.port.type === type) ??
+    inputModel.inputs.find((input) => input.port.type === type) ??
+    null
+  );
+}
+
+function workflowInputFieldLabel(label: string, input: WorkflowRunInput | null): string {
+  if (!input) {
+    return label;
+  }
+  return `${label} {${input.nodeTitle}}${input.port.optional ? " (optional)" : ""}`;
+}
+
+function workflowFocusTargetKey(target: WorkflowFocusTarget): string {
+  return `${target.workflowId}:${target.nodeId}:${target.direction}:${target.portId}:${target.portType}`;
 }
 
 function isWorkflowInputProviderNode(node: SavedWorkflowBlockNode, incomingNodes: Set<string>): boolean {
@@ -5437,6 +5542,7 @@ function UseCaseControls({
   form,
   inputModel,
   onChange,
+  onFocusWorkflowInput,
   onRun,
   isRunning,
   runDisabled,
@@ -5445,6 +5551,7 @@ function UseCaseControls({
   form: UseCaseForm;
   inputModel: WorkflowRunInputModel;
   onChange: (form: UseCaseForm) => void;
+  onFocusWorkflowInput: (input: WorkflowRunInput) => void;
   onRun: () => void;
   isRunning: boolean;
   runDisabled: boolean;
@@ -5457,6 +5564,9 @@ function UseCaseControls({
   const sourceModes = inputModel.sourceModes.length > 0 ? inputModel.sourceModes : (["url", "file"] as SourceMode[]);
   const selectedSourceMode = effectiveSourceMode(form, inputModel);
   const showSourceSelector = sourceModes.length > 1;
+  const urlInput = workflowRunInputForType(inputModel, "youtube_url");
+  const fileInput = workflowRunInputForType(inputModel, "video_file");
+  const runConfigInput = workflowRunInputForType(inputModel, "run_config");
 
   return (
     <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
@@ -5473,7 +5583,10 @@ function UseCaseControls({
         )}
 
         {selectedSourceMode === "url" ? (
-          <Field label="YouTube URL">
+          <Field
+            label={workflowInputFieldLabel("YouTube URL", urlInput)}
+            action={<RunInputFocusButton input={urlInput} onFocus={onFocusWorkflowInput} />}
+          >
             <input
               className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
               value={form.url}
@@ -5482,7 +5595,10 @@ function UseCaseControls({
             />
           </Field>
         ) : (
-          <Field label="Input file">
+          <Field
+            label={workflowInputFieldLabel("Input file", fileInput)}
+            action={<RunInputFocusButton input={fileInput} onFocus={onFocusWorkflowInput} />}
+          >
             <input
               className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
               value={form.input}
@@ -5493,7 +5609,10 @@ function UseCaseControls({
 
         {inputModel.showRunConfig && (
           <>
-            <Field label="Work directory">
+            <Field
+              label={workflowInputFieldLabel("Work directory", runConfigInput)}
+              action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
+            >
               <input
                 className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
                 value={form.workDir}
@@ -5502,7 +5621,10 @@ function UseCaseControls({
             </Field>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Scene threshold">
+              <Field
+                label={workflowInputFieldLabel("Scene threshold", runConfigInput)}
+                action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
+              >
                 <input
                   type="number"
                   min="0"
@@ -5512,7 +5634,10 @@ function UseCaseControls({
                   onChange={(event) => set("sceneThreshold", Number(event.target.value))}
                 />
               </Field>
-              <Field label="Minimum scene frames">
+              <Field
+                label={workflowInputFieldLabel("Minimum scene frames", runConfigInput)}
+                action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
+              >
                 <input
                   type="number"
                   min="1"
@@ -5525,7 +5650,10 @@ function UseCaseControls({
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Max frames">
+              <Field
+                label={workflowInputFieldLabel("Max frames", runConfigInput)}
+                action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
+              >
                 <input
                   type="number"
                   min="1"
@@ -5536,7 +5664,10 @@ function UseCaseControls({
                   onChange={(event) => set("maxFrames", event.target.value)}
                 />
               </Field>
-              <Field label="Visual sample step">
+              <Field
+                label={workflowInputFieldLabel("Visual sample step", runConfigInput)}
+                action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
+              >
                 <input
                   type="number"
                   min="1"
@@ -5558,7 +5689,10 @@ function UseCaseControls({
               <span>Skip transcription</span>
             </label>
 
-            <Field label="Object command">
+            <Field
+              label={workflowInputFieldLabel("Object command", runConfigInput)}
+              action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
+            >
               <input
                 className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
                 value={form.objectCommand}
@@ -5566,7 +5700,10 @@ function UseCaseControls({
                 onChange={(event) => set("objectCommand", event.target.value)}
               />
             </Field>
-            <Field label="OCR command">
+            <Field
+              label={workflowInputFieldLabel("OCR command", runConfigInput)}
+              action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
+            >
               <input
                 className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
                 value={form.ocrCommand}
@@ -5574,7 +5711,10 @@ function UseCaseControls({
                 onChange={(event) => set("ocrCommand", event.target.value)}
               />
             </Field>
-            <Field label="Text command">
+            <Field
+              label={workflowInputFieldLabel("Text command", runConfigInput)}
+              action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
+            >
               <input
                 className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
                 value={form.textCommand}
@@ -5583,7 +5723,10 @@ function UseCaseControls({
               />
             </Field>
 
-            <Field label="Output JSON">
+            <Field
+              label={workflowInputFieldLabel("Output JSON", runConfigInput)}
+              action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
+            >
               <input
                 className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
                 value={form.output}
@@ -5594,7 +5737,11 @@ function UseCaseControls({
         )}
 
         {inputModel.genericInputs.map((input) => (
-          <Field key={input.key} label={`${input.nodeTitle} ${input.port.label}${input.port.optional ? " (optional)" : ""}`}>
+          <Field
+            key={input.key}
+            label={workflowInputFieldLabel(input.port.label, input)}
+            action={<RunInputFocusButton input={input} onFocus={onFocusWorkflowInput} />}
+          >
             <input
               className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
               value={form.workflowInputs[input.key] ?? ""}
@@ -5659,12 +5806,47 @@ function OutputBlock({ label, value, tone }: { label: string; value: string; ton
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function RunInputFocusButton({
+  input,
+  onFocus,
+}: {
+  input: WorkflowRunInput | null;
+  onFocus: (input: WorkflowRunInput) => void;
+}) {
+  if (!input) {
+    return null;
+  }
+
   return (
-    <label className="block">
-      <span className="mb-1 block text-xs font-medium uppercase text-zinc-500">{label}</span>
+    <button
+      type="button"
+      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-1"
+      onClick={() => onFocus(input)}
+      title={`Show ${input.port.label} in workflow`}
+      aria-label={`Show ${input.port.label} in workflow`}
+    >
+      <WorkflowIcon className="h-3.5 w-3.5" />
+    </button>
+  );
+}
+
+function Field({
+  label,
+  action,
+  children,
+}: {
+  label: React.ReactNode;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="block">
+      <div className="mb-1 flex min-h-6 items-center justify-between gap-2">
+        <span className="block min-w-0 break-words text-xs font-medium uppercase text-zinc-500">{label}</span>
+        {action}
+      </div>
       {children}
-    </label>
+    </div>
   );
 }
 
