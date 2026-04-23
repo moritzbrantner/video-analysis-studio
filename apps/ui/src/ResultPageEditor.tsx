@@ -1,5 +1,6 @@
 import {
   Fragment,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -24,11 +25,21 @@ import {
   SplitPlanTable,
   TranscriptPanel,
   VideoSummaryCards,
+  SongDiagnosticsPanel,
+  SongIdentificationPanel,
+  SongMusicPanel,
+  SongSourceAssetPanel,
+  SongSummaryCards,
   type SubtitleGenerationReport,
   type StudioReport,
   type YoutubeVideoReport,
 } from "./index";
-import { isSubtitleGenerationReport, isYoutubeCollectionReport, isYoutubeVideoReport } from "./api/client";
+import {
+  isSongAnalysisReport,
+  isSubtitleGenerationReport,
+  isYoutubeCollectionReport,
+  isYoutubeVideoReport,
+} from "./api/client";
 
 export type DashboardWidgetId =
   | "summary"
@@ -42,6 +53,8 @@ export type DashboardWidgetId =
   | "collection-summary"
   | "collection-browser"
   | "collection-table"
+  | "song-identification"
+  | "song-music"
   | "result-delivery"
   | "split-plan"
   | "diagnostics";
@@ -59,7 +72,7 @@ export type DashboardLayout =
       children: DashboardLayout[];
     };
 
-type DashboardDataKind =
+export type DashboardDataKind =
   | "video_metadata"
   | "scene_result"
   | "video_observation"
@@ -77,31 +90,54 @@ type DashboardDataKind =
   | "collection_manifest"
   | "collection_item"
   | "collection_report"
-  | "collection_table";
+  | "collection_table"
+  | "song_fingerprint"
+  | "song_match"
+  | "music_feature";
+
+export type ReportKind =
+  | "youtube-video"
+  | "youtube-collection"
+  | "song-analysis"
+  | "subtitle-generation";
+
+export interface DashboardWidgetOption {
+  id: DashboardWidgetId;
+  label: string;
+  dataKinds: DashboardDataKind[];
+  reportKinds: ReportKind[];
+}
 
 interface DragPayload {
   source: "palette" | "layout";
   widgetId: DashboardWidgetId;
 }
 
-const widgetOptions: Array<{ id: DashboardWidgetId; label: string; dataKinds: DashboardDataKind[] }> = [
-  { id: "summary", label: "Summary", dataKinds: ["video_metadata", "scene_result"] },
-  { id: "source-assets", label: "Source + Assets", dataKinds: ["json_report"] },
-  { id: "scenes", label: "Scenes", dataKinds: ["scene_result"] },
-  { id: "observations", label: "Observations", dataKinds: ["video_observation"] },
-  { id: "transcript", label: "Transcript", dataKinds: ["transcript_segment"] },
-  { id: "audio-events", label: "Audio Events", dataKinds: ["audio_event"] },
-  { id: "text-events", label: "Text Events", dataKinds: ["text_event"] },
-  { id: "data-buckets", label: "Data Buckets", dataKinds: ["data_bucket"] },
-  { id: "collection-summary", label: "Collection Summary", dataKinds: ["collection_report"] },
-  { id: "collection-browser", label: "Collection Browser", dataKinds: ["collection_item"] },
-  { id: "collection-table", label: "Collection Table", dataKinds: ["collection_table"] },
-  { id: "result-delivery", label: "Save Results", dataKinds: ["json_report"] },
-  { id: "split-plan", label: "Split Plan", dataKinds: ["scene_result"] },
+const videoReportKinds: ReportKind[] = ["youtube-video"];
+const songReportKinds: ReportKind[] = ["song-analysis"];
+const collectionReportKinds: ReportKind[] = ["youtube-collection"];
+
+const widgetOptions: DashboardWidgetOption[] = [
+  { id: "summary", label: "Summary", dataKinds: ["video_metadata", "scene_result"], reportKinds: ["youtube-video", "song-analysis", "subtitle-generation"] },
+  { id: "source-assets", label: "Source + Assets", dataKinds: ["json_report"], reportKinds: ["youtube-video", "song-analysis", "subtitle-generation"] },
+  { id: "scenes", label: "Scenes", dataKinds: ["scene_result"], reportKinds: videoReportKinds },
+  { id: "observations", label: "Observations", dataKinds: ["video_observation"], reportKinds: videoReportKinds },
+  { id: "transcript", label: "Transcript", dataKinds: ["transcript_segment"], reportKinds: ["youtube-video", "song-analysis", "subtitle-generation"] },
+  { id: "audio-events", label: "Audio Events", dataKinds: ["audio_event"], reportKinds: videoReportKinds },
+  { id: "text-events", label: "Text Events", dataKinds: ["text_event"], reportKinds: videoReportKinds },
+  { id: "data-buckets", label: "Data Buckets", dataKinds: ["data_bucket"], reportKinds: ["youtube-video", "song-analysis"] },
+  { id: "collection-summary", label: "Collection Summary", dataKinds: ["collection_report"], reportKinds: collectionReportKinds },
+  { id: "collection-browser", label: "Collection Browser", dataKinds: ["collection_item"], reportKinds: collectionReportKinds },
+  { id: "collection-table", label: "Collection Table", dataKinds: ["collection_table"], reportKinds: collectionReportKinds },
+  { id: "song-identification", label: "Song Identification", dataKinds: ["song_fingerprint", "song_match"], reportKinds: songReportKinds },
+  { id: "song-music", label: "BPM and Key", dataKinds: ["music_feature"], reportKinds: songReportKinds },
+  { id: "result-delivery", label: "Save Results", dataKinds: ["json_report"], reportKinds: ["youtube-video", "youtube-collection", "song-analysis", "subtitle-generation"] },
+  { id: "split-plan", label: "Split Plan", dataKinds: ["scene_result"], reportKinds: videoReportKinds },
   {
     id: "diagnostics",
     label: "Diagnostics",
     dataKinds: ["video_frame", "audio_frame", "audio_wav", "model_prediction", "audio_feature", "data_record"],
+    reportKinds: ["youtube-video", "song-analysis", "subtitle-generation"],
   },
 ];
 
@@ -134,6 +170,63 @@ export const defaultDashboardLayout: DashboardLayout = {
 
 export const defaultDashboardWidgets = defaultDashboardLayout;
 
+const collectionDefaultDashboardLayout: DashboardLayout = {
+  type: "split",
+  id: "collection-default-root",
+  direction: "column",
+  sizes: [1, 1, 1, 1],
+  children: [
+    { type: "widget", id: "collection-summary" },
+    { type: "widget", id: "collection-browser" },
+    { type: "widget", id: "collection-table" },
+    { type: "widget", id: "result-delivery" },
+  ],
+};
+
+const songDefaultDashboardLayout: DashboardLayout = {
+  type: "split",
+  id: "song-default-root",
+  direction: "row",
+  sizes: [1, 1],
+  children: [
+    {
+      type: "split",
+      id: "song-default-left-column",
+      direction: "column",
+      sizes: [1, 1, 1],
+      children: [
+        { type: "widget", id: "summary" },
+        { type: "widget", id: "song-identification" },
+        { type: "widget", id: "song-music" },
+      ],
+    },
+    {
+      type: "split",
+      id: "song-default-right-column",
+      direction: "column",
+      sizes: [1, 1, 1],
+      children: [
+        { type: "widget", id: "transcript" },
+        { type: "widget", id: "data-buckets" },
+        { type: "widget", id: "result-delivery" },
+      ],
+    },
+  ],
+};
+
+const subtitleDefaultDashboardLayout: DashboardLayout = {
+  type: "split",
+  id: "subtitle-default-root",
+  direction: "column",
+  sizes: [1, 1, 1, 1],
+  children: [
+    { type: "widget", id: "summary" },
+    { type: "widget", id: "source-assets" },
+    { type: "widget", id: "transcript" },
+    { type: "widget", id: "result-delivery" },
+  ],
+};
+
 export function ResultPageEditor({
   report,
   layout,
@@ -143,10 +236,20 @@ export function ResultPageEditor({
   layout: DashboardLayout;
   onLayoutChange: (layout: DashboardLayout) => void;
 }) {
-  const activeWidgetIds = useMemo(() => widgetIdsForLayout(layout), [layout]);
-  const inactiveOptions = widgetOptions.filter((option) => !activeWidgetIds.includes(option.id));
+  const reportKind = reportKindForReport(report);
+  const sanitizedLayout = useMemo(() => sanitizeDashboardLayout(layout, reportKind), [layout, reportKind]);
+  const activeWidgetIds = useMemo(() => widgetIdsForLayout(sanitizedLayout), [sanitizedLayout]);
+  const inactiveOptions = dashboardWidgetOptionsForReportKind(reportKind).filter(
+    (option) => !activeWidgetIds.includes(option.id),
+  );
   const visibleCount = activeWidgetIds.length;
   const [currentDragPayload, setCurrentDragPayload] = useState<DragPayload | null>(null);
+
+  useEffect(() => {
+    if (!layoutsEqual(layout, sanitizedLayout)) {
+      onLayoutChange(sanitizedLayout);
+    }
+  }, [layout, onLayoutChange, sanitizedLayout]);
 
   function handlePaletteDragStart(event: ReactDragEvent<HTMLElement>, widgetId: DashboardWidgetId) {
     const payload: DragPayload = { source: "palette", widgetId };
@@ -177,7 +280,7 @@ export function ResultPageEditor({
       return;
     }
 
-    const targetLayout = payload.source === "layout" ? removeWidget(layout, payload.widgetId) : layout;
+    const targetLayout = payload.source === "layout" ? removeWidget(sanitizedLayout, payload.widgetId) : sanitizedLayout;
     if (!targetLayout || !containsWidget(targetLayout, targetId)) {
       return;
     }
@@ -185,7 +288,7 @@ export function ResultPageEditor({
   }
 
   function handleRemove(widgetId: DashboardWidgetId) {
-    const nextLayout = removeWidget(layout, widgetId);
+    const nextLayout = removeWidget(sanitizedLayout, widgetId);
     if (nextLayout) {
       onLayoutChange(nextLayout);
     }
@@ -199,7 +302,7 @@ export function ResultPageEditor({
     event: ReactPointerEvent<HTMLDivElement>,
   ) {
     const container = containerRef.current;
-    const split = getSplitAtPath(layout, path);
+    const split = getSplitAtPath(sanitizedLayout, path);
     if (!container || !split) {
       return;
     }
@@ -223,7 +326,7 @@ export function ResultPageEditor({
       const nextSizes = [...startSizes];
       nextSizes[dividerIndex] = first;
       nextSizes[dividerIndex + 1] = pairTotal - first;
-      onLayoutChange(updateSplitSizes(layout, path, nextSizes));
+      onLayoutChange(updateSplitSizes(sanitizedLayout, path, nextSizes));
     }
 
     function stopResize() {
@@ -267,7 +370,7 @@ export function ResultPageEditor({
             </div>
             <button
               className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
-              onClick={() => onLayoutChange(defaultDashboardLayout)}
+              onClick={() => onLayoutChange(defaultDashboardLayoutForReportKind(reportKind))}
               title="Reset layout"
             >
               <RefreshIcon className="h-4 w-4" />
@@ -279,7 +382,7 @@ export function ResultPageEditor({
 
       <div className="result-layout-tree">
         <DashboardLayoutNode
-          node={layout}
+          node={sanitizedLayout}
           path={[]}
           report={report}
           canRemove={visibleCount > 1}
@@ -303,6 +406,69 @@ export function dashboardDataKindsForWidgets(layout: DashboardLayout): string[] 
       ),
     ),
   );
+}
+
+export function defaultDashboardLayoutForReportKind(kind: ReportKind): DashboardLayout {
+  switch (kind) {
+    case "youtube-collection":
+      return collectionDefaultDashboardLayout;
+    case "song-analysis":
+      return songDefaultDashboardLayout;
+    case "subtitle-generation":
+      return subtitleDefaultDashboardLayout;
+    case "youtube-video":
+      return defaultDashboardLayout;
+  }
+}
+
+export function dashboardWidgetOptionsForReportKind(kind: ReportKind): DashboardWidgetOption[] {
+  return widgetOptions.filter((option) => option.reportKinds.includes(kind));
+}
+
+export function sanitizeDashboardLayout(layout: DashboardLayout, kind: ReportKind): DashboardLayout {
+  const available = new Set(dashboardWidgetOptionsForReportKind(kind).map((option) => option.id));
+  const sanitized = sanitizeDashboardLayoutNode(layout, available);
+  return sanitized ?? defaultDashboardLayoutForReportKind(kind);
+}
+
+function sanitizeDashboardLayoutNode(layout: DashboardLayout, available: Set<DashboardWidgetId>): DashboardLayout | null {
+  if (layout.type === "widget") {
+    return available.has(layout.id) ? layout : null;
+  }
+
+  const children = layout.children
+    .map((child) => sanitizeDashboardLayoutNode(child, available))
+    .filter((child): child is DashboardLayout => child !== null);
+
+  if (children.length === 0) {
+    return null;
+  }
+  if (children.length === 1) {
+    return children[0];
+  }
+
+  return normalizeLayout({
+    ...layout,
+    children,
+    sizes: normalizeSizes(layout.sizes, children.length),
+  });
+}
+
+function reportKindForReport(report: StudioReport): ReportKind {
+  if (isYoutubeCollectionReport(report)) {
+    return "youtube-collection";
+  }
+  if (isSongAnalysisReport(report)) {
+    return "song-analysis";
+  }
+  if (isSubtitleGenerationReport(report)) {
+    return "subtitle-generation";
+  }
+  return "youtube-video";
+}
+
+function layoutsEqual(left: DashboardLayout, right: DashboardLayout): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 export function addDashboardWidgetForDataKind(
@@ -758,6 +924,38 @@ function renderWidget(widgetId: DashboardWidgetId, report: StudioReport) {
         return <SubtitleDiagnosticsPanel report={report} />;
     }
   }
+  if (isSongAnalysisReport(report)) {
+    switch (widgetId) {
+      case "summary":
+        return <SongSummaryCards report={report} />;
+      case "source-assets":
+        return <SongSourceAssetPanel report={report} />;
+      case "song-identification":
+        return <SongIdentificationPanel report={report} />;
+      case "song-music":
+        return <SongMusicPanel report={report} />;
+      case "transcript":
+        return <TranscriptPanel transcription={report.lyrics} />;
+      case "data-buckets":
+        return <DataBucketOverview buckets={report.data_buckets} />;
+      case "result-delivery":
+        return (
+          <ResultPersistencePanel
+            result={report}
+            defaultFilename={fileBasename(report.assets.report_path) || "song-analysis.json"}
+            defaultLabel={
+              report.identification.top_match?.title ??
+              basename(report.source.local_media) ??
+              "Song analysis"
+            }
+          />
+        );
+      case "diagnostics":
+        return <SongDiagnosticsPanel report={report} />;
+      default:
+        return <SongDiagnosticsPanel report={report} />;
+    }
+  }
   if (!isYoutubeVideoReport(report)) {
     return null;
   }
@@ -880,6 +1078,10 @@ function widgetLabel(widgetId: DashboardWidgetId): string {
 function basename(path: string): string {
   const last = path.split(/[\\/]/).pop() ?? path;
   return last.replace(/\.[^.]+$/, "") || "video";
+}
+
+function fileBasename(path?: string | null): string {
+  return path?.split(/[\\/]/).pop() ?? "";
 }
 
 function GripIcon({ className }: { className?: string }) {

@@ -1,4 +1,4 @@
-import type { YoutubeVideoReport } from "../types";
+import type { TranscriptionReport, TranscriptSegmentReport, YoutubeVideoReport } from "../types";
 import { VideoSummaryCards, ScenePanel, ObservationList, EventList } from "../core";
 import { DataBucketOverview } from "../data";
 import { SourceSummary, AssetSummary } from "../ingest";
@@ -6,7 +6,7 @@ import { CapabilityPanel, ModelObservationGrid } from "../models";
 import { ReportShell } from "../output";
 import { SplitPlanTable } from "../split";
 import { Panel, EmptyState } from "../shared/primitives";
-import { formatNumber, formatSeconds } from "../shared/utils";
+import { cn, formatNumber, formatSeconds } from "../shared/utils";
 
 export function YoutubeVideoReportView({ report }: { report: YoutubeVideoReport }) {
   return (
@@ -37,8 +37,12 @@ export const AnalysisDashboard = YoutubeVideoReportView;
 
 export function TranscriptPanel({
   transcription,
+  activeSegmentIndex,
+  onSelectSegment,
 }: {
-  transcription: YoutubeVideoReport["transcription"];
+  transcription: TranscriptionReport;
+  activeSegmentIndex?: number | null;
+  onSelectSegment?: (segment: TranscriptSegmentReport) => void;
 }) {
   return (
     <Panel
@@ -49,8 +53,20 @@ export function TranscriptPanel({
         <EmptyState>{transcription.message ?? "No transcript segments"}</EmptyState>
       ) : (
         <div className="space-y-3">
-          {transcription.segments.map((segment) => (
-            <div key={segment.index} className="rounded-lg border border-zinc-200 p-3">
+          {transcription.segments.map((segment) => {
+            const active = activeSegmentIndex === segment.index;
+            const Component = onSelectSegment ? "button" : "div";
+            return (
+              <Component
+                key={segment.index}
+                type={onSelectSegment ? "button" : undefined}
+                className={cn(
+                  "w-full rounded-lg border border-zinc-200 p-3 text-left",
+                  onSelectSegment && "cursor-pointer hover:bg-zinc-50",
+                  active && "border-sky-200 bg-sky-50",
+                )}
+                onClick={() => onSelectSegment?.(segment)}
+              >
               <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
                 <span>#{segment.index}</span>
                 <span>
@@ -58,8 +74,9 @@ export function TranscriptPanel({
                 </span>
               </div>
               <p className="text-sm leading-6 text-zinc-800">{segment.text}</p>
-            </div>
-          ))}
+              </Component>
+            );
+          })}
         </div>
       )}
     </Panel>

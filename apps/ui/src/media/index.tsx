@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 
 import { getWorkflowClient } from "../api/client";
 import type {
@@ -56,19 +56,25 @@ export function isLikelyAudioOnly(path: string): boolean {
   return /\.(aac|aiff?|flac|m4a|mp3|ogg|opus|wav|wma)$/i.test(path);
 }
 
-export function MediaPreviewPanel({
-  report,
-  runId,
-  activeSceneIndex,
-  onSelectScene,
-  className,
-}: {
+export interface MediaPreviewHandle {
+  seekTo(seconds?: number | null): void;
+}
+
+export interface MediaPreviewPanelProps {
   report: StudioReport;
   runId?: string | null;
   activeSceneIndex?: number | null;
   onSelectScene?: (scene: SceneReport, index: number) => void;
   className?: string;
-}) {
+}
+
+export const MediaPreviewPanel = forwardRef<MediaPreviewHandle, MediaPreviewPanelProps>(function MediaPreviewPanel({
+  report,
+  runId,
+  activeSceneIndex,
+  onSelectScene,
+  className,
+}, ref) {
   const candidates = useMemo(() => mediaCandidatesForReport(report), [report]);
   const [selectedPath, setSelectedPath] = useState(candidates[0]?.path ?? "");
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
@@ -106,13 +112,15 @@ export function MediaPreviewPanel({
   const timeline = timelineItemsForReport(report);
   const selectedCandidate = candidates.find((candidate) => candidate.path === selectedPath) ?? candidates[0] ?? null;
 
-  const seek = (seconds?: number | null) => {
+  const seek = useCallback((seconds?: number | null) => {
     if (seconds == null || !Number.isFinite(seconds) || !mediaRef.current) {
       return;
     }
     mediaRef.current.currentTime = Math.max(0, seconds);
     void mediaRef.current.play().catch(() => undefined);
-  };
+  }, []);
+
+  useImperativeHandle(ref, () => ({ seekTo: seek }), [seek]);
 
   return (
     <Panel
@@ -162,7 +170,7 @@ export function MediaPreviewPanel({
       </div>
     </Panel>
   );
-}
+});
 
 export function MediaTimelineList({
   items,

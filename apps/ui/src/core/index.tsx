@@ -144,9 +144,13 @@ export function SceneTable({
 export function ObservationList({
   observations,
   title = "Observations",
+  activeObservationIndex,
+  onSelectObservation,
 }: {
   observations: AnalysisObservation[];
   title?: string;
+  activeObservationIndex?: number | null;
+  onSelectObservation?: (observation: AnalysisObservation, index: number) => void;
 }) {
   return (
     <Panel title={title} description={`${formatNumber(observations.length)} results`}>
@@ -154,11 +158,20 @@ export function ObservationList({
         <EmptyState>No observations</EmptyState>
       ) : (
         <div className="space-y-3">
-          {observations.map((observation, index) => (
-            <div
-              key={`${observation.analyzer}-${observation.kind}-${observation.frame_index ?? index}-${index}`}
-              className="grid gap-3 rounded-lg border border-zinc-200 p-3 sm:grid-cols-[1fr_auto]"
-            >
+          {observations.map((observation, index) => {
+            const active = activeObservationIndex === index;
+            const Component = onSelectObservation ? "button" : "div";
+            return (
+              <Component
+                key={`${observation.analyzer}-${observation.kind}-${observation.frame_index ?? index}-${index}`}
+                type={onSelectObservation ? "button" : undefined}
+                className={cn(
+                  "grid w-full gap-3 rounded-lg border border-zinc-200 p-3 text-left sm:grid-cols-[1fr_auto]",
+                  onSelectObservation && "cursor-pointer hover:bg-zinc-50",
+                  active && "border-sky-200 bg-sky-50",
+                )}
+                onClick={() => onSelectObservation?.(observation, index)}
+              >
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge tone={toneForKind(observation.kind)}>{observation.kind}</Badge>
@@ -182,8 +195,9 @@ export function ObservationList({
                 </div>
               </div>
               <ScoreMeter value={observation.score} />
-            </div>
-          ))}
+              </Component>
+            );
+          })}
         </div>
       )}
     </Panel>
@@ -194,10 +208,14 @@ export function EventList({
   events,
   title = "Events",
   empty = "No events",
+  activeEventIndex,
+  onSelectEvent,
 }: {
   events: AnalysisEvent[];
   title?: string;
   empty?: string;
+  activeEventIndex?: number | null;
+  onSelectEvent?: (event: AnalysisEvent, index: number) => void;
 }) {
   return (
     <Panel title={title} description={`${formatNumber(events.length)} results`}>
@@ -216,7 +234,11 @@ export function EventList({
             </thead>
             <tbody className="divide-y divide-zinc-100">
               {events.map((event, index) => (
-                <tr key={`${event.analyzer}-${event.label}-${event.timestamp_seconds ?? index}-${index}`}>
+                <tr
+                  key={`${event.analyzer}-${event.label}-${event.timestamp_seconds ?? index}-${index}`}
+                  className={cn(onSelectEvent && "cursor-pointer hover:bg-zinc-50", activeEventIndex === index && "bg-sky-50")}
+                  onClick={() => onSelectEvent?.(event, index)}
+                >
                   <td className="px-3 py-2 tabular-nums text-zinc-700">
                     {formatSeconds(event.timestamp_seconds)}
                   </td>

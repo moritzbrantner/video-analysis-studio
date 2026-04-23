@@ -8,7 +8,6 @@ import {
   Handle,
   MarkerType,
   NodeResizer,
-  Panel as FlowPanel,
   Position,
   ReactFlow,
   useEdgesState,
@@ -23,44 +22,28 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import {
-  AssetSummary,
   buildYoutubeCollectionManifestRequest,
-  CapabilityPanel,
   CliRunPanel,
-  CollectionDashboard,
   CollectionManifestPreviewPanel,
-  DataBucketOverview,
-  EventList,
   filterYoutubeCollectionManifest,
   JsonReportLoader,
-  MediaPreviewPanel,
-  ModelObservationGrid,
-  ObservationList,
-  ScenePanel,
-  SourceSummary,
-  SplitPlanTable,
-  TranscriptPanel,
-  VideoSummaryCards,
-  type SongAnalysisReport,
   type SongAnalysisRunRequest,
   type CliRun,
   type StudioReport,
-  type SubtitleGenerationReport,
   type SubtitleGenerationRunRequest,
   type TranscriptionEngine,
   type YoutubeCollectionManifest,
   type YoutubeCollectionRunRequest,
-  type YoutubeVideoReport,
 } from "./index";
 
 import "./index.css";
 import "@xyflow/react/dist/style.css";
 import { sampleReport } from "./sampleReport";
 import {
-  ResultPageEditor,
   defaultDashboardLayout,
   type DashboardLayout,
 } from "./ResultPageEditor";
+import { ReportDashboard, type ReportDashboardMode } from "./dashboard";
 import {
   getWorkflowClient,
   isSongAnalysisReport,
@@ -80,7 +63,7 @@ import {
 type WorkflowKindId = "youtube-video" | "youtube-collection" | "song-analysis" | "subtitle-generation";
 type SourceMode = "url" | "file" | "collection";
 type AppPage = "analysis" | "workflow" | "settings";
-type ViewMode = "overview" | "run" | "result" | "scenes" | "signals" | "data";
+type ViewMode = "run" | ReportDashboardMode;
 
 interface WorkflowRunForm {
   sourceMode: SourceMode;
@@ -1107,227 +1090,18 @@ function App() {
                 }}
               />
             ) : (
-              <section className="min-w-0 space-y-4">
-                {viewMode === "overview" && (songReport ? <SongDashboard report={songReport} runId={activeReportRunId} /> : subtitleReport ? <SubtitleDashboard report={subtitleReport} runId={activeReportRunId} /> : collectionReport ? <CollectionDashboard report={collectionReport} runId={activeReportRunId} /> : <Overview report={videoReport} runId={activeReportRunId} />)}
-                {viewMode === "result" && (
-                  <ResultPageEditor report={report} layout={dashboardLayout} onLayoutChange={setDashboardLayout} />
-                )}
-                {viewMode === "scenes" && (songReport ? <SongMusicPanel report={songReport} /> : subtitleReport ? <SubtitleDashboard report={subtitleReport} runId={activeReportRunId} /> : collectionReport ? <CollectionDashboard report={collectionReport} runId={activeReportRunId} /> : <Scenes report={videoReport} runId={activeReportRunId} />)}
-                {viewMode === "signals" && (songReport ? <SongSignals report={songReport} runId={activeReportRunId} /> : subtitleReport ? <SubtitleDashboard report={subtitleReport} runId={activeReportRunId} /> : collectionReport ? <CollectionDashboard report={collectionReport} runId={activeReportRunId} /> : <Signals report={videoReport} runId={activeReportRunId} />)}
-                {viewMode === "data" && (songReport ? <DataBucketOverview buckets={songReport.data_buckets} /> : subtitleReport ? <SubtitleDashboard report={subtitleReport} runId={activeReportRunId} /> : collectionReport ? <CollectionDashboard report={collectionReport} runId={activeReportRunId} /> : <Data report={videoReport} />)}
-              </section>
+              <ReportDashboard
+                report={report}
+                mode={viewMode}
+                runId={activeReportRunId}
+                layout={dashboardLayout}
+                onLayoutChange={setDashboardLayout}
+              />
             )}
           </div>
         </div>
       </div>
     </main>
-  );
-}
-
-function Overview({ report, runId }: { report: YoutubeVideoReport; runId?: string | null }) {
-  return (
-    <>
-      <MediaPreviewPanel report={report} runId={runId} />
-      <VideoSummaryCards video={report.video} />
-      <div className="grid gap-4 2xl:grid-cols-2">
-        <SourceSummary source={report.source} />
-        <AssetSummary assets={report.assets} />
-      </div>
-      <CapabilityPanel capabilities={report.capabilities} />
-      <ScenePanel scenes={report.video.scenes} />
-    </>
-  );
-}
-
-function Scenes({ report, runId }: { report: YoutubeVideoReport; runId?: string | null }) {
-  const [activeSceneIndex, setActiveSceneIndex] = useState<number | null>(report.video.scenes[0]?.index ?? null);
-  return (
-    <>
-      <MediaPreviewPanel
-        report={report}
-        runId={runId}
-        activeSceneIndex={activeSceneIndex}
-        onSelectScene={(scene) => setActiveSceneIndex(scene.index)}
-      />
-      <ScenePanel
-        scenes={report.video.scenes}
-        activeSceneIndex={activeSceneIndex}
-        onSelectScene={(scene, index) => setActiveSceneIndex("index" in scene ? scene.index : index + 1)}
-      />
-      <SplitPlanTable scenes={report.video.scenes} videoName={basename(report.source.local_video)} />
-    </>
-  );
-}
-
-function Signals({ report, runId }: { report: YoutubeVideoReport; runId?: string | null }) {
-  return (
-    <>
-      <MediaPreviewPanel report={report} runId={runId} />
-      <ObservationList observations={report.video.observations} title="Video Observations" />
-      <ModelObservationGrid observations={report.video.observations} />
-      <TranscriptPanel transcription={report.transcription} />
-      <div className="grid gap-4 2xl:grid-cols-2">
-        <EventList events={report.audio.events} title={`Audio Events (${report.audio.status})`} />
-        <EventList events={report.text.events} title={`Text Events (${report.text.status})`} />
-      </div>
-    </>
-  );
-}
-
-function Data({ report }: { report: YoutubeVideoReport }) {
-  return <DataBucketOverview buckets={report.data_buckets} />;
-}
-
-function SongDashboard({ report, runId }: { report: SongAnalysisReport; runId?: string | null }) {
-  return (
-    <>
-      <MediaPreviewPanel report={report} runId={runId} />
-      <SongSummaryCards report={report} />
-      <SongIdentificationPanel report={report} />
-      <SongMusicPanel report={report} />
-      <CapabilityPanel capabilities={report.capabilities} />
-    </>
-  );
-}
-
-function SubtitleDashboard({ report, runId }: { report: SubtitleGenerationReport; runId?: string | null }) {
-  return (
-    <>
-      <MediaPreviewPanel report={report} runId={runId} />
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <MetricCard label="Subtitle" value={report.subtitle.format.toUpperCase()} detail={`${report.subtitle.segments} segments`} />
-        <MetricCard label="Transcription" value={report.transcription.status} detail={report.transcription.message ?? "Transcript generated"} />
-        <MetricCard label="Output" value={basename(report.subtitle.path)} detail={report.subtitle.path} />
-        <MetricCard label="Source" value={basename(report.source.local_video)} detail={report.source.local_video} />
-      </div>
-      <div className="grid gap-4 2xl:grid-cols-2">
-        <SourceSummary source={report.source} />
-        <AssetSummary assets={report.assets} />
-      </div>
-      <TranscriptPanel transcription={report.transcription} />
-      <CapabilityPanel capabilities={report.capabilities} />
-    </>
-  );
-}
-
-function SongSignals({ report, runId }: { report: SongAnalysisReport; runId?: string | null }) {
-  return (
-    <>
-      <MediaPreviewPanel report={report} runId={runId} />
-      <TranscriptPanel transcription={report.lyrics} />
-      <SongMusicPanel report={report} />
-    </>
-  );
-}
-
-function SongSummaryCards({ report }: { report: SongAnalysisReport }) {
-  const top = report.identification.top_match;
-  const global = report.music.global;
-  return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      <MetricCard label="Identification" value={report.identification.status} detail={top?.title ?? "No match"} />
-      <MetricCard label="BPM" value={global?.bpm != null ? global.bpm.toFixed(1) : "n/a"} detail={scoreLabel(global?.bpm_confidence)} />
-      <MetricCard label="Key" value={global?.key ? `${global.key} ${global.mode ?? ""}`.trim() : "n/a"} detail={scoreLabel(global?.key_confidence)} />
-      <MetricCard label="Lyrics" value={report.lyrics.status} detail={`${report.lyrics.segments.length} segments`} />
-    </div>
-  );
-}
-
-function MetricCard({ label, value, detail }: { label: string; value: string; detail?: string }) {
-  return (
-    <section className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
-      <div className="text-xs font-medium uppercase text-zinc-500">{label}</div>
-      <div className="mt-2 truncate text-xl font-semibold text-zinc-950">{value}</div>
-      {detail && <div className="mt-1 truncate text-sm text-zinc-500">{detail}</div>}
-    </section>
-  );
-}
-
-function SongIdentificationPanel({ report }: { report: SongAnalysisReport }) {
-  const candidates = report.identification.candidates;
-  return (
-    <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
-      <div className="border-b border-zinc-200 px-4 py-3">
-        <h2 className="text-sm font-semibold text-zinc-950">Song Identification</h2>
-        <p className="mt-1 text-xs text-zinc-500">
-          {report.identification.catalog_path} · {report.identification.query?.chunk_count ?? 0} chunks
-        </p>
-      </div>
-      {candidates.length === 0 ? (
-        <p className="px-4 py-4 text-sm text-zinc-500">{report.identification.message ?? "No candidates"}</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-left text-sm">
-            <thead className="border-b border-zinc-200 text-xs uppercase text-zinc-500">
-              <tr>
-                <th className="px-3 py-2 font-medium">Score</th>
-                <th className="px-3 py-2 font-medium">Title</th>
-                <th className="px-3 py-2 font-medium">Artist</th>
-                <th className="px-3 py-2 font-medium">Duration</th>
-                <th className="px-3 py-2 font-medium">Segment</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-100">
-              {candidates.map((candidate) => (
-                <tr key={candidate.track_id}>
-                  <td className="px-3 py-2 tabular-nums text-zinc-700">{scoreLabel(candidate.score)}</td>
-                  <td className="px-3 py-2 font-medium text-zinc-950">{candidate.title}</td>
-                  <td className="px-3 py-2 text-zinc-700">{candidate.artist ?? "n/a"}</td>
-                  <td className="px-3 py-2 tabular-nums text-zinc-700">{durationLabel(candidate.duration_seconds)}</td>
-                  <td className="px-3 py-2 tabular-nums text-zinc-700">
-                    {candidate.matched_segment ? durationLabel(candidate.matched_segment.catalog_start_seconds) : "n/a"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function SongMusicPanel({ report }: { report: SongAnalysisReport }) {
-  const segments = report.music.segments;
-  return (
-    <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
-      <div className="border-b border-zinc-200 px-4 py-3">
-        <h2 className="text-sm font-semibold text-zinc-950">BPM and Key</h2>
-        <p className="mt-1 text-xs text-zinc-500">{report.music.status}</p>
-      </div>
-      {segments.length === 0 ? (
-        <p className="px-4 py-4 text-sm text-zinc-500">{report.music.message ?? "No segment estimates"}</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-left text-sm">
-            <thead className="border-b border-zinc-200 text-xs uppercase text-zinc-500">
-              <tr>
-                <th className="px-3 py-2 font-medium">Window</th>
-                <th className="px-3 py-2 font-medium">Time</th>
-                <th className="px-3 py-2 font-medium">BPM</th>
-                <th className="px-3 py-2 font-medium">BPM Conf.</th>
-                <th className="px-3 py-2 font-medium">Key</th>
-                <th className="px-3 py-2 font-medium">Key Conf.</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-100">
-              {segments.map((segment) => (
-                <tr key={segment.index}>
-                  <td className="px-3 py-2 font-medium text-zinc-950">{segment.index + 1}</td>
-                  <td className="px-3 py-2 tabular-nums text-zinc-700">
-                    {durationLabel(segment.start_seconds)}-{durationLabel(segment.end_seconds)}
-                  </td>
-                  <td className="px-3 py-2 tabular-nums text-zinc-700">{segment.bpm != null ? segment.bpm.toFixed(1) : "n/a"}</td>
-                  <td className="px-3 py-2 tabular-nums text-zinc-700">{scoreLabel(segment.bpm_confidence)}</td>
-                  <td className="px-3 py-2 text-zinc-700">{segment.key ? `${segment.key} ${segment.mode ?? ""}`.trim() : "n/a"}</td>
-                  <td className="px-3 py-2 tabular-nums text-zinc-700">{scoreLabel(segment.key_confidence)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
   );
 }
 
@@ -9194,19 +8968,6 @@ function Metric({ label, value }: { label: string; value: string }) {
       <div className="font-semibold text-zinc-950">{value}</div>
     </div>
   );
-}
-
-function durationLabel(value?: number | null): string {
-  if (value == null || !Number.isFinite(value)) {
-    return "n/a";
-  }
-  const minutes = Math.floor(value / 60);
-  const seconds = Math.max(0, Math.round(value - minutes * 60));
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
-
-function scoreLabel(value?: number | null): string {
-  return value == null || !Number.isFinite(value) ? "n/a" : `${Math.round(value * 100)}%`;
 }
 
 function buildCommand(

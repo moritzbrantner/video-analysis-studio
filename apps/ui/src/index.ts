@@ -9,6 +9,7 @@ export * from "./ingest";
 export * from "./media";
 export * from "./models";
 export * from "./output";
+export * from "./song";
 export * from "./split";
 export * from "./workflows";
 export { default as videoAnalysisTailwindContent } from "./tailwind-content";

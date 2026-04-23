@@ -1,6 +1,6 @@
 import type { AnalysisObservation, CapabilityReport } from "../types";
 import { Badge, EmptyState, Panel, ScoreMeter } from "../shared/primitives";
-import { formatNumber } from "../shared/utils";
+import { cn, formatNumber } from "../shared/utils";
 
 export function CapabilityPanel({ capabilities }: { capabilities: CapabilityReport }) {
   return (
@@ -13,16 +13,38 @@ export function CapabilityPanel({ capabilities }: { capabilities: CapabilityRepo
   );
 }
 
-export function ModelObservationGrid({ observations }: { observations: AnalysisObservation[] }) {
-  const modelObservations = observations.filter((observation) => observation.score != null);
+export function ModelObservationGrid({
+  observations,
+  activeObservationIndex,
+  onSelectObservation,
+}: {
+  observations: AnalysisObservation[];
+  activeObservationIndex?: number | null;
+  onSelectObservation?: (observation: AnalysisObservation, originalIndex: number) => void;
+}) {
+  const modelObservations = observations
+    .map((observation, originalIndex) => ({ observation, originalIndex }))
+    .filter(({ observation }) => observation.score != null);
   return (
     <Panel title="Model Observations" description={`${formatNumber(modelObservations.length)} scored`}>
       {modelObservations.length === 0 ? (
         <EmptyState>No scored model observations</EmptyState>
       ) : (
         <div className="grid gap-3 md:grid-cols-2">
-          {modelObservations.map((observation, index) => (
-            <div key={`${observation.analyzer}-${observation.label ?? index}-${index}`} className="rounded-lg border border-zinc-200 p-3">
+          {modelObservations.map(({ observation, originalIndex }) => {
+            const active = activeObservationIndex === originalIndex;
+            const Component = onSelectObservation ? "button" : "div";
+            return (
+              <Component
+                key={`${observation.analyzer}-${observation.label ?? originalIndex}-${originalIndex}`}
+                type={onSelectObservation ? "button" : undefined}
+                className={cn(
+                  "w-full rounded-lg border border-zinc-200 p-3 text-left",
+                  onSelectObservation && "cursor-pointer hover:bg-zinc-50",
+                  active && "border-sky-200 bg-sky-50",
+                )}
+                onClick={() => onSelectObservation?.(observation, originalIndex)}
+              >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="truncate font-medium text-zinc-950">
@@ -35,8 +57,9 @@ export function ModelObservationGrid({ observations }: { observations: AnalysisO
               <div className="mt-3">
                 <ScoreMeter value={observation.score} />
               </div>
-            </div>
-          ))}
+              </Component>
+            );
+          })}
         </div>
       )}
     </Panel>
