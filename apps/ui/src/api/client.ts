@@ -83,10 +83,68 @@ export type PortKind =
   | "http_request"
   | "http_response";
 
+export type WorkflowSemanticKind =
+  | "run_request"
+  | "run_config"
+  | "template_string"
+  | "youtube_url"
+  | "youtube_collection_url"
+  | "video_file"
+  | "audio_file"
+  | "audio_wav"
+  | "media_file"
+  | "transcript"
+  | "subtitle_file"
+  | "video_metadata"
+  | "scene_result"
+  | "video_observation"
+  | "model_request"
+  | "model_prediction"
+  | "transcript_segment"
+  | "audio_event"
+  | "text_event"
+  | "collection_manifest"
+  | "collection_item"
+  | "collection_report"
+  | "collection_table"
+  | "song_fingerprint"
+  | "song_catalog"
+  | "song_match"
+  | "music_feature"
+  | "http_request"
+  | "http_response"
+  | "json_report"
+  | "dashboard_view"
+  | "data_record"
+  | "data_bucket";
+
+export interface WorkflowObjectProperty {
+  name: string;
+  value: WorkflowTypeSpec;
+  required?: boolean;
+}
+
+export type WorkflowTypeSpec =
+  | { type: "any" }
+  | { type: "null" }
+  | { type: "boolean" }
+  | { type: "number" }
+  | { type: "string"; semantic?: WorkflowSemanticKind }
+  | { type: "binary"; media_type?: string; semantic?: WorkflowSemanticKind }
+  | { type: "array"; items: WorkflowTypeSpec; min_items?: number; max_items?: number }
+  | {
+      type: "object";
+      properties?: WorkflowObjectProperty[];
+      additional_properties?: boolean;
+      semantic?: WorkflowSemanticKind;
+    }
+  | { type: "union"; variants: WorkflowTypeSpec[] };
+
 export interface PortSpec {
   id: string;
   label: string;
   kind: PortKind;
+  value_type: WorkflowTypeSpec;
   optional?: boolean;
   stream?: boolean;
 }

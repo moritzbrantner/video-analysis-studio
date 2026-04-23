@@ -18,8 +18,9 @@ pub use song::{
 pub use subtitles::{run_subtitle_generation_workflow, SubtitleGenerationRunRequest};
 pub use system::{check_system_dependencies, DependencyStatus, SystemDependencyReport};
 pub use video_analysis_use_cases::workflow_catalog::{
-    default_workflow_catalog, ports_compatible, NodeSpec, PortCompatibility, PortKind, PortSpec,
-    WorkflowCatalog, WorkflowCategory,
+    default_workflow_catalog, ports_compatible, workflow_types_assignable, NodeSpec,
+    PortCompatibility, PortKind, PortSpec, WorkflowCatalog, WorkflowCategory,
+    WorkflowObjectProperty, WorkflowSemanticKind, WorkflowTypeSpec,
 };
 pub use youtube::{
     discover_youtube_collection_manifest, run_youtube_collection_workflow,
