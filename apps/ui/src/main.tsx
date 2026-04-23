@@ -67,8 +67,22 @@ type WorkflowKindId = "youtube-video" | "youtube-collection" | "song-analysis" |
 type SourceMode = "url" | "file" | "collection";
 type AppPage = "analysis" | "workflow" | "data-sources" | "settings";
 type ViewMode = "run" | ReportDashboardMode;
-type DataSourceKind = "song-catalog" | "reference-library" | "index" | "dataset" | "knowledge-base" | "custom";
 type DataSourceFormat = "sqlite" | "json" | "csv" | "txt" | "folder" | "api" | "other";
+type JsonSchemaScalar = "string" | "number" | "boolean" | "null" | "any";
+
+type DataSourceSchema =
+  | { type: "port"; portType: DataSourceType }
+  | { type: "binary"; mediaType: string; portType: DataSourceType }
+  | { type: "array"; items: DataSourceSchema }
+  | { type: "object"; properties: DataSourceSchemaProperty[] }
+  | { type: JsonSchemaScalar };
+
+interface DataSourceSchemaProperty {
+  id: string;
+  name: string;
+  schema: DataSourceSchema;
+  required: boolean;
+}
 
 interface WorkflowRunForm {
   sourceMode: SourceMode;
@@ -117,8 +131,8 @@ interface CollectionManifestPreviewState {
 interface DataSourceEntry {
   id: string;
   name: string;
-  kind: DataSourceKind;
   format: DataSourceFormat;
+  type: DataSourceSchema;
   location: string;
   description: string;
   tags: string[];
@@ -129,8 +143,8 @@ interface DataSourceEntry {
 
 interface DataSourceDraft {
   name: string;
-  kind: DataSourceKind;
   format: DataSourceFormat;
+  type: DataSourceSchema;
   location: string;
   description: string;
   tags: string;
@@ -172,15 +186,6 @@ const workflowKinds: Array<{
     packageName: "studio-core",
     status: "Ready",
   },
-];
-
-const dataSourceKinds: Array<{ id: DataSourceKind; label: string; description: string }> = [
-  { id: "song-catalog", label: "Song Catalog", description: "Catalogs used by song identification or matching nodes." },
-  { id: "reference-library", label: "Reference Library", description: "Long-form reference material or curated facts." },
-  { id: "index", label: "Index", description: "Lookup indices, key/value maps, and retrieval structures." },
-  { id: "dataset", label: "Dataset", description: "Structured data files such as CSV/JSON collections." },
-  { id: "knowledge-base", label: "Knowledge Base", description: "Domain notes, FAQs, and prompt context bases." },
-  { id: "custom", label: "Custom", description: "Any custom source used by workflow nodes." },
 ];
 
 const dataSourceFormats: Array<{ id: DataSourceFormat; label: string }> = [
@@ -240,8 +245,8 @@ const initialCollectionManifestPreview: CollectionManifestPreviewState = {
 const mainSidebarCollapsedStorageKey = "video-analysis.mainSidebarCollapsed.v1";
 const initialDataSourceDraft: DataSourceDraft = {
   name: "",
-  kind: "dataset",
   format: "json",
+  type: { type: "any" },
   location: "",
   description: "",
   tags: "",
@@ -1106,6 +1111,7 @@ function App() {
                 workflowLibrary={workflowLibrary}
                 onWorkflowLibraryChange={setWorkflowLibrary}
                 workflowCatalog={workflowCatalog}
+                dataSources={dataSources}
                 portTypeColors={portTypeColors}
                 hotkeyBindings={hotkeyBindings}
                 focusTarget={workflowFocusTarget?.workflowId === activeWorkflow.id ? workflowFocusTarget : null}
@@ -1579,6 +1585,7 @@ type PortType =
   | "data_bucket"
   | "json_report"
   | "dashboard_view";
+type DataSourceType = PortType;
 
 interface FlowPort {
   id: string;
@@ -1631,6 +1638,9 @@ interface WorkflowNodeData extends Record<string, unknown> {
   group?: WorkflowGroupMetadata;
   groupOpen?: boolean;
   minimized?: boolean;
+  dataSourceNode?: boolean;
+  dataSourceId?: string;
+  dataSourceType?: DataSourceType;
 }
 
 type WorkflowNodeModel = Node<WorkflowNodeData, "workflow">;
@@ -1947,6 +1957,8 @@ const dataValueCompatibleSourceTypes: PortType[] = [
   "http_request",
   "http_response",
 ];
+
+const dataSourceOutputTypes: DataSourceType[] = dataValueCompatibleSourceTypes;
 
 const streamablePortTypes: PortType[] = [
   "collection_item",
@@ -2671,6 +2683,18 @@ const generatorWorkflowNodes: WorkflowNodeModel[] = [
     ],
     tags: ["generator", "object", "json", "context"],
   }),
+  workflowNode("data-source", 0, 0, {
+    title: "Data Source",
+    packageName: "Data Sources",
+    description: "Selects a saved data source by ID and emits its payload through a typed output port.",
+    category: "Data",
+    tone: "slate",
+    inputs: [],
+    outputs: [port("data", "data", "data_value")],
+    dataSourceNode: true,
+    dataSourceType: "data_value",
+    tags: ["data-source", "dataset", "catalog", "reference", "typed"],
+  }),
 ];
 
 const streamWorkflowNodes: WorkflowNodeModel[] = [
@@ -2941,6 +2965,7 @@ function WorkflowBuilder({
   workflowLibrary,
   onWorkflowLibraryChange,
   workflowCatalog,
+  dataSources,
   portTypeColors,
   hotkeyBindings,
   focusTarget,
@@ -2948,6 +2973,7 @@ function WorkflowBuilder({
   workflowLibrary: SavedWorkflowLibrary;
   onWorkflowLibraryChange: React.Dispatch<React.SetStateAction<SavedWorkflowLibrary>>;
   workflowCatalog: RustWorkflowCatalog | null;
+  dataSources: DataSourceEntry[];
   portTypeColors: PortTypeColors;
   hotkeyBindings: HotkeyBindings;
   focusTarget: WorkflowFocusTarget | null;
@@ -3032,6 +3058,33 @@ function WorkflowBuilder({
       });
     });
   }, [activeWorkflow.id, flowInstance, focusTarget, nodes, setNodes]);
+
+  useEffect(() => {
+    const dataSourceById = new Map(dataSources.map((entry) => [entry.id, entry]));
+    let changed = false;
+    const nextNodes = nodes.map((node) => {
+      if (!node.data.dataSourceNode || typeof node.data.dataSourceId !== "string") {
+        return node;
+      }
+      const dataSource = dataSourceById.get(node.data.dataSourceId);
+      if (!dataSource) {
+        return node;
+      }
+      const nextData = workflowNodeDataWithDataSource(node.data, dataSource);
+      if (workflowNodeDataSourceSynced(node.data, nextData)) {
+        return node;
+      }
+      changed = true;
+      return { ...node, data: nextData };
+    });
+    if (!changed) {
+      return;
+    }
+    setNodes(nextNodes);
+    setEdges((currentEdges) =>
+      currentEdges.filter((edge) => !nextNodes.some((node) => node.id === edge.source && node.data.dataSourceNode) || compatibleConnection(nextNodes, edge)),
+    );
+  }, [dataSources, nodes, setEdges, setNodes]);
 
   useEffect(() => {
     if (!workflowAutosaveReadyRef.current) {
@@ -3450,6 +3503,25 @@ function WorkflowBuilder({
       );
     },
     [setNodes],
+  );
+
+  const updateWorkflowNodeDataSource = useCallback(
+    (nodeId: string, dataSourceId: string | null) => {
+      const dataSource = dataSourceId ? dataSources.find((entry) => entry.id === dataSourceId) ?? null : null;
+      const nextNodes = nodes.map((node) =>
+        node.id === nodeId && node.data.dataSourceNode
+          ? {
+              ...node,
+              data: workflowNodeDataWithDataSource(node.data, dataSource),
+            }
+          : node,
+      );
+      setNodes(nextNodes);
+      setEdges((currentEdges) => currentEdges.filter((edge) => edge.source !== nodeId || compatibleConnection(nextNodes, edge)));
+      setContextMenu(null);
+      setOutputConnectorMenu(null);
+    },
+    [dataSources, nodes, setEdges, setNodes],
   );
 
   const setGroupOpen = useCallback(
@@ -4153,6 +4225,7 @@ function WorkflowBuilder({
           activeWorkflow={activeWorkflow}
           nodes={nodes}
           edges={edges}
+          dataSources={dataSources}
           selectedNodes={selectedNodes}
           selectedInternalEdgeCount={selectedInternalEdgeCount}
           blockName={blockName}
@@ -4173,6 +4246,7 @@ function WorkflowBuilder({
           onGroupSelected={() => groupNodes(selectedNodeIds)}
           onDeleteSelected={() => deleteWorkflowNodes(selectedNodeIds)}
           onUpdateSelectedGroup={updateGroupDetails}
+          onUpdateSelectedDataSource={updateWorkflowNodeDataSource}
           onToggleSelectedGroupOpen={() => {
             const groupNode = selectedNodes.length === 1 && selectedNodes[0].data.group ? selectedNodes[0] : null;
             if (groupNode) {
@@ -4434,6 +4508,7 @@ function WorkflowDetailsPanel({
   activeWorkflow,
   nodes,
   edges,
+  dataSources,
   selectedNodes,
   selectedInternalEdgeCount,
   blockName,
@@ -4454,6 +4529,7 @@ function WorkflowDetailsPanel({
   onGroupSelected,
   onDeleteSelected,
   onUpdateSelectedGroup,
+  onUpdateSelectedDataSource,
   onToggleSelectedGroupOpen,
   onUngroupSelected,
   onSaveWorkflowVersion,
@@ -4464,6 +4540,7 @@ function WorkflowDetailsPanel({
   activeWorkflow: SavedWorkflow;
   nodes: WorkflowNodeModel[];
   edges: Edge[];
+  dataSources: DataSourceEntry[];
   selectedNodes: WorkflowNodeModel[];
   selectedInternalEdgeCount: number;
   blockName: string;
@@ -4484,6 +4561,7 @@ function WorkflowDetailsPanel({
   onGroupSelected: () => void;
   onDeleteSelected: () => void;
   onUpdateSelectedGroup: (nodeId: string, updates: Pick<WorkflowNodeData, "title" | "description">) => void;
+  onUpdateSelectedDataSource: (nodeId: string, dataSourceId: string | null) => void;
   onToggleSelectedGroupOpen: () => void;
   onUngroupSelected: () => void;
   onSaveWorkflowVersion: () => void;
@@ -4562,6 +4640,13 @@ function WorkflowDetailsPanel({
                 ))}
               </div>
             </div>
+            {selectedNode.data.dataSourceNode && (
+              <DataSourceNodeSettings
+                node={selectedNode}
+                dataSources={dataSources}
+                onSelectDataSource={onUpdateSelectedDataSource}
+              />
+            )}
             <WorkflowPortConnectionsList
               title="Inputs"
               groups={selectedInputConnections}
@@ -4932,6 +5017,215 @@ function WorkflowPortConnectionsList({
   );
 }
 
+function DataSourceNodeSettings({
+  node,
+  dataSources,
+  onSelectDataSource,
+}: {
+  node: WorkflowNodeModel;
+  dataSources: DataSourceEntry[];
+  onSelectDataSource: (nodeId: string, dataSourceId: string | null) => void;
+}) {
+  const selectedDataSource =
+    typeof node.data.dataSourceId === "string"
+      ? dataSources.find((entry) => entry.id === node.data.dataSourceId) ?? null
+      : null;
+  const selectedSchema = selectedDataSource?.type ?? portTypeToDataSourceSchema(node.data.dataSourceType ?? "data_value");
+  const selectedType = dataSourcePortType(selectedSchema);
+
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+      <Field label="Data source ID">
+        <select
+          className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 font-mono text-xs outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+          value={selectedDataSource?.id ?? ""}
+          onChange={(event) => onSelectDataSource(node.id, event.target.value || null)}
+        >
+          <option value="">Unselected</option>
+          {dataSources.map((entry) => (
+            <option key={entry.id} value={entry.id}>
+              {entry.id}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <Metric label="Schema" value={formatDataSourceSchema(selectedSchema)} />
+        <Metric label="Output" value={formatPortType(selectedType)} />
+      </div>
+      <div className="mt-2 grid grid-cols-1 gap-2">
+        <Metric label="Format" value={selectedDataSource ? dataSourceFormatLabel(selectedDataSource.format) : "none"} />
+      </div>
+      {selectedDataSource && (
+        <div className="mt-3 space-y-1 text-xs text-zinc-600">
+          <div className="truncate font-medium text-zinc-900" title={selectedDataSource.name}>
+            {selectedDataSource.name}
+          </div>
+          <div className="truncate" title={selectedDataSource.location}>
+            {selectedDataSource.location || "No location set"}
+          </div>
+          <div>
+            {selectedDataSource.body.length} body chars · {selectedDataSource.tags.length} tags
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DataSourceSchemaEditor({
+  schema,
+  onChange,
+  depth = 0,
+}: {
+  schema: DataSourceSchema;
+  onChange: (schema: DataSourceSchema) => void;
+  depth?: number;
+}) {
+  const updateKind = (kind: DataSourceSchema["type"]) => {
+    onChange(defaultDataSourceSchemaForKind(kind));
+  };
+
+  return (
+    <section className={classNames("rounded-lg border border-zinc-200 bg-zinc-50 p-3", depth > 0 && "bg-white")}>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label={depth === 0 ? "Type" : "Nested type"}>
+          <select
+            className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+            value={schema.type}
+            onChange={(event) => updateKind(event.target.value as DataSourceSchema["type"])}
+          >
+            <option value="any">Any JSON</option>
+            <option value="string">String</option>
+            <option value="number">Number</option>
+            <option value="boolean">Boolean</option>
+            <option value="null">Null</option>
+            <option value="binary">Binary</option>
+            <option value="array">Array of</option>
+            <option value="object">Object</option>
+            <option value="port">Workflow port type</option>
+          </select>
+        </Field>
+        <Metric label="Workflow output" value={formatPortType(dataSourcePortType(schema))} />
+      </div>
+
+      {schema.type === "port" && (
+        <Field label="Port type">
+          <select
+            className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+            value={schema.portType}
+            onChange={(event) => onChange({ type: "port", portType: event.target.value as DataSourceType })}
+          >
+            {dataSourceOutputTypes.map((type) => (
+              <option key={type} value={type}>
+                {formatPortType(type)}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+
+      {schema.type === "binary" && (
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <Field label="Media type">
+            <input
+              className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+              value={schema.mediaType}
+              onChange={(event) => onChange({ ...schema, mediaType: event.target.value })}
+              placeholder="audio/mpeg"
+            />
+          </Field>
+          <Field label="Port type">
+            <select
+              className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+              value={schema.portType}
+              onChange={(event) => onChange({ ...schema, portType: event.target.value as DataSourceType })}
+            >
+              {dataSourceOutputTypes.map((type) => (
+                <option key={type} value={type}>
+                  {formatPortType(type)}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+      )}
+
+      {schema.type === "array" && (
+        <div className="mt-3 border-l-2 border-zinc-200 pl-3">
+          <DataSourceSchemaEditor
+            schema={schema.items}
+            onChange={(items) => onChange({ ...schema, items })}
+            depth={depth + 1}
+          />
+        </div>
+      )}
+
+      {schema.type === "object" && (
+        <div className="mt-3 space-y-3">
+          {schema.properties.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-zinc-300 bg-white px-3 py-4 text-sm text-zinc-500">
+              No properties defined.
+            </div>
+          ) : (
+            schema.properties.map((property) => (
+              <div key={property.id} className="rounded-lg border border-zinc-200 bg-white p-3">
+                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+                  <input
+                    className="min-w-0 rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                    value={property.name}
+                    onChange={(event) =>
+                      onChange(updateDataSourceSchemaProperty(schema, property.id, { name: event.target.value }))
+                    }
+                    placeholder="property_name"
+                  />
+                  <label className="inline-flex h-10 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-700">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-zinc-300"
+                      checked={property.required}
+                      onChange={(event) =>
+                        onChange(updateDataSourceSchemaProperty(schema, property.id, { required: event.target.checked }))
+                      }
+                    />
+                    Required
+                  </label>
+                  <button
+                    type="button"
+                    className="inline-flex h-10 items-center justify-center rounded-lg border border-zinc-300 bg-white px-3 text-zinc-600 hover:bg-zinc-50"
+                    onClick={() => onChange(removeDataSourceSchemaProperty(schema, property.id))}
+                    title="Remove property"
+                    aria-label="Remove property"
+                  >
+                    <CloseIcon className="h-4 w-4" />
+                  </button>
+                </div>
+                <div className="mt-3 border-l-2 border-zinc-200 pl-3">
+                  <DataSourceSchemaEditor
+                    schema={property.schema}
+                    onChange={(propertySchema) =>
+                      onChange(updateDataSourceSchemaProperty(schema, property.id, { schema: propertySchema }))
+                    }
+                    depth={depth + 1}
+                  />
+                </div>
+              </div>
+            ))
+          )}
+          <button
+            type="button"
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+            onClick={() => onChange(addDataSourceSchemaProperty(schema))}
+          >
+            <PlusIcon className="h-4 w-4" />
+            Add Property
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function DataSourcesPage({
   dataSources,
   onDataSourcesChange,
@@ -4942,6 +5236,8 @@ function DataSourcesPage({
   const [query, setQuery] = useState("");
   const [activeDataSourceId, setActiveDataSourceId] = useState<string | null>(dataSources[0]?.id ?? null);
   const [draft, setDraft] = useState<DataSourceDraft>(initialDataSourceDraft);
+  const [schemaText, setSchemaText] = useState(() => formatDataSourceSchemaJson(initialDataSourceDraft.type));
+  const [schemaTextError, setSchemaTextError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -4954,8 +5250,8 @@ function DataSourcesPage({
     [dataSources, query],
   );
   const draftTagCount = useMemo(() => parseDataSourceTags(draft.tags).length, [draft.tags]);
-  const usedKinds = useMemo(
-    () => dataSourceKinds.filter((kind) => dataSources.some((entry) => entry.kind === kind.id)),
+  const usedSchemaLabels = useMemo(
+    () => Array.from(new Set(dataSources.map((entry) => formatDataSourceSchema(entry.type)))),
     [dataSources],
   );
 
@@ -4972,9 +5268,29 @@ function DataSourcesPage({
   }, [dataSources, activeDataSourceId]);
 
   useEffect(() => {
-    setDraft(activeDataSource ? dataSourceDraftFromEntry(activeDataSource) : initialDataSourceDraft);
+    const nextDraft = activeDataSource ? dataSourceDraftFromEntry(activeDataSource) : initialDataSourceDraft;
+    setDraft(nextDraft);
+    setSchemaText(formatDataSourceSchemaJson(nextDraft.type));
+    setSchemaTextError(null);
     setMessage(null);
   }, [activeDataSource]);
+
+  const updateDraftSchema = useCallback((type: DataSourceSchema) => {
+    setDraft((current) => ({ ...current, type }));
+    setSchemaText(formatDataSourceSchemaJson(type));
+    setSchemaTextError(null);
+  }, []);
+
+  const updateSchemaText = useCallback((value: string) => {
+    setSchemaText(value);
+    try {
+      const type = parseDataSourceSchemaJson(value);
+      setDraft((current) => ({ ...current, type }));
+      setSchemaTextError(null);
+    } catch (error) {
+      setSchemaTextError(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
 
   const createDataSource = useCallback(() => {
     const created = createDataSourceEntry({
@@ -4991,6 +5307,10 @@ function DataSourcesPage({
       setMessage("Name is required.");
       return;
     }
+    if (schemaTextError) {
+      setMessage("Schema JSON must be valid before saving.");
+      return;
+    }
     const now = new Date().toISOString();
     if (!activeDataSource) {
       const created = createDataSourceEntry(draft);
@@ -5002,8 +5322,8 @@ function DataSourcesPage({
     const updated: DataSourceEntry = {
       ...activeDataSource,
       name: draft.name.trim(),
-      kind: draft.kind,
       format: draft.format,
+      type: draft.type,
       location: draft.location.trim(),
       description: draft.description.trim(),
       tags: parseDataSourceTags(draft.tags),
@@ -5012,7 +5332,7 @@ function DataSourcesPage({
     };
     onDataSourcesChange(dataSources.map((entry) => (entry.id === updated.id ? updated : entry)));
     setMessage(`Saved ${updated.name}.`);
-  }, [activeDataSource, dataSources, draft, onDataSourcesChange]);
+  }, [activeDataSource, dataSources, draft, onDataSourcesChange, schemaTextError]);
 
   const duplicateDataSource = useCallback(() => {
     if (!activeDataSource) {
@@ -5020,8 +5340,8 @@ function DataSourcesPage({
     }
     const duplicated = createDataSourceEntry({
       name: `${activeDataSource.name} Copy`,
-      kind: activeDataSource.kind,
       format: activeDataSource.format,
+      type: activeDataSource.type,
       location: activeDataSource.location,
       description: activeDataSource.description,
       tags: activeDataSource.tags.join(", "),
@@ -5063,7 +5383,7 @@ function DataSourcesPage({
               className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Find by name, kind, tags, path"
+              placeholder="Find by name, schema, tags, path"
             />
           </Field>
           <div className="mt-3 grid grid-cols-3 gap-2">
@@ -5119,19 +5439,19 @@ function DataSourcesPage({
           />
           <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-zinc-600">
             <Metric label="Sources" value={String(dataSources.length)} />
-            <Metric label="Kinds" value={String(usedKinds.length)} />
+            <Metric label="Schemas" value={String(usedSchemaLabels.length)} />
           </div>
           <div className="mt-3 flex flex-wrap gap-1.5">
-            {usedKinds.length === 0 ? (
-              <span className="text-xs text-zinc-500">No source types yet.</span>
+            {usedSchemaLabels.length === 0 ? (
+              <span className="text-xs text-zinc-500">No schemas yet.</span>
             ) : (
-              usedKinds.map((kind) => (
+              usedSchemaLabels.slice(0, 8).map((label) => (
                 <span
-                  key={kind.id}
+                  key={label}
                   className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-[11px] text-zinc-700"
-                  title={kind.description}
+                  title={label}
                 >
-                  {kind.label}
+                  {label}
                 </span>
               ))
             )}
@@ -5162,9 +5482,11 @@ function DataSourcesPage({
                 >
                   <div className="truncate text-sm font-semibold">{entry.name}</div>
                   <div className="mt-1 truncate text-[11px] opacity-75">
-                    {dataSourceKindLabel(entry.kind)} · {dataSourceFormatLabel(entry.format)}
+                    {entry.id}
                   </div>
-                  <div className="mt-1 truncate text-[11px] opacity-70">{entry.location || "No location set"}</div>
+                  <div className="mt-1 truncate text-[11px] opacity-70">
+                    {formatDataSourceSchema(entry.type)} · emits {formatPortType(dataSourcePortType(entry.type))}
+                  </div>
                 </button>
               ))
             )}
@@ -5204,6 +5526,14 @@ function DataSourcesPage({
               </div>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="ID">
+                <input
+                  className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 font-mono text-xs text-zinc-700 outline-none"
+                  value={activeDataSource.id}
+                  readOnly
+                  title={activeDataSource.id}
+                />
+              </Field>
               <Field label="Name">
                 <input
                   className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
@@ -5211,21 +5541,6 @@ function DataSourcesPage({
                   onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
                   placeholder="e.g. Song fingerprint catalog"
                 />
-              </Field>
-              <Field label="Kind">
-                <select
-                  className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-                  value={draft.kind}
-                  onChange={(event) =>
-                    setDraft((current) => ({ ...current, kind: event.target.value as DataSourceKind }))
-                  }
-                >
-                  {dataSourceKinds.map((kind) => (
-                    <option key={kind.id} value={kind.id}>
-                      {kind.label}
-                    </option>
-                  ))}
-                </select>
               </Field>
               <Field label="Format">
                 <select
@@ -5251,6 +5566,26 @@ function DataSourcesPage({
                 />
               </Field>
             </div>
+            <DataSourceSchemaEditor
+              schema={draft.type}
+              onChange={updateDraftSchema}
+            />
+            <Field
+              label="Schema JSON"
+              action={schemaTextError ? <span className="text-[11px] text-rose-700">{schemaTextError}</span> : null}
+            >
+              <textarea
+                className={classNames(
+                  "min-h-[240px] w-full rounded-lg border px-3 py-2 font-mono text-xs leading-5 outline-none focus:ring-2",
+                  schemaTextError
+                    ? "border-rose-300 bg-rose-50 text-rose-950 focus:border-rose-500 focus:ring-rose-500/10"
+                    : "border-zinc-300 bg-white text-zinc-700 focus:border-zinc-950 focus:ring-zinc-950/10",
+                )}
+                value={schemaText}
+                onChange={(event) => updateSchemaText(event.target.value)}
+                spellCheck={false}
+              />
+            </Field>
             <Field label="Tags (comma or space separated)">
               <input
                 className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
@@ -5936,6 +6271,15 @@ function cloneWorkflowNodeData(data: WorkflowNodeData): WorkflowNodeData {
   }
   if (data.minimized) {
     cloned.minimized = true;
+  }
+  if (data.dataSourceNode) {
+    cloned.dataSourceNode = true;
+  }
+  if (typeof data.dataSourceId === "string") {
+    cloned.dataSourceId = data.dataSourceId;
+  }
+  if (isDataSourceType(data.dataSourceType)) {
+    cloned.dataSourceType = data.dataSourceType;
   }
   return cloned;
 }
@@ -7243,8 +7587,8 @@ function createDataSourceEntry(draft: DataSourceDraft): DataSourceEntry {
   return normalizeDataSourceEntry({
     id: createDataSourceId(),
     name: draft.name,
-    kind: draft.kind,
     format: draft.format,
+    type: draft.type,
     location: draft.location,
     description: draft.description,
     tags: parseDataSourceTags(draft.tags),
@@ -7257,8 +7601,8 @@ function createDataSourceEntry(draft: DataSourceDraft): DataSourceEntry {
 function dataSourceDraftFromEntry(entry: DataSourceEntry): DataSourceDraft {
   return {
     name: entry.name,
-    kind: entry.kind,
     format: entry.format,
+    type: entry.type,
     location: entry.location,
     description: entry.description,
     tags: entry.tags.join(", "),
@@ -7314,14 +7658,20 @@ function cloneImportedDataSourceEntry(entry: DataSourceEntry): DataSourceEntry {
 }
 
 function normalizeDataSourceEntry(entry: DataSourceEntry): DataSourceEntry {
+  const rawEntry = entry as DataSourceEntry & { type?: unknown; format?: unknown };
   const name = entry.name.trim();
+  const format = isDataSourceFormat(rawEntry.format) ? rawEntry.format : "json";
   return {
-    ...entry,
+    id: entry.id,
     name: name || "Untitled Data Source",
+    format,
+    type: normalizeDataSourceSchema(rawEntry.type, defaultDataSourceSchemaForFormat(format)),
     location: entry.location.trim(),
     description: entry.description.trim(),
     tags: normalizeDataSourceTags(entry.tags),
     body: typeof entry.body === "string" ? entry.body : "",
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
   };
 }
 
@@ -7393,19 +7743,296 @@ function filterDataSources(dataSources: DataSourceEntry[], query: string): DataS
     return dataSources;
   }
   return dataSources.filter((entry) =>
-    [entry.name, dataSourceKindLabel(entry.kind), dataSourceFormatLabel(entry.format), entry.location, entry.description, ...entry.tags, entry.body]
+    [
+      entry.id,
+      entry.name,
+      formatDataSourceSchema(entry.type),
+      dataSourceFormatLabel(entry.format),
+      formatPortType(dataSourcePortType(entry.type)),
+      entry.location,
+      entry.description,
+      ...entry.tags,
+      entry.body,
+    ]
       .join("\n")
       .toLowerCase()
       .includes(normalized),
   );
 }
 
-function dataSourceKindLabel(kind: DataSourceKind): string {
-  return dataSourceKinds.find((candidate) => candidate.id === kind)?.label ?? "Custom";
-}
-
 function dataSourceFormatLabel(format: DataSourceFormat): string {
   return dataSourceFormats.find((candidate) => candidate.id === format)?.label ?? "Other";
+}
+
+function defaultDataSourceSchemaForFormat(format: DataSourceFormat): DataSourceSchema {
+  switch (format) {
+    case "json":
+      return { type: "any" };
+    case "csv":
+    case "sqlite":
+      return portTypeToDataSourceSchema("data_record");
+    case "txt":
+      return { type: "string" };
+    case "folder":
+      return portTypeToDataSourceSchema("data_bucket");
+    case "api":
+      return portTypeToDataSourceSchema("http_response");
+    case "other":
+      return { type: "any" };
+  }
+}
+
+function defaultDataSourceSchemaForKind(kind: DataSourceSchema["type"]): DataSourceSchema {
+  switch (kind) {
+    case "port":
+      return portTypeToDataSourceSchema("data_value");
+    case "array":
+      return { type: "array", items: { type: "any" } };
+    case "object":
+      return { type: "object", properties: [] };
+    case "binary":
+      return { type: "binary", mediaType: "audio/mpeg", portType: "data_value" };
+    case "string":
+    case "number":
+    case "boolean":
+    case "null":
+    case "any":
+      return { type: kind };
+  }
+}
+
+function portTypeToDataSourceSchema(portType: DataSourceType): DataSourceSchema {
+  switch (portType) {
+    case "string_value":
+    case "template_string":
+    case "youtube_url":
+    case "youtube_collection_url":
+      return { type: "string" };
+    case "audio_wav":
+      return { type: "binary", mediaType: "audio/wav", portType };
+    case "video_file":
+      return { type: "binary", mediaType: "video/mp4", portType };
+    case "number_value":
+      return { type: "number" };
+    case "boolean_value":
+      return { type: "boolean" };
+    case "array_value":
+      return { type: "array", items: { type: "any" } };
+    case "object_value":
+      return { type: "object", properties: [] };
+    case "data_value":
+      return { type: "any" };
+    default:
+      return { type: "port", portType };
+  }
+}
+
+function dataSourcePortType(schema: DataSourceSchema): DataSourceType {
+  switch (schema.type) {
+    case "port":
+      return schema.portType;
+    case "binary":
+      return schema.portType;
+    case "array":
+      return "array_value";
+    case "object":
+      return "object_value";
+    case "string":
+      return "string_value";
+    case "number":
+      return "number_value";
+    case "boolean":
+      return "boolean_value";
+    case "null":
+    case "any":
+      return "data_value";
+  }
+}
+
+function formatDataSourceSchema(schema: DataSourceSchema): string {
+  switch (schema.type) {
+    case "port":
+      return formatPortType(schema.portType);
+    case "binary":
+      return `Binary ${schema.mediaType || "application/octet-stream"}`;
+    case "array":
+      return `Array of ${formatDataSourceSchema(schema.items)}`;
+    case "object": {
+      const namedProperties = schema.properties.filter((property) => property.name.trim()).slice(0, 3);
+      if (namedProperties.length === 0) {
+        return "Object";
+      }
+      const suffix = schema.properties.length > namedProperties.length ? ", ..." : "";
+      return `Object { ${namedProperties.map((property) => property.name.trim()).join(", ")}${suffix} }`;
+    }
+    case "any":
+      return "Any JSON";
+    case "string":
+    case "number":
+    case "boolean":
+    case "null":
+      return schema.type[0].toUpperCase() + schema.type.slice(1);
+  }
+}
+
+function dataSourceSchemaToJsonSchema(schema: DataSourceSchema): unknown {
+  switch (schema.type) {
+    case "port":
+      return { "x-portType": schema.portType };
+    case "binary":
+      return {
+        type: "string",
+        contentEncoding: "base64",
+        contentMediaType: schema.mediaType || "application/octet-stream",
+        "x-portType": schema.portType,
+      };
+    case "array":
+      return { type: "array", items: dataSourceSchemaToJsonSchema(schema.items) };
+    case "object": {
+      const properties = schema.properties.reduce<Record<string, unknown>>((current, property) => {
+        const name = property.name.trim();
+        if (name) {
+          current[name] = dataSourceSchemaToJsonSchema(property.schema);
+        }
+        return current;
+      }, {});
+      return {
+        type: "object",
+        properties,
+        required: schema.properties.filter((property) => property.required && property.name.trim()).map((property) => property.name.trim()),
+      };
+    }
+    case "any":
+      return {};
+    case "string":
+    case "number":
+    case "boolean":
+    case "null":
+      return { type: schema.type };
+  }
+}
+
+function formatDataSourceSchemaJson(schema: DataSourceSchema): string {
+  return JSON.stringify(dataSourceSchemaToJsonSchema(schema), null, 2);
+}
+
+function parseDataSourceSchemaJson(text: string): DataSourceSchema {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("Invalid JSON");
+  }
+  const schema = dataSourceSchemaFromJsonSchema(parsed);
+  if (!schema) {
+    throw new Error("Unsupported schema");
+  }
+  return schema;
+}
+
+function dataSourceSchemaFromJsonSchema(value: unknown): DataSourceSchema | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const portType = dataSourceSchemaPortTypeExtension(value);
+  const type = typeof value.type === "string" ? value.type : undefined;
+  if (portType && !type) {
+    return { type: "port", portType };
+  }
+  if (Object.keys(value).length === 0) {
+    return { type: "any" };
+  }
+
+  if (type === "array") {
+    return { type: "array", items: dataSourceSchemaFromJsonSchema(value.items) ?? { type: "any" } };
+  }
+
+  if (type === "object" || isRecord(value.properties)) {
+    const required = new Set(
+      Array.isArray(value.required) ? value.required.filter((item): item is string => typeof item === "string") : [],
+    );
+    const properties = isRecord(value.properties)
+      ? Object.entries(value.properties).flatMap(([name, propertyValue]) => {
+          const schema = dataSourceSchemaFromJsonSchema(propertyValue);
+          if (!schema) {
+            return [];
+          }
+          return [
+            {
+              id: createDataSourceSchemaPropertyId(),
+              name,
+              schema,
+              required: required.has(name),
+            },
+          ];
+        })
+      : [];
+    return { type: "object", properties };
+  }
+
+  if (type === "binary" || (type === "string" && (value.contentEncoding === "base64" || typeof value.contentMediaType === "string"))) {
+    return {
+      type: "binary",
+      mediaType: typeof value.contentMediaType === "string" && value.contentMediaType.trim() ? value.contentMediaType.trim() : "application/octet-stream",
+      portType: portType ?? "data_value",
+    };
+  }
+
+  if (type === "string" || type === "number" || type === "boolean" || type === "null") {
+    return { type };
+  }
+  if (type === "any") {
+    return { type: "any" };
+  }
+  return null;
+}
+
+function dataSourceSchemaPortTypeExtension(value: Record<string, unknown>): DataSourceType | null {
+  const portType = value["x-portType"] ?? value.xPortType ?? value.portType;
+  return isDataSourceType(portType) ? portType : null;
+}
+
+function addDataSourceSchemaProperty(schema: Extract<DataSourceSchema, { type: "object" }>): DataSourceSchema {
+  return {
+    ...schema,
+    properties: [
+      ...schema.properties,
+      {
+        id: createDataSourceSchemaPropertyId(),
+        name: "",
+        schema: { type: "any" },
+        required: true,
+      },
+    ],
+  };
+}
+
+function updateDataSourceSchemaProperty(
+  schema: Extract<DataSourceSchema, { type: "object" }>,
+  propertyId: string,
+  update: Partial<Omit<DataSourceSchemaProperty, "id">>,
+): DataSourceSchema {
+  return {
+    ...schema,
+    properties: schema.properties.map((property) =>
+      property.id === propertyId ? { ...property, ...update } : property,
+    ),
+  };
+}
+
+function removeDataSourceSchemaProperty(
+  schema: Extract<DataSourceSchema, { type: "object" }>,
+  propertyId: string,
+): DataSourceSchema {
+  return {
+    ...schema,
+    properties: schema.properties.filter((property) => property.id !== propertyId),
+  };
+}
+
+function createDataSourceSchemaPropertyId(): string {
+  return `property-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function downloadSavedWorkflowBlocksJson(blocks: SavedWorkflowBlock[]) {
@@ -7598,8 +8225,9 @@ function isDataSourceEntry(value: unknown): value is DataSourceEntry {
   return (
     typeof value.id === "string" &&
     typeof value.name === "string" &&
-    isDataSourceKind(value.kind) &&
+    (value.kind === undefined || isLegacyDataSourceKind(value.kind)) &&
     isDataSourceFormat(value.format) &&
+    (value.type === undefined || isDataSourceType(value.type) || isDataSourceSchemaInput(value.type)) &&
     typeof value.location === "string" &&
     typeof value.description === "string" &&
     Array.isArray(value.tags) &&
@@ -7610,7 +8238,7 @@ function isDataSourceEntry(value: unknown): value is DataSourceEntry {
   );
 }
 
-function isDataSourceKind(value: unknown): value is DataSourceKind {
+function isLegacyDataSourceKind(value: unknown): boolean {
   return (
     value === "song-catalog" ||
     value === "reference-library" ||
@@ -7623,6 +8251,104 @@ function isDataSourceKind(value: unknown): value is DataSourceKind {
 
 function isDataSourceFormat(value: unknown): value is DataSourceFormat {
   return value === "sqlite" || value === "json" || value === "csv" || value === "txt" || value === "folder" || value === "api" || value === "other";
+}
+
+function isDataSourceType(value: unknown): value is DataSourceType {
+  return typeof value === "string" && dataSourceOutputTypes.includes(value as DataSourceType);
+}
+
+function isDataSourceSchemaInput(value: unknown): boolean {
+  return isDataSourceSchema(value) || dataSourceSchemaFromJsonSchema(value) !== null;
+}
+
+function isDataSourceSchema(value: unknown): value is DataSourceSchema {
+  if (!isRecord(value) || typeof value.type !== "string") {
+    return false;
+  }
+  switch (value.type) {
+    case "port":
+      return isDataSourceType(value.portType);
+    case "binary":
+      return typeof value.mediaType === "string" && isDataSourceType(value.portType);
+    case "array":
+      return isDataSourceSchema(value.items);
+    case "object":
+      return (
+        Array.isArray(value.properties) &&
+        value.properties.every(
+          (property) =>
+            isRecord(property) &&
+            typeof property.id === "string" &&
+            typeof property.name === "string" &&
+            isDataSourceSchema(property.schema) &&
+            typeof property.required === "boolean",
+        )
+      );
+    case "string":
+    case "number":
+    case "boolean":
+    case "null":
+    case "any":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function normalizeDataSourceSchema(value: unknown, fallback: DataSourceSchema): DataSourceSchema {
+  if (isDataSourceType(value)) {
+    return portTypeToDataSourceSchema(value);
+  }
+  if (!isRecord(value) || typeof value.type !== "string") {
+    return dataSourceSchemaFromJsonSchema(value) ?? fallback;
+  }
+  switch (value.type) {
+    case "port":
+      return isDataSourceType(value.portType) ? { type: "port", portType: value.portType } : fallback;
+    case "binary":
+      return {
+        type: "binary",
+        mediaType: typeof value.mediaType === "string" && value.mediaType.trim() ? value.mediaType.trim() : "application/octet-stream",
+        portType: isDataSourceType(value.portType) ? value.portType : "data_value",
+      };
+    case "array":
+      return { type: "array", items: normalizeDataSourceSchema(value.items, { type: "any" }) };
+    case "object":
+      if (isRecord(value.properties)) {
+        return dataSourceSchemaFromJsonSchema(value) ?? fallback;
+      }
+      return {
+        type: "object",
+        properties: Array.isArray(value.properties)
+          ? value.properties.flatMap((property) => {
+              if (!isRecord(property)) {
+                return [];
+              }
+              return [
+                {
+                  id: typeof property.id === "string" && property.id ? property.id : createDataSourceSchemaPropertyId(),
+                  name: typeof property.name === "string" ? property.name : "",
+                  schema: normalizeDataSourceSchema(property.schema, { type: "any" }),
+                  required: typeof property.required === "boolean" ? property.required : true,
+                },
+              ];
+            })
+          : [],
+      };
+    case "string": {
+      if (value.contentEncoding === "base64" || typeof value.contentMediaType === "string") {
+        return dataSourceSchemaFromJsonSchema(value) ?? fallback;
+      }
+      return { type: "string" };
+    }
+    case "number":
+    case "boolean":
+    case "null":
+    case "any":
+      return { type: value.type };
+    default:
+      return fallback;
+  }
 }
 
 function isSavedWorkflowLibrary(value: unknown): value is SavedWorkflowLibrary {
@@ -7689,6 +8415,9 @@ function isWorkflowNodeData(value: unknown): value is WorkflowNodeData {
   const categoryValid = value.category === undefined || isWorkflowComponentCategory(value.category);
   const tagsValid = value.tags === undefined || isWorkflowTags(value.tags);
   const sizeValid = value.size === undefined || isWorkflowNodeSize(value.size);
+  const dataSourceNodeValid = value.dataSourceNode === undefined || typeof value.dataSourceNode === "boolean";
+  const dataSourceIdValid = value.dataSourceId === undefined || typeof value.dataSourceId === "string";
+  const dataSourceTypeValid = value.dataSourceType === undefined || isDataSourceType(value.dataSourceType);
   return (
     typeof value.title === "string" &&
     typeof value.packageName === "string" &&
@@ -7704,7 +8433,10 @@ function isWorkflowNodeData(value: unknown): value is WorkflowNodeData {
     kindValid &&
     groupValid &&
     groupOpenValid &&
-    minimizedValid
+    minimizedValid &&
+    dataSourceNodeValid &&
+    dataSourceIdValid &&
+    dataSourceTypeValid
   );
 }
 
@@ -8736,6 +9468,47 @@ function workflowCatalogNodeTemplates(
       },
     };
   });
+}
+
+function workflowNodeDataWithDataSource(data: WorkflowNodeData, dataSource: DataSourceEntry | null): WorkflowNodeData {
+  const type = dataSource ? dataSourcePortType(dataSource.type) : "data_value";
+  const nextData: WorkflowNodeData = {
+    ...data,
+    title: dataSource ? `Data Source: ${dataSource.name}` : "Data Source",
+    packageName: "Data Sources",
+    description: dataSource
+      ? `Emits ${dataSource.name} from data source ID ${dataSource.id}.`
+      : "Selects a saved data source by ID and emits its payload through a typed output port.",
+    category: "Data",
+    tone: data.tone,
+    outputs: [dataSourceOutputPort(dataSource, type)],
+    dataSourceNode: true,
+    dataSourceType: type,
+  };
+  if (dataSource) {
+    nextData.dataSourceId = dataSource.id;
+  } else {
+    delete nextData.dataSourceId;
+  }
+  return nextData;
+}
+
+function workflowNodeDataSourceSynced(current: WorkflowNodeData, expected: WorkflowNodeData): boolean {
+  return (
+    current.title === expected.title &&
+    current.description === expected.description &&
+    current.dataSourceId === expected.dataSourceId &&
+    current.dataSourceType === expected.dataSourceType &&
+    current.outputs.length === expected.outputs.length &&
+    current.outputs.every((output, index) => {
+      const expectedOutput = expected.outputs[index];
+      return expectedOutput && output.id === expectedOutput.id && output.label === expectedOutput.label && output.type === expectedOutput.type;
+    })
+  );
+}
+
+function dataSourceOutputPort(dataSource: DataSourceEntry | null, fallbackType: DataSourceType): FlowPort {
+  return port("data", dataSource ? "source data" : "data", dataSource ? dataSourcePortType(dataSource.type) : fallbackType);
 }
 
 function rustPortSpecToFlowPort(spec: RustPortSpec): FlowPort | null {
