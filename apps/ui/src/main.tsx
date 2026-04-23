@@ -65,6 +65,7 @@ import {
 } from "./api/client";
 import {
   formatWorkflowTypeSpec,
+  formatWorkflowTypeSpecJson,
   isWorkflowTypeSpec,
   workflowTypeSignature,
   workflowTypesAssignable,
@@ -1651,6 +1652,9 @@ interface WorkflowNodeData extends Record<string, unknown> {
   dataSourceNode?: boolean;
   dataSourceId?: string;
   dataSourceType?: DataSourceType;
+  adapterNode?: boolean;
+  adapterInputSchema?: DataSourceSchema;
+  adapterOutputSchema?: DataSourceSchema;
 }
 
 type WorkflowNodeModel = Node<WorkflowNodeData, "workflow">;
@@ -2707,6 +2711,35 @@ const generatorWorkflowNodes: WorkflowNodeModel[] = [
   }),
 ];
 
+const adapterWorkflowNodes: WorkflowNodeModel[] = [
+  workflowNode("data-adapter", 0, 0, {
+    title: "Data Adapter",
+    packageName: "Typed adapter",
+    description: "Accepts a typed payload and exposes a configurable output contract so you can reshape data between incompatible nodes.",
+    category: "Data",
+    tone: "violet",
+    inputs: [port("source", "source data", "data_value")],
+    outputs: [port("result", "adapted data", "data_value")],
+    adapterNode: true,
+    adapterInputSchema: { type: "any" },
+    adapterOutputSchema: { type: "any" },
+    tags: ["adapter", "typed", "schema", "reshape", "transform"],
+  }),
+  workflowNode("object-adapter", 0, 0, {
+    title: "Object Adapter",
+    packageName: "Typed adapter",
+    description: "Starts with object-shaped ports so you can rearrange named fields and emit a new object contract downstream.",
+    category: "Data",
+    tone: "indigo",
+    inputs: [port("source", "source object", "object_value")],
+    outputs: [port("result", "mapped object", "object_value")],
+    adapterNode: true,
+    adapterInputSchema: { type: "object", properties: [] },
+    adapterOutputSchema: { type: "object", properties: [] },
+    tags: ["adapter", "object", "mapping", "fields", "reshape"],
+  }),
+];
+
 const streamWorkflowNodes: WorkflowNodeModel[] = [
   workflowNode("stream-sender", 0, 0, {
     title: "Stream Sender",
@@ -2887,6 +2920,7 @@ const controlFlowWorkflowNodes: WorkflowNodeModel[] = [
 const workflowNodeTemplates: WorkflowNodeModel[] = initialWorkflowNodes.concat(
   dashboardWorkflowNodes,
   generatorWorkflowNodes,
+  adapterWorkflowNodes,
   streamWorkflowNodes,
   httpWorkflowNodes,
   controlFlowWorkflowNodes,
@@ -3534,6 +3568,28 @@ function WorkflowBuilder({
     [dataSources, nodes, setEdges, setNodes],
   );
 
+  const updateWorkflowNodeAdapterSchemas = useCallback(
+    (nodeId: string, inputSchema: DataSourceSchema, outputSchema: DataSourceSchema) => {
+      const nextNodes = nodes.map((node) =>
+        node.id === nodeId && node.data.adapterNode
+          ? {
+              ...node,
+              data: workflowNodeDataWithAdapter(node.data, inputSchema, outputSchema),
+            }
+          : node,
+      );
+      setNodes(nextNodes);
+      setEdges((currentEdges) =>
+        currentEdges.filter(
+          (edge) => (edge.source !== nodeId && edge.target !== nodeId) || compatibleConnection(nextNodes, edge),
+        ),
+      );
+      setContextMenu(null);
+      setOutputConnectorMenu(null);
+    },
+    [nodes, setEdges, setNodes],
+  );
+
   const setGroupOpen = useCallback(
     (nodeId: string, groupOpen: boolean) => {
       setNodes((currentNodes) =>
@@ -3813,7 +3869,9 @@ function WorkflowBuilder({
       }
 
       const nodeId = createWorkflowNodeInstanceId(template.id);
-      const data = cloneWorkflowNodeData(template.data);
+      const data = template.data.adapterNode
+        ? workflowNodeDataWithAdapterSource(cloneWorkflowNodeData(template.data), outputConnectorMenu.sourcePort)
+        : cloneWorkflowNodeData(template.data);
       if (workflowNodeDataCanUseInlineLayout(data)) {
         data.minimized = true;
       }
@@ -4257,6 +4315,7 @@ function WorkflowBuilder({
           onDeleteSelected={() => deleteWorkflowNodes(selectedNodeIds)}
           onUpdateSelectedGroup={updateGroupDetails}
           onUpdateSelectedDataSource={updateWorkflowNodeDataSource}
+          onUpdateSelectedAdapter={updateWorkflowNodeAdapterSchemas}
           onToggleSelectedGroupOpen={() => {
             const groupNode = selectedNodes.length === 1 && selectedNodes[0].data.group ? selectedNodes[0] : null;
             if (groupNode) {
@@ -4540,6 +4599,7 @@ function WorkflowDetailsPanel({
   onDeleteSelected,
   onUpdateSelectedGroup,
   onUpdateSelectedDataSource,
+  onUpdateSelectedAdapter,
   onToggleSelectedGroupOpen,
   onUngroupSelected,
   onSaveWorkflowVersion,
@@ -4572,6 +4632,7 @@ function WorkflowDetailsPanel({
   onDeleteSelected: () => void;
   onUpdateSelectedGroup: (nodeId: string, updates: Pick<WorkflowNodeData, "title" | "description">) => void;
   onUpdateSelectedDataSource: (nodeId: string, dataSourceId: string | null) => void;
+  onUpdateSelectedAdapter: (nodeId: string, inputSchema: DataSourceSchema, outputSchema: DataSourceSchema) => void;
   onToggleSelectedGroupOpen: () => void;
   onUngroupSelected: () => void;
   onSaveWorkflowVersion: () => void;
@@ -4656,6 +4717,9 @@ function WorkflowDetailsPanel({
                 dataSources={dataSources}
                 onSelectDataSource={onUpdateSelectedDataSource}
               />
+            )}
+            {selectedNode.data.adapterNode && (
+              <AdapterNodeSettings node={selectedNode} onChange={onUpdateSelectedAdapter} />
             )}
             <WorkflowPortConnectionsList
               title="Inputs"
@@ -5000,6 +5064,7 @@ function WorkflowPortConnectionsList({
                   {portIsStream(portValue) && <span className="text-zinc-900">stream</span>}
                   {portValue.optional && <span className="text-zinc-500">optional</span>}
                 </div>
+                <WorkflowTypeDetails spec={portValue.valueType} />
                 {connections.length === 0 ? (
                   <div className="mt-2 text-[11px] text-zinc-500">No connected components</div>
                 ) : (
@@ -5024,6 +5089,14 @@ function WorkflowPortConnectionsList({
         )}
       </div>
     </div>
+  );
+}
+
+function WorkflowTypeDetails({ spec }: { spec: WorkflowTypeSpec }) {
+  return (
+    <pre className="mt-2 overflow-auto rounded-md bg-white/80 px-2 py-2 font-mono text-[10px] leading-4 text-zinc-600">
+      {formatWorkflowTypeSpecJson(spec)}
+    </pre>
   );
 }
 
@@ -5079,6 +5152,48 @@ function DataSourceNodeSettings({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function AdapterNodeSettings({
+  node,
+  onChange,
+}: {
+  node: WorkflowNodeModel;
+  onChange: (nodeId: string, inputSchema: DataSourceSchema, outputSchema: DataSourceSchema) => void;
+}) {
+  const inputSchema = normalizeDataSourceSchema(node.data.adapterInputSchema, { type: "any" });
+  const outputSchema = normalizeDataSourceSchema(node.data.adapterOutputSchema, { type: "any" });
+  const inputPort = node.data.inputs[0];
+  const outputPort = node.data.outputs[0];
+
+  return (
+    <div className="space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+      <div>
+        <div className="text-xs font-semibold uppercase text-zinc-500">Adapter</div>
+        <p className="mt-1 text-xs leading-5 text-zinc-600">
+          Define the contract this node accepts and the contract it emits after rearranging the payload.
+        </p>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <Metric label="Input port" value={inputPort ? formatFlowPortType(inputPort) : "none"} />
+        <Metric label="Output port" value={outputPort ? formatFlowPortType(outputPort) : "none"} />
+      </div>
+      <div className="space-y-2">
+        <div className="text-[11px] font-semibold uppercase text-zinc-500">Input contract</div>
+        <DataSourceSchemaEditor
+          schema={inputSchema}
+          onChange={(nextInputSchema) => onChange(node.id, nextInputSchema, outputSchema)}
+        />
+      </div>
+      <div className="space-y-2">
+        <div className="text-[11px] font-semibold uppercase text-zinc-500">Output contract</div>
+        <DataSourceSchemaEditor
+          schema={outputSchema}
+          onChange={(nextOutputSchema) => onChange(node.id, inputSchema, nextOutputSchema)}
+        />
+      </div>
     </div>
   );
 }
@@ -6290,6 +6405,15 @@ function cloneWorkflowNodeData(data: WorkflowNodeData): WorkflowNodeData {
   }
   if (isDataSourceType(data.dataSourceType)) {
     cloned.dataSourceType = data.dataSourceType;
+  }
+  if (data.adapterNode) {
+    cloned.adapterNode = true;
+  }
+  if (isDataSourceSchema(data.adapterInputSchema)) {
+    cloned.adapterInputSchema = normalizeDataSourceSchema(data.adapterInputSchema, { type: "any" });
+  }
+  if (isDataSourceSchema(data.adapterOutputSchema)) {
+    cloned.adapterOutputSchema = normalizeDataSourceSchema(data.adapterOutputSchema, { type: "any" });
   }
   return cloned;
 }
@@ -8561,6 +8685,9 @@ function isWorkflowNodeData(value: unknown): value is WorkflowNodeData {
   const dataSourceNodeValid = value.dataSourceNode === undefined || typeof value.dataSourceNode === "boolean";
   const dataSourceIdValid = value.dataSourceId === undefined || typeof value.dataSourceId === "string";
   const dataSourceTypeValid = value.dataSourceType === undefined || isDataSourceType(value.dataSourceType);
+  const adapterNodeValid = value.adapterNode === undefined || typeof value.adapterNode === "boolean";
+  const adapterInputSchemaValid = value.adapterInputSchema === undefined || isDataSourceSchema(value.adapterInputSchema);
+  const adapterOutputSchemaValid = value.adapterOutputSchema === undefined || isDataSourceSchema(value.adapterOutputSchema);
   return (
     typeof value.title === "string" &&
     typeof value.packageName === "string" &&
@@ -8579,7 +8706,10 @@ function isWorkflowNodeData(value: unknown): value is WorkflowNodeData {
     minimizedValid &&
     dataSourceNodeValid &&
     dataSourceIdValid &&
-    dataSourceTypeValid
+    dataSourceTypeValid &&
+    adapterNodeValid &&
+    adapterInputSchemaValid &&
+    adapterOutputSchemaValid
   );
 }
 
@@ -9295,6 +9425,7 @@ function PortRow({
         isInput ? "pl-3" : "pr-3",
         isFocused && "ring-2 ring-zinc-950 ring-offset-2",
       )}
+      title={`${port.label}\n${formatWorkflowTypeSpecJson(port.valueType)}`}
       style={{
         backgroundColor: hexToRgba(color, 0.08),
         borderColor: hexToRgba(color, 0.32),
@@ -9476,6 +9607,9 @@ function WorkflowOutputConnectorMenu({
           <CloseIcon className="h-3.5 w-3.5" />
         </button>
       </div>
+      <pre className="max-h-28 overflow-auto border-b border-zinc-100 bg-zinc-50 px-3 py-2 font-mono text-[10px] leading-4 text-zinc-600">
+        {formatWorkflowTypeSpecJson(sourcePort.valueType)}
+      </pre>
       <div className="max-h-96 overflow-auto py-1">
         {!hasTargets && <div className="px-3 py-3 text-xs text-zinc-400">No compatible components</div>}
         {primitiveTargets.length > 0 && (
@@ -9637,6 +9771,45 @@ function workflowNodeDataWithDataSource(data: WorkflowNodeData, dataSource: Data
   return nextData;
 }
 
+function workflowNodeDataWithAdapter(
+  data: WorkflowNodeData,
+  inputSchema: DataSourceSchema,
+  outputSchema: DataSourceSchema,
+): WorkflowNodeData {
+  const normalizedInput = normalizeDataSourceSchema(inputSchema, { type: "any" });
+  const normalizedOutput = normalizeDataSourceSchema(outputSchema, { type: "any" });
+  return {
+    ...data,
+    category: "Data",
+    inputs: [adapterPort("source", "source data", normalizedInput)],
+    outputs: [adapterPort("result", "adapted data", normalizedOutput)],
+    adapterNode: true,
+    adapterInputSchema: normalizedInput,
+    adapterOutputSchema: normalizedOutput,
+  };
+}
+
+function workflowNodeDataWithAdapterSource(data: WorkflowNodeData, sourcePort: FlowPort): WorkflowNodeData {
+  const inputSchema = workflowTypeSpecToDataSourceSchema(sourcePort.valueType, sourcePort.type);
+  const outputSchema = workflowTypeSpecToDataSourceSchema(sourcePort.valueType, sourcePort.type);
+  return {
+    ...workflowNodeDataWithAdapter(data, inputSchema, outputSchema),
+    inputs: [
+      port("source", "source data", sourcePort.type, {
+        valueType: structuredClone(sourcePort.valueType),
+        optional: sourcePort.optional,
+        stream: sourcePort.stream,
+      }),
+    ],
+    outputs: [
+      port("result", "adapted data", sourcePort.type, {
+        valueType: structuredClone(sourcePort.valueType),
+        stream: sourcePort.stream,
+      }),
+    ],
+  };
+}
+
 function workflowNodeDataSourceSynced(current: WorkflowNodeData, expected: WorkflowNodeData): boolean {
   return (
     current.title === expected.title &&
@@ -9663,6 +9836,50 @@ function dataSourceOutputPort(dataSource: DataSourceEntry | null, fallbackType: 
   return port("data", dataSource ? "source data" : "data", outputType, {
     valueType: dataSource ? dataSourceSchemaToWorkflowType(dataSource.type) : workflowTypeForPortType(outputType),
   });
+}
+
+function adapterPort(id: string, label: string, schema: DataSourceSchema): FlowPort {
+  const type = dataSourcePortType(schema);
+  return port(id, label, type, { valueType: dataSourceSchemaToWorkflowType(schema) });
+}
+
+function workflowTypeSpecToDataSourceSchema(spec: WorkflowTypeSpec, fallbackPortType: DataSourceType = "data_value"): DataSourceSchema {
+  switch (spec.type) {
+    case "any":
+    case "null":
+    case "boolean":
+    case "number":
+      return { type: spec.type };
+    case "string":
+      return spec.semantic && isDataSourceType(spec.semantic) ? { type: "port", portType: spec.semantic } : { type: "string" };
+    case "binary": {
+      const portType = spec.semantic && isDataSourceType(spec.semantic) ? spec.semantic : fallbackPortType;
+      const fallbackType = workflowTypeForPortType(portType);
+      const fallbackMediaType = fallbackType.type === "binary" ? fallbackType.media_type : undefined;
+      return {
+        type: "binary",
+        mediaType: spec.media_type || fallbackMediaType || "application/octet-stream",
+        portType,
+      };
+    }
+    case "array":
+      return { type: "array", items: workflowTypeSpecToDataSourceSchema(spec.items) };
+    case "object":
+      if ((spec.properties?.length ?? 0) === 0 && spec.semantic && isDataSourceType(spec.semantic)) {
+        return { type: "port", portType: spec.semantic };
+      }
+      return {
+        type: "object",
+        properties: (spec.properties ?? []).map((property) => ({
+          id: createDataSourceSchemaPropertyId(),
+          name: property.name,
+          schema: workflowTypeSpecToDataSourceSchema(property.value),
+          required: Boolean(property.required),
+        })),
+      };
+    case "union":
+      return { type: "any" };
+  }
 }
 
 function rustPortSpecToFlowPort(spec: RustPortSpec): FlowPort | null {

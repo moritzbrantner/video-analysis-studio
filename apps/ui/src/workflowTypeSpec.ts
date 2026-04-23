@@ -49,6 +49,10 @@ export function formatWorkflowTypeSpec(spec: WorkflowTypeSpec, stream = false): 
   return stream ? `${formatted} stream` : formatted;
 }
 
+export function formatWorkflowTypeSpecJson(spec: WorkflowTypeSpec): string {
+  return JSON.stringify(canonicalizeWorkflowTypeSpec(spec), null, 2);
+}
+
 export function workflowTypeSignature(spec: WorkflowTypeSpec, stream = false): string {
   return fnv1aHash(JSON.stringify(canonicalizeWorkflowTypeSpec(spec)) + `|${stream ? "stream" : "value"}`);
 }

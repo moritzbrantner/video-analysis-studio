@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { WorkflowTypeSpec } from "../src/api/client";
 import {
   formatWorkflowTypeSpec,
+  formatWorkflowTypeSpecJson,
   workflowTypeSignature,
   workflowTypesAssignable,
 } from "../src/workflowTypeSpec";
@@ -106,5 +107,38 @@ describe("workflow type formatting and signatures", () => {
     };
 
     expect(workflowTypeSignature(left)).toBe(workflowTypeSignature(right));
+  });
+
+  test("exact formatting emits canonical pretty JSON", () => {
+    expect(
+      formatWorkflowTypeSpecJson({
+        type: "object",
+        properties: [
+          { name: "b", value: { type: "number" }, required: false },
+          { name: "a", value: { type: "string", semantic: "youtube_url" }, required: true },
+        ],
+        additional_properties: false,
+      }),
+    ).toBe(`{
+  "type": "object",
+  "properties": [
+    {
+      "name": "a",
+      "value": {
+        "type": "string",
+        "semantic": "youtube_url"
+      },
+      "required": true
+    },
+    {
+      "name": "b",
+      "value": {
+        "type": "number"
+      },
+      "required": false
+    }
+  ],
+  "additional_properties": false
+}`);
   });
 });

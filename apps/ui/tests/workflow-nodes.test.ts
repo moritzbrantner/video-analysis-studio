@@ -62,6 +62,7 @@ interface WorkflowNodeFixture {
   inputs: FlowPortFixture[];
   outputs: FlowPortFixture[];
   tags?: string[];
+  adapterNode?: boolean;
 }
 
 interface WorkflowEdgeFixture {
@@ -75,6 +76,7 @@ const workflowNodeArrayNames = [
   "initialWorkflowNodes",
   "dashboardWorkflowNodes",
   "generatorWorkflowNodes",
+  "adapterWorkflowNodes",
   "streamWorkflowNodes",
   "httpWorkflowNodes",
   "controlFlowWorkflowNodes",
@@ -147,6 +149,16 @@ describe("workflow node catalog", () => {
     expect(rustNodeIds.length).toBeGreaterThan(10);
     for (const id of rustNodeIds) {
       expect(tsNodeIds.has(id)).toBe(true);
+    }
+  });
+
+  test("adapter templates are present with single input/output contracts", () => {
+    const adapterNodes = workflowNodes.filter((node) => node.adapterNode === true);
+    expect(adapterNodes.map((node) => node.id).sort()).toEqual(["data-adapter", "object-adapter"]);
+    for (const node of adapterNodes) {
+      expect(node.inputs).toHaveLength(1);
+      expect(node.outputs).toHaveLength(1);
+      expect(node.category).toBe("Data");
     }
   });
 
@@ -277,6 +289,7 @@ function readWorkflowNode(arrayName: string, expression: ts.Expression): Workflo
     inputs: readPortArray(requiredProperty(data, "inputs")),
     outputs: readPortArray(requiredProperty(data, "outputs")),
     tags: readOptionalStringArray(optionalProperty(data, "tags")),
+    adapterNode: readOptionalBoolean(optionalProperty(data, "adapterNode")),
   };
 }
 
@@ -338,6 +351,19 @@ function readOptionalBooleanProperty(
     return { [propertyName]: false };
   }
   throw new Error(`${propertyName} must be a boolean literal`);
+}
+
+function readOptionalBoolean(expression: ts.Expression | undefined): boolean | undefined {
+  if (!expression) {
+    return undefined;
+  }
+  if (expression.kind === ts.SyntaxKind.TrueKeyword) {
+    return true;
+  }
+  if (expression.kind === ts.SyntaxKind.FalseKeyword) {
+    return false;
+  }
+  throw new Error("Expected boolean literal");
 }
 
 function readWorkflowTemplateArrayNames(): string[] {
