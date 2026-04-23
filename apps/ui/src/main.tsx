@@ -16,9 +16,12 @@ import {
   useUpdateNodeInternals,
   type Connection,
   type Edge,
+  type FinalConnectionState,
+  type HandleType,
   type Node,
   type NodeChange,
   type NodeProps,
+  type OnReconnect,
   type ReactFlowInstance,
 } from "@xyflow/react";
 import {
@@ -2884,6 +2887,7 @@ function WorkflowBuilder({
   const blockFileInputRef = useRef<HTMLInputElement | null>(null);
   const workflowClipboardRef = useRef<WorkflowClipboardState | null>(null);
   const focusedWorkflowTargetRef = useRef<string | null>(null);
+  const reconnectingEdgeRef = useRef<{ edgeId: string; handleType: HandleType } | null>(null);
   const portTypeColorStyle = useMemo(() => portTypeColorsStyle(portTypeColors), [portTypeColors]);
 
   useEffect(() => {
@@ -2992,6 +2996,46 @@ function WorkflowBuilder({
     [nodes, setEdges],
   );
 
+  const onReconnect = useCallback<OnReconnect<Edge>>(
+    (oldEdge, connection) => {
+      const sourcePort = findPort(nodes, connection.source, connection.sourceHandle, "out");
+      const targetPort = findPort(nodes, connection.target, connection.targetHandle, "in");
+      if (!sourcePort || !targetPort || !portsCompatible(sourcePort, targetPort)) {
+        return;
+      }
+      const nextEdge = workflowEdgeFromConnection(connection, sourcePort);
+      setEdges((currentEdges) => {
+        const withoutOldEdge = currentEdges.filter((edge) => edge.id !== oldEdge.id);
+        return withoutOldEdge.some((edge) => edge.id === nextEdge.id)
+          ? withoutOldEdge
+          : withoutOldEdge.concat(nextEdge);
+      });
+    },
+    [nodes, setEdges],
+  );
+
+  const onReconnectStart = useCallback(
+    (_event: React.MouseEvent, edge: Edge, handleType: HandleType) => {
+      reconnectingEdgeRef.current = { edgeId: edge.id, handleType };
+    },
+    [],
+  );
+
+  const onReconnectEnd = useCallback(
+    (_event: MouseEvent | TouchEvent, edge: Edge, handleType: HandleType, connectionState: FinalConnectionState) => {
+      const reconnectingEdge = reconnectingEdgeRef.current;
+      reconnectingEdgeRef.current = null;
+      if (connectionState.isValid || handleType !== "target") {
+        return;
+      }
+      if (!reconnectingEdge || reconnectingEdge.edgeId !== edge.id || reconnectingEdge.handleType !== "target") {
+        return;
+      }
+      setEdges((currentEdges) => currentEdges.filter((candidate) => candidate.id !== edge.id));
+    },
+    [setEdges],
+  );
+
   const onWorkflowNodesChange = useCallback(
     (changes: NodeChange<WorkflowNodeModel>[]) => {
       setNodes((currentNodes) => stickWorkflowInlineAttachments(applyNodeChanges(changes, currentNodes), edges));
@@ -3002,6 +3046,37 @@ function WorkflowBuilder({
   const onSelectionChange = useCallback(({ nodes: selectedNodes }: { nodes: WorkflowNodeModel[] }) => {
     setSelectedNodeIds(selectedNodes.map((node) => node.id));
   }, []);
+
+  const focusWorkflowNode = useCallback(
+    (nodeId: string) => {
+      if (!nodes.some((node) => node.id === nodeId)) {
+        return;
+      }
+      setNodes((currentNodes) =>
+        currentNodes.map((node) => ({
+          ...node,
+          selected: node.id === nodeId,
+          data:
+            node.id === nodeId && node.data.minimized
+              ? { ...node.data, minimized: false }
+              : node.data,
+        })),
+      );
+      setSelectedNodeIds([nodeId]);
+      setContextMenu(null);
+      setOutputConnectorMenu(null);
+
+      requestAnimationFrame(() => {
+        flowInstance?.fitView({
+          nodes: [{ id: nodeId }],
+          padding: 1.4,
+          maxZoom: 1.05,
+          duration: 320,
+        });
+      });
+    },
+    [flowInstance, nodes, setNodes],
+  );
 
   const arrangeWorkflow = useCallback(() => {
     if (nodes.length === 0) {
@@ -3905,6 +3980,9 @@ function WorkflowBuilder({
               onNodesChange={onWorkflowNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
+              onReconnect={onReconnect}
+              onReconnectStart={onReconnectStart}
+              onReconnectEnd={onReconnectEnd}
               isValidConnection={isValidConnection}
               onNodeDragStop={(_event, node) => attachDraggedInlineNode(node)}
               onSelectionChange={onSelectionChange}
@@ -4012,7 +4090,6 @@ function WorkflowBuilder({
               setGroupOpen(groupNode.id, !groupNode.data.groupOpen);
             }
           }}
-          onToggleSelectedMinimized={() => setWorkflowNodesMinimized(selectedNodeIds, !selectedNodes.every((node) => node.data.minimized))}
           onUngroupSelected={() => {
             const groupNode = selectedNodes.length === 1 && selectedNodes[0].data.group ? selectedNodes[0] : null;
             if (groupNode) {
@@ -4021,6 +4098,7 @@ function WorkflowBuilder({
           }}
           onSaveWorkflowVersion={saveActiveWorkflowVersion}
           onRestoreWorkflowVersion={restoreWorkflowVersion}
+          onFocusNode={focusWorkflowNode}
         />
       </section>
         </WorkflowOutputConnectorContext.Provider>
@@ -4288,10 +4366,10 @@ function WorkflowDetailsPanel({
   onDeleteSelected,
   onUpdateSelectedGroup,
   onToggleSelectedGroupOpen,
-  onToggleSelectedMinimized,
   onUngroupSelected,
   onSaveWorkflowVersion,
   onRestoreWorkflowVersion,
+  onFocusNode,
 }: {
   workflowLibrary: SavedWorkflowLibrary;
   activeWorkflow: SavedWorkflow;
@@ -4318,13 +4396,21 @@ function WorkflowDetailsPanel({
   onDeleteSelected: () => void;
   onUpdateSelectedGroup: (nodeId: string, updates: Pick<WorkflowNodeData, "title" | "description">) => void;
   onToggleSelectedGroupOpen: () => void;
-  onToggleSelectedMinimized: () => void;
   onUngroupSelected: () => void;
   onSaveWorkflowVersion: () => void;
   onRestoreWorkflowVersion: (version: SavedWorkflowVersion) => void;
+  onFocusNode: (nodeId: string) => void;
 }) {
   const selectedNode = selectedNodes.length === 1 ? selectedNodes[0] : null;
   const selectedGroupNode = selectedNode?.data.group ? selectedNode : null;
+  const selectedInputConnections = useMemo(
+    () => (selectedNode ? workflowNodePortConnections(selectedNode, nodes, edges, "in") : []),
+    [edges, nodes, selectedNode],
+  );
+  const selectedOutputConnections = useMemo(
+    () => (selectedNode ? workflowNodePortConnections(selectedNode, nodes, edges, "out") : []),
+    [edges, nodes, selectedNode],
+  );
 
   return (
     <aside className="min-h-0 rounded-lg border border-zinc-200 bg-white shadow-sm">
@@ -4386,13 +4472,17 @@ function WorkflowDetailsPanel({
                   </span>
                 ))}
               </div>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <Metric label="Inputs" value={String(selectedNode.data.inputs.length)} />
-                <Metric label="Outputs" value={String(selectedNode.data.outputs.length)} />
-              </div>
             </div>
-            <WorkflowPortList title="Inputs" ports={selectedNode.data.inputs} />
-            <WorkflowPortList title="Outputs" ports={selectedNode.data.outputs} />
+            <WorkflowPortConnectionsList
+              title="Inputs"
+              groups={selectedInputConnections}
+              onFocusNode={onFocusNode}
+            />
+            <WorkflowPortConnectionsList
+              title="Outputs"
+              groups={selectedOutputConnections}
+              onFocusNode={onFocusNode}
+            />
             {selectedGroupNode?.data.group && (
               <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
                 <div className="text-xs font-semibold uppercase text-zinc-500">Group</div>
@@ -4416,15 +4506,10 @@ function WorkflowDetailsPanel({
                 </button>
               )}
               <button
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
-                onClick={onToggleSelectedMinimized}
-                title="Toggle selected component"
-              >
-                <MinimizeIcon className="h-4 w-4" />
-                Toggle
-              </button>
-              <button
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-rose-700 shadow-sm hover:bg-rose-50"
+                className={classNames(
+                  "inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-rose-700 shadow-sm hover:bg-rose-50",
+                  !selectedGroupNode && "col-span-2",
+                )}
                 onClick={onDeleteSelected}
                 title="Delete selected component"
               >
@@ -4639,16 +4724,82 @@ function WorkflowDetailsPanel({
   );
 }
 
-function WorkflowPortList({ title, ports }: { title: string; ports: FlowPort[] }) {
+interface WorkflowPortConnection {
+  nodeId: string;
+  nodeTitle: string;
+  portLabel: string;
+}
+
+interface WorkflowPortConnectionGroup {
+  port: FlowPort;
+  connections: WorkflowPortConnection[];
+}
+
+function workflowNodePortConnections(
+  node: WorkflowNodeModel,
+  nodes: WorkflowNodeModel[],
+  edges: Edge[],
+  direction: PortDirection,
+): WorkflowPortConnectionGroup[] {
+  const nodeById = new Map(nodes.map((candidate) => [candidate.id, candidate]));
+  const ports = direction === "in" ? node.data.inputs : node.data.outputs;
+
+  return ports.map((portValue) => {
+    const ownHandle = handleId(direction, portValue);
+    const matchingEdges = edges.filter((edge) =>
+      direction === "in"
+        ? edge.target === node.id && edge.targetHandle === ownHandle
+        : edge.source === node.id && edge.sourceHandle === ownHandle,
+    );
+
+    const connections: WorkflowPortConnection[] = [];
+    const seen = new Set<string>();
+    for (const edge of matchingEdges) {
+      const connectedNodeId = direction === "in" ? edge.source : edge.target;
+      const connectedHandle = direction === "in" ? edge.sourceHandle : edge.targetHandle;
+      const connectedDirection: PortDirection = direction === "in" ? "out" : "in";
+      const connectedNode = nodeById.get(connectedNodeId);
+      if (!connectedNode) {
+        continue;
+      }
+
+      const connectedPort = findPort(nodes, connectedNodeId, connectedHandle, connectedDirection);
+      const key = `${connectedNodeId}|${connectedPort?.id ?? connectedHandle ?? ""}|${connectedPort?.type ?? ""}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+
+      connections.push({
+        nodeId: connectedNodeId,
+        nodeTitle: connectedNode.data.title,
+        portLabel: connectedPort?.label ?? (connectedDirection === "out" ? "output" : "input"),
+      });
+    }
+
+    connections.sort((left, right) => left.nodeTitle.localeCompare(right.nodeTitle));
+    return { port: portValue, connections };
+  });
+}
+
+function WorkflowPortConnectionsList({
+  title,
+  groups,
+  onFocusNode,
+}: {
+  title: string;
+  groups: WorkflowPortConnectionGroup[];
+  onFocusNode: (nodeId: string) => void;
+}) {
   const colors = usePortTypeColors();
   return (
     <div>
       <div className="mb-2 text-xs font-semibold uppercase text-zinc-500">{title}</div>
       <div className="space-y-2">
-        {ports.length === 0 ? (
+        {groups.length === 0 ? (
           <div className="rounded-md border border-dashed border-zinc-200 px-3 py-2 text-xs text-zinc-400">none</div>
         ) : (
-          ports.map((portValue) => {
+          groups.map(({ port: portValue, connections }) => {
             const color = portTypeColor(portValue.type, colors);
             return (
               <div
@@ -4665,6 +4816,24 @@ function WorkflowPortList({ title, ports }: { title: string; ports: FlowPort[] }
                   {portIsStream(portValue) && <span className="text-zinc-900">stream</span>}
                   {portValue.optional && <span className="text-zinc-500">optional</span>}
                 </div>
+                {connections.length === 0 ? (
+                  <div className="mt-2 text-[11px] text-zinc-500">No connected components</div>
+                ) : (
+                  <div className="mt-2 space-y-1.5">
+                    {connections.map((connection) => (
+                      <button
+                        key={`${portValue.id}-${connection.nodeId}-${connection.portLabel}`}
+                        type="button"
+                        className="flex w-full items-center justify-between gap-2 rounded border border-zinc-200 bg-white px-2 py-1.5 text-left text-[11px] hover:border-zinc-300 hover:bg-zinc-50"
+                        onClick={() => onFocusNode(connection.nodeId)}
+                        title={`Focus ${connection.nodeTitle}`}
+                      >
+                        <span className="truncate font-medium text-zinc-800">{connection.nodeTitle}</span>
+                        <span className="shrink-0 text-[10px] text-zinc-500">{connection.portLabel}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })
