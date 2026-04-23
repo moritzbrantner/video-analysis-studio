@@ -11,6 +11,7 @@
     "ui:dev": "bun run --cwd apps/ui dev",
     "ui:build": "bun run --cwd apps/ui build",
     "ui:test": "bun run --cwd apps/ui test",
+    "ui:test:e2e": "bun run --cwd apps/ui test:e2e",
     "ui:typecheck": "bun run --cwd apps/ui typecheck",
     "desktop:dev": "bun run --cwd apps/desktop tauri dev",
     "desktop:check": "cargo check -p studio-desktop"

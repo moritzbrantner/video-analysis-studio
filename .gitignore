@@ -13,3 +13,5 @@ use-case-output/
 *.wav
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
+apps/ui/playwright-report/
+apps/ui/test-results/

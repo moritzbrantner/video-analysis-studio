@@ -65,8 +65,10 @@ import {
 
 type WorkflowKindId = "youtube-video" | "youtube-collection" | "song-analysis" | "subtitle-generation";
 type SourceMode = "url" | "file" | "collection";
-type AppPage = "analysis" | "workflow" | "settings";
+type AppPage = "analysis" | "workflow" | "data-sources" | "settings";
 type ViewMode = "run" | ReportDashboardMode;
+type DataSourceKind = "song-catalog" | "reference-library" | "index" | "dataset" | "knowledge-base" | "custom";
+type DataSourceFormat = "sqlite" | "json" | "csv" | "txt" | "folder" | "api" | "other";
 
 interface WorkflowRunForm {
   sourceMode: SourceMode;
@@ -112,6 +114,29 @@ interface CollectionManifestPreviewState {
   error: string | null;
 }
 
+interface DataSourceEntry {
+  id: string;
+  name: string;
+  kind: DataSourceKind;
+  format: DataSourceFormat;
+  location: string;
+  description: string;
+  tags: string[];
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface DataSourceDraft {
+  name: string;
+  kind: DataSourceKind;
+  format: DataSourceFormat;
+  location: string;
+  description: string;
+  tags: string;
+  body: string;
+}
+
 const workflowKinds: Array<{
   id: WorkflowKindId;
   name: string;
@@ -147,6 +172,25 @@ const workflowKinds: Array<{
     packageName: "studio-core",
     status: "Ready",
   },
+];
+
+const dataSourceKinds: Array<{ id: DataSourceKind; label: string; description: string }> = [
+  { id: "song-catalog", label: "Song Catalog", description: "Catalogs used by song identification or matching nodes." },
+  { id: "reference-library", label: "Reference Library", description: "Long-form reference material or curated facts." },
+  { id: "index", label: "Index", description: "Lookup indices, key/value maps, and retrieval structures." },
+  { id: "dataset", label: "Dataset", description: "Structured data files such as CSV/JSON collections." },
+  { id: "knowledge-base", label: "Knowledge Base", description: "Domain notes, FAQs, and prompt context bases." },
+  { id: "custom", label: "Custom", description: "Any custom source used by workflow nodes." },
+];
+
+const dataSourceFormats: Array<{ id: DataSourceFormat; label: string }> = [
+  { id: "sqlite", label: "SQLite DB" },
+  { id: "json", label: "JSON" },
+  { id: "csv", label: "CSV" },
+  { id: "txt", label: "Text" },
+  { id: "folder", label: "Folder" },
+  { id: "api", label: "API" },
+  { id: "other", label: "Other" },
 ];
 
 const initialForm: WorkflowRunForm = {
@@ -194,6 +238,15 @@ const initialCollectionManifestPreview: CollectionManifestPreviewState = {
 };
 
 const mainSidebarCollapsedStorageKey = "video-analysis.mainSidebarCollapsed.v1";
+const initialDataSourceDraft: DataSourceDraft = {
+  name: "",
+  kind: "dataset",
+  format: "json",
+  location: "",
+  description: "",
+  tags: "",
+  body: "",
+};
 
 function App() {
   const [form, setForm] = useState<WorkflowRunForm>(initialForm);
@@ -215,6 +268,7 @@ function App() {
   const [dashboardLayout, setDashboardLayout] = useState<DashboardLayout>(defaultDashboardLayout);
   const [workflowLibrary, setWorkflowLibrary] = useState<SavedWorkflowLibrary>(loadSavedWorkflowLibrary);
   const [workflowRuns, setWorkflowRuns] = useState<SavedWorkflowRun[]>(loadSavedWorkflowRuns);
+  const [dataSources, setDataSources] = useState<DataSourceEntry[]>(loadSavedDataSources);
   const [workflowCatalog, setWorkflowCatalog] = useState<RustWorkflowCatalog | null>(null);
   const [portTypeColors, setPortTypeColors] = useState<PortTypeColors>(loadPortTypeColors);
   const [hotkeyBindings, setHotkeyBindings] = useState<HotkeyBindings>(loadHotkeyBindings);
@@ -286,6 +340,10 @@ function App() {
   useEffect(() => {
     persistHotkeyBindings(hotkeyBindings);
   }, [hotkeyBindings]);
+
+  useEffect(() => {
+    persistSavedDataSources(dataSources);
+  }, [dataSources]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -798,6 +856,27 @@ function App() {
                 className={classNames(
                   "flex w-full items-center justify-between rounded-lg border px-3 py-3 text-left transition",
                   mainSidebarCollapsed && "h-10 justify-center px-0 py-0",
+                  page === "data-sources"
+                    ? "border-zinc-950 bg-zinc-950 text-white"
+                    : "border-zinc-200 bg-white text-zinc-800 hover:border-zinc-300 hover:bg-zinc-50",
+                )}
+                onClick={() => navigateToPage("data-sources")}
+                title="Data Sources"
+                aria-label="Data Sources"
+              >
+                {!mainSidebarCollapsed && (
+                  <span>
+                    <span className="block text-sm font-medium">Data Sources</span>
+                    <span className="block text-xs opacity-70">Catalogs and libraries</span>
+                  </span>
+                )}
+                <DataSourceIcon className="h-4 w-4 shrink-0" />
+              </button>
+              <button
+                type="button"
+                className={classNames(
+                  "flex w-full items-center justify-between rounded-lg border px-3 py-3 text-left transition",
+                  mainSidebarCollapsed && "h-10 justify-center px-0 py-0",
                   page === "settings"
                     ? "border-zinc-950 bg-zinc-950 text-white"
                     : "border-zinc-200 bg-white text-zinc-800 hover:border-zinc-300 hover:bg-zinc-50",
@@ -960,6 +1039,8 @@ function App() {
                   <h1 className="text-2xl font-semibold tracking-normal text-zinc-950">
                     {page === "workflow"
                       ? "Workflow Builder"
+                      : page === "data-sources"
+                        ? "Data Sources"
                       : page === "settings"
                         ? "Settings"
                         : activeWorkflow.name}
@@ -967,6 +1048,8 @@ function App() {
                   <p className="mt-1 text-sm text-zinc-500">
                     {page === "workflow"
                       ? workflowKindName(activeWorkflow.kind)
+                      : page === "data-sources"
+                        ? "Catalogs, indices, references, and datasets for workflow nodes"
                       : page === "settings"
                         ? "Hotkeys and workflow type colors"
                         : `${workflowKindName(activeWorkflow.kind)} · ${reportTitle}`}
@@ -1027,6 +1110,8 @@ function App() {
                 hotkeyBindings={hotkeyBindings}
                 focusTarget={workflowFocusTarget?.workflowId === activeWorkflow.id ? workflowFocusTarget : null}
               />
+            ) : page === "data-sources" ? (
+              <DataSourcesPage dataSources={dataSources} onDataSourcesChange={setDataSources} />
             ) : page === "settings" ? (
               <SettingsPage
                 portTypeColors={portTypeColors}
@@ -1733,12 +1818,16 @@ const savedWorkflowsStorageKey = "video-analysis.workflows.v1";
 const savedWorkflowRunsStorageKey = "video-analysis.workflowRuns.v1";
 const savedWorkflowBlocksStorageKey = "video-analysis.workflowBlocks.v1";
 const savedWorkflowBlocksJsonFormat = "video-analysis.workflowBlocks";
+const savedDataSourcesStorageKey = "video-analysis.dataSources.v1";
+const savedDataSourcesJsonFormat = "video-analysis.dataSources";
+const savedDataSourcesJsonVersion = 1;
 const portTypeColorsStorageKey = "video-analysis.portTypeColors.v1";
 const hotkeyBindingsStorageKey = "video-analysis.hotkeys.v1";
 const defaultSeedWorkflowName = "YouTube Video Workflow";
 const legacySeedWorkflowName = "YouTube Analysis Workflow";
 const legacySeedWorkflowNames = new Set([legacySeedWorkflowName, "Default Analysis Pipeline"]);
 const maxSavedWorkflowVersions = 25;
+const maxSavedDataSources = 200;
 const defaultWorkflowNodeWidth = 310;
 const defaultWorkflowGroupHeight = 190;
 const inlineWorkflowNodeWidth = 240;
@@ -4843,6 +4932,391 @@ function WorkflowPortConnectionsList({
   );
 }
 
+function DataSourcesPage({
+  dataSources,
+  onDataSourcesChange,
+}: {
+  dataSources: DataSourceEntry[];
+  onDataSourcesChange: (dataSources: DataSourceEntry[]) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [activeDataSourceId, setActiveDataSourceId] = useState<string | null>(dataSources[0]?.id ?? null);
+  const [draft, setDraft] = useState<DataSourceDraft>(initialDataSourceDraft);
+  const [message, setMessage] = useState<string | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+
+  const activeDataSource = useMemo(
+    () => dataSources.find((entry) => entry.id === activeDataSourceId) ?? null,
+    [dataSources, activeDataSourceId],
+  );
+  const filteredDataSources = useMemo(
+    () => filterDataSources(dataSources, query),
+    [dataSources, query],
+  );
+  const draftTagCount = useMemo(() => parseDataSourceTags(draft.tags).length, [draft.tags]);
+  const usedKinds = useMemo(
+    () => dataSourceKinds.filter((kind) => dataSources.some((entry) => entry.kind === kind.id)),
+    [dataSources],
+  );
+
+  useEffect(() => {
+    if (dataSources.length === 0) {
+      if (activeDataSourceId !== null) {
+        setActiveDataSourceId(null);
+      }
+      return;
+    }
+    if (!activeDataSourceId || !dataSources.some((entry) => entry.id === activeDataSourceId)) {
+      setActiveDataSourceId(dataSources[0].id);
+    }
+  }, [dataSources, activeDataSourceId]);
+
+  useEffect(() => {
+    setDraft(activeDataSource ? dataSourceDraftFromEntry(activeDataSource) : initialDataSourceDraft);
+    setMessage(null);
+  }, [activeDataSource]);
+
+  const createDataSource = useCallback(() => {
+    const created = createDataSourceEntry({
+      ...initialDataSourceDraft,
+      name: nextDataSourceName(dataSources),
+    });
+    onDataSourcesChange([created, ...dataSources].slice(0, maxSavedDataSources));
+    setActiveDataSourceId(created.id);
+    setMessage(`Created ${created.name}.`);
+  }, [dataSources, onDataSourcesChange]);
+
+  const saveDataSource = useCallback(() => {
+    if (!draft.name.trim()) {
+      setMessage("Name is required.");
+      return;
+    }
+    const now = new Date().toISOString();
+    if (!activeDataSource) {
+      const created = createDataSourceEntry(draft);
+      onDataSourcesChange([created, ...dataSources].slice(0, maxSavedDataSources));
+      setActiveDataSourceId(created.id);
+      setMessage(`Saved ${created.name}.`);
+      return;
+    }
+    const updated: DataSourceEntry = {
+      ...activeDataSource,
+      name: draft.name.trim(),
+      kind: draft.kind,
+      format: draft.format,
+      location: draft.location.trim(),
+      description: draft.description.trim(),
+      tags: parseDataSourceTags(draft.tags),
+      body: draft.body,
+      updatedAt: now,
+    };
+    onDataSourcesChange(dataSources.map((entry) => (entry.id === updated.id ? updated : entry)));
+    setMessage(`Saved ${updated.name}.`);
+  }, [activeDataSource, dataSources, draft, onDataSourcesChange]);
+
+  const duplicateDataSource = useCallback(() => {
+    if (!activeDataSource) {
+      return;
+    }
+    const duplicated = createDataSourceEntry({
+      name: `${activeDataSource.name} Copy`,
+      kind: activeDataSource.kind,
+      format: activeDataSource.format,
+      location: activeDataSource.location,
+      description: activeDataSource.description,
+      tags: activeDataSource.tags.join(", "),
+      body: activeDataSource.body,
+    });
+    onDataSourcesChange([duplicated, ...dataSources].slice(0, maxSavedDataSources));
+    setActiveDataSourceId(duplicated.id);
+    setMessage(`Duplicated ${activeDataSource.name}.`);
+  }, [activeDataSource, dataSources, onDataSourcesChange]);
+
+  const deleteDataSource = useCallback(() => {
+    if (!activeDataSource) {
+      return;
+    }
+    if (typeof window !== "undefined" && !window.confirm(`Delete data source "${activeDataSource.name}"?`)) {
+      return;
+    }
+    const next = dataSources.filter((entry) => entry.id !== activeDataSource.id);
+    onDataSourcesChange(next);
+    setActiveDataSourceId(next[0]?.id ?? null);
+    setMessage(`Deleted ${activeDataSource.name}.`);
+  }, [activeDataSource, dataSources, onDataSourcesChange]);
+
+  const exportDataSources = useCallback(() => {
+    if (dataSources.length === 0) {
+      setMessage("No data sources to export.");
+      return;
+    }
+    downloadSavedDataSourcesJson(dataSources);
+    setMessage(`Exported ${dataSources.length} data source${dataSources.length === 1 ? "" : "s"}.`);
+  }, [dataSources]);
+
+  return (
+    <section className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
+      <aside className="space-y-4">
+        <section className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
+          <Field label="Search">
+            <input
+              className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Find by name, kind, tags, path"
+            />
+          </Field>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-zinc-300 bg-white px-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+              onClick={createDataSource}
+              title="Create data source"
+            >
+              <PlusIcon className="h-3.5 w-3.5" />
+              New
+            </button>
+            <button
+              type="button"
+              className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-zinc-300 bg-white px-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+              onClick={() => importInputRef.current?.click()}
+              title="Import data sources"
+            >
+              <UploadIcon className="h-3.5 w-3.5" />
+              Import
+            </button>
+            <button
+              type="button"
+              className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-zinc-300 bg-white px-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+              onClick={exportDataSources}
+              title="Export data sources"
+            >
+              <DownloadIcon className="h-3.5 w-3.5" />
+              Export
+            </button>
+          </div>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={async (event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (!file) {
+                return;
+              }
+              try {
+                const imported = parseSavedDataSourcesJson(await file.text());
+                const merged = mergeSavedDataSources(imported, dataSources);
+                onDataSourcesChange(merged);
+                setActiveDataSourceId(imported[0]?.id ?? merged[0]?.id ?? null);
+                setMessage(`Imported ${imported.length} data source${imported.length === 1 ? "" : "s"}.`);
+              } catch (error) {
+                setMessage(error instanceof Error ? error.message : String(error));
+              }
+            }}
+          />
+          <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-zinc-600">
+            <Metric label="Sources" value={String(dataSources.length)} />
+            <Metric label="Kinds" value={String(usedKinds.length)} />
+          </div>
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {usedKinds.length === 0 ? (
+              <span className="text-xs text-zinc-500">No source types yet.</span>
+            ) : (
+              usedKinds.map((kind) => (
+                <span
+                  key={kind.id}
+                  className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-[11px] text-zinc-700"
+                  title={kind.description}
+                >
+                  {kind.label}
+                </span>
+              ))
+            )}
+          </div>
+        </section>
+        <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
+          <div className="border-b border-zinc-200 px-4 py-3">
+            <h2 className="text-sm font-semibold text-zinc-950">Saved Sources</h2>
+          </div>
+          <div className="max-h-[60vh] space-y-2 overflow-auto p-3">
+            {filteredDataSources.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-zinc-200 px-3 py-6 text-center text-sm text-zinc-500">
+                {dataSources.length === 0 ? "No data sources yet." : "No sources match this search."}
+              </div>
+            ) : (
+              filteredDataSources.map((entry) => (
+                <button
+                  key={entry.id}
+                  type="button"
+                  className={classNames(
+                    "w-full rounded-lg border px-3 py-2 text-left transition",
+                    entry.id === activeDataSourceId
+                      ? "border-zinc-950 bg-zinc-950 text-white"
+                      : "border-zinc-200 bg-white text-zinc-800 hover:border-zinc-300 hover:bg-zinc-50",
+                  )}
+                  onClick={() => setActiveDataSourceId(entry.id)}
+                  title={entry.name}
+                >
+                  <div className="truncate text-sm font-semibold">{entry.name}</div>
+                  <div className="mt-1 truncate text-[11px] opacity-75">
+                    {dataSourceKindLabel(entry.kind)} · {dataSourceFormatLabel(entry.format)}
+                  </div>
+                  <div className="mt-1 truncate text-[11px] opacity-70">{entry.location || "No location set"}</div>
+                </button>
+              ))
+            )}
+          </div>
+        </section>
+      </aside>
+
+      <section className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
+        {activeDataSource ? (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-200 pb-3">
+              <div>
+                <h2 className="text-sm font-semibold text-zinc-950">Edit Source</h2>
+                <p className="mt-1 text-xs text-zinc-500">
+                  Created {formatWorkflowTimestamp(activeDataSource.createdAt)} · Updated {formatWorkflowTimestamp(activeDataSource.updatedAt)}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="inline-flex h-8 items-center justify-center gap-1 rounded-md border border-zinc-300 bg-white px-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+                  onClick={duplicateDataSource}
+                  title="Duplicate data source"
+                >
+                  <CloneIcon className="h-3.5 w-3.5" />
+                  Duplicate
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex h-8 items-center justify-center gap-1 rounded-md border border-rose-300 bg-rose-50 px-2 text-xs font-medium text-rose-800 hover:bg-rose-100"
+                  onClick={deleteDataSource}
+                  title="Delete data source"
+                >
+                  <CloseIcon className="h-3.5 w-3.5" />
+                  Delete
+                </button>
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Name">
+                <input
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={draft.name}
+                  onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+                  placeholder="e.g. Song fingerprint catalog"
+                />
+              </Field>
+              <Field label="Kind">
+                <select
+                  className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={draft.kind}
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, kind: event.target.value as DataSourceKind }))
+                  }
+                >
+                  {dataSourceKinds.map((kind) => (
+                    <option key={kind.id} value={kind.id}>
+                      {kind.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Format">
+                <select
+                  className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={draft.format}
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, format: event.target.value as DataSourceFormat }))
+                  }
+                >
+                  {dataSourceFormats.map((format) => (
+                    <option key={format.id} value={format.id}>
+                      {format.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Location / Path / URL">
+                <input
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={draft.location}
+                  onChange={(event) => setDraft((current) => ({ ...current, location: event.target.value }))}
+                  placeholder="workflow-data/songs/catalog.sqlite"
+                />
+              </Field>
+            </div>
+            <Field label="Tags (comma or space separated)">
+              <input
+                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={draft.tags}
+                onChange={(event) => setDraft((current) => ({ ...current, tags: event.target.value }))}
+                placeholder="songs, matching, catalog"
+              />
+            </Field>
+            <Field label="Description">
+              <textarea
+                className="min-h-[84px] w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={draft.description}
+                onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
+                placeholder="What this source is used for in your workflows."
+              />
+            </Field>
+            <Field
+              label="Data Body / Notes"
+              action={<span className="text-[11px] text-zinc-500">Use this for large reference context if needed.</span>}
+            >
+              <textarea
+                className="min-h-[300px] w-full rounded-lg border border-zinc-300 px-3 py-2 font-mono text-xs leading-5 outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={draft.body}
+                onChange={(event) => setDraft((current) => ({ ...current, body: event.target.value }))}
+                placeholder="Paste JSON, references, indices, or node context payload."
+              />
+            </Field>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 pt-3">
+              <div className="text-xs text-zinc-500">
+                {draftTagCount} tag{draftTagCount === 1 ? "" : "s"} ·{" "}
+                {draft.body.length} body chars
+              </div>
+              <button
+                type="button"
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-zinc-950 px-3 text-sm font-medium text-white shadow-sm hover:bg-zinc-800"
+                onClick={saveDataSource}
+              >
+                <SaveIcon className="h-4 w-4" />
+                Save Source
+              </button>
+            </div>
+            {message && <p className="text-sm text-zinc-600">{message}</p>}
+          </div>
+        ) : (
+          <div className="flex min-h-[420px] flex-col items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-4 text-center">
+            <DataSourceIcon className="h-10 w-10 text-zinc-400" />
+            <h2 className="mt-3 text-base font-semibold text-zinc-900">No Data Source Selected</h2>
+            <p className="mt-2 max-w-xl text-sm text-zinc-600">
+              Create a source to manage catalogs, references, and large context payloads for workflow nodes.
+            </p>
+            <button
+              type="button"
+              className="mt-4 inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-zinc-950 px-3 text-sm font-medium text-white shadow-sm hover:bg-zinc-800"
+              onClick={createDataSource}
+            >
+              <PlusIcon className="h-4 w-4" />
+              Create Data Source
+            </button>
+            {message && <p className="mt-3 text-sm text-zinc-600">{message}</p>}
+          </div>
+        )}
+      </section>
+    </section>
+  );
+}
+
 function SettingsPage({
   portTypeColors,
   onPortTypeColorChange,
@@ -6735,6 +7209,205 @@ function persistSavedWorkflowBlocks(blocks: SavedWorkflowBlock[]) {
   window.localStorage.setItem(savedWorkflowBlocksStorageKey, JSON.stringify(blocks));
 }
 
+function loadSavedDataSources(): DataSourceEntry[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  try {
+    const raw = window.localStorage.getItem(savedDataSourcesStorageKey);
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter(isDataSourceEntry).map(normalizeDataSourceEntry).slice(0, maxSavedDataSources);
+  } catch {
+    return [];
+  }
+}
+
+function persistSavedDataSources(dataSources: DataSourceEntry[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(
+    savedDataSourcesStorageKey,
+    JSON.stringify(dataSources.map(normalizeDataSourceEntry).slice(0, maxSavedDataSources)),
+  );
+}
+
+function createDataSourceEntry(draft: DataSourceDraft): DataSourceEntry {
+  const now = new Date().toISOString();
+  return normalizeDataSourceEntry({
+    id: createDataSourceId(),
+    name: draft.name,
+    kind: draft.kind,
+    format: draft.format,
+    location: draft.location,
+    description: draft.description,
+    tags: parseDataSourceTags(draft.tags),
+    body: draft.body,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
+function dataSourceDraftFromEntry(entry: DataSourceEntry): DataSourceDraft {
+  return {
+    name: entry.name,
+    kind: entry.kind,
+    format: entry.format,
+    location: entry.location,
+    description: entry.description,
+    tags: entry.tags.join(", "),
+    body: entry.body,
+  };
+}
+
+function parseSavedDataSourcesJson(text: string): DataSourceEntry[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("Invalid JSON file");
+  }
+
+  const candidates = savedDataSourcesJsonCandidates(parsed);
+  if (!candidates || candidates.length === 0) {
+    throw new Error("No data sources found in JSON");
+  }
+  if (!candidates.every(isDataSourceEntry)) {
+    throw new Error("JSON does not match the data source format");
+  }
+  return candidates.map(cloneImportedDataSourceEntry);
+}
+
+function savedDataSourcesJsonCandidates(value: unknown): unknown[] | null {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (Array.isArray(value.dataSources)) {
+    return value.dataSources;
+  }
+  if (Array.isArray(value.entries)) {
+    return value.entries;
+  }
+  if (isDataSourceEntry(value)) {
+    return [value];
+  }
+  return null;
+}
+
+function cloneImportedDataSourceEntry(entry: DataSourceEntry): DataSourceEntry {
+  const now = new Date().toISOString();
+  return normalizeDataSourceEntry({
+    ...entry,
+    id: createDataSourceId(),
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
+function normalizeDataSourceEntry(entry: DataSourceEntry): DataSourceEntry {
+  const name = entry.name.trim();
+  return {
+    ...entry,
+    name: name || "Untitled Data Source",
+    location: entry.location.trim(),
+    description: entry.description.trim(),
+    tags: normalizeDataSourceTags(entry.tags),
+    body: typeof entry.body === "string" ? entry.body : "",
+  };
+}
+
+function mergeSavedDataSources(importedDataSources: DataSourceEntry[], currentDataSources: DataSourceEntry[]): DataSourceEntry[] {
+  return importedDataSources.concat(currentDataSources).slice(0, maxSavedDataSources);
+}
+
+function downloadSavedDataSourcesJson(dataSources: DataSourceEntry[]) {
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  const exportedAt = new Date().toISOString();
+  const payload = {
+    format: savedDataSourcesJsonFormat,
+    version: savedDataSourcesJsonVersion,
+    exportedAt,
+    dataSources: dataSources.map(normalizeDataSourceEntry),
+  };
+  const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `video-analysis-data-sources-${fileDateStamp(exportedAt)}.json`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function nextDataSourceName(dataSources: DataSourceEntry[]): string {
+  const names = new Set(dataSources.map((entry) => entry.name.toLowerCase()));
+  for (let index = 1; index < 10_000; index += 1) {
+    const candidate = `Data Source ${index}`;
+    if (!names.has(candidate.toLowerCase())) {
+      return candidate;
+    }
+  }
+  return `Data Source ${Date.now()}`;
+}
+
+function parseDataSourceTags(value: string): string[] {
+  return normalizeDataSourceTags(value.split(/[\s,]+/));
+}
+
+function normalizeDataSourceTags(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const token of value) {
+    if (typeof token !== "string") {
+      continue;
+    }
+    const normalized = token.trim().toLowerCase();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    tags.push(normalized);
+  }
+  return tags;
+}
+
+function filterDataSources(dataSources: DataSourceEntry[], query: string): DataSourceEntry[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    return dataSources;
+  }
+  return dataSources.filter((entry) =>
+    [entry.name, dataSourceKindLabel(entry.kind), dataSourceFormatLabel(entry.format), entry.location, entry.description, ...entry.tags, entry.body]
+      .join("\n")
+      .toLowerCase()
+      .includes(normalized),
+  );
+}
+
+function dataSourceKindLabel(kind: DataSourceKind): string {
+  return dataSourceKinds.find((candidate) => candidate.id === kind)?.label ?? "Custom";
+}
+
+function dataSourceFormatLabel(format: DataSourceFormat): string {
+  return dataSourceFormats.find((candidate) => candidate.id === format)?.label ?? "Other";
+}
+
 function downloadSavedWorkflowBlocksJson(blocks: SavedWorkflowBlock[]) {
   if (typeof document === "undefined") {
     return;
@@ -6916,6 +7589,40 @@ function isSavedWorkflowRun(value: unknown): value is SavedWorkflowRun {
     reportPathValid &&
     messageValid
   );
+}
+
+function isDataSourceEntry(value: unknown): value is DataSourceEntry {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    isDataSourceKind(value.kind) &&
+    isDataSourceFormat(value.format) &&
+    typeof value.location === "string" &&
+    typeof value.description === "string" &&
+    Array.isArray(value.tags) &&
+    value.tags.every((tag) => typeof tag === "string") &&
+    typeof value.body === "string" &&
+    typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string"
+  );
+}
+
+function isDataSourceKind(value: unknown): value is DataSourceKind {
+  return (
+    value === "song-catalog" ||
+    value === "reference-library" ||
+    value === "index" ||
+    value === "dataset" ||
+    value === "knowledge-base" ||
+    value === "custom"
+  );
+}
+
+function isDataSourceFormat(value: unknown): value is DataSourceFormat {
+  return value === "sqlite" || value === "json" || value === "csv" || value === "txt" || value === "folder" || value === "api" || value === "other";
 }
 
 function isSavedWorkflowLibrary(value: unknown): value is SavedWorkflowLibrary {
@@ -7222,6 +7929,13 @@ function createWorkflowRunId(): string {
     return `workflow-run-${crypto.randomUUID()}`;
   }
   return `workflow-run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function createDataSourceId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `data-source-${crypto.randomUUID()}`;
+  }
+  return `data-source-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
 function createWorkflowNodeInstanceId(baseId: string): string {
@@ -9773,6 +10487,9 @@ function appPageFromPath(pathname: string): AppPage {
   if (pathname === "/workflow" || pathname === "/workflows") {
     return "workflow";
   }
+  if (pathname === "/data-sources" || pathname === "/datasources") {
+    return "data-sources";
+  }
   if (pathname === "/settings") {
     return "settings";
   }
@@ -9783,6 +10500,8 @@ function pathForAppPage(page: AppPage): string {
   switch (page) {
     case "workflow":
       return "/workflow";
+    case "data-sources":
+      return "/data-sources";
     case "settings":
       return "/settings";
     case "analysis":
@@ -10505,6 +11224,16 @@ function RunIcon({ className }: { className?: string }) {
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className={className}>
       <path d="M5 4.5v11l9-5.5-9-5.5Z" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M15.5 5v10" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function DataSourceIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className={className}>
+      <ellipse cx="10" cy="5" rx="5.8" ry="2.5" />
+      <path d="M4.2 5v9.2c0 1.4 2.6 2.5 5.8 2.5s5.8-1.1 5.8-2.5V5" />
+      <path d="M4.2 9.2c0 1.4 2.6 2.5 5.8 2.5s5.8-1.1 5.8-2.5" />
     </svg>
   );
 }
