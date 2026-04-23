@@ -13,7 +13,8 @@ pub enum StudioReport {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct YoutubeVideoReport {
-    pub use_case: String,
+    #[serde(alias = "use_case")]
+    pub workflow: String,
     pub source: SourceReport,
     pub assets: AssetReport,
     pub capabilities: CapabilityReport,
@@ -106,7 +107,8 @@ pub struct TranscriptSegmentReport {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SubtitleGenerationReport {
-    pub use_case: String,
+    #[serde(alias = "use_case")]
+    pub workflow: String,
     pub source: SourceReport,
     pub assets: SubtitleAssetReport,
     pub capabilities: CapabilityReport,
@@ -175,7 +177,8 @@ pub struct StreamBucketReport {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SongAnalysisReport {
-    pub use_case: String,
+    #[serde(alias = "use_case")]
+    pub workflow: String,
     pub source: SongSourceReport,
     pub assets: SongAssetReport,
     pub capabilities: CapabilityReport,
@@ -267,7 +270,8 @@ pub struct MusicSegmentReport {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct YoutubeCollectionReport {
-    pub use_case: String,
+    #[serde(alias = "use_case")]
+    pub workflow: String,
     pub collection: CollectionSummary,
     pub source: YoutubeCollectionSourceReport,
     pub filters: AppliedCollectionFilters,

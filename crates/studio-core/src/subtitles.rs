@@ -93,7 +93,7 @@ pub fn run_subtitle_generation_workflow(
     }
 
     let report = SubtitleGenerationReport {
-        use_case: "subtitle_generation".to_string(),
+        workflow: "subtitle_generation".to_string(),
         source: SourceReport {
             url: source_url,
             local_video: display_path(&video_path),
@@ -127,41 +127,31 @@ fn subtitle_path_for_video(video_path: &Path) -> PathBuf {
 }
 
 fn write_srt_file(path: &Path, segments: &[TranscriptSegmentReport]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, srt_text(segments))?;
-    Ok(())
+    let segments = transcription_segments(segments);
+    text_analysis_transcription::write_srt(path, &segments)
+        .map_err(|err| StudioError::Workflow(err.to_string()))
 }
 
 fn srt_text(segments: &[TranscriptSegmentReport]) -> String {
-    let mut output = String::new();
-    for (index, segment) in segments.iter().enumerate() {
-        let start = segment.start_seconds.unwrap_or(0.0);
-        let end = segment
-            .end_seconds
-            .unwrap_or_else(|| (start + 2.0).max(start));
-        output.push_str(&(index + 1).to_string());
-        output.push('\n');
-        output.push_str(&format_srt_timestamp(start));
-        output.push_str(" --> ");
-        output.push_str(&format_srt_timestamp(end.max(start)));
-        output.push('\n');
-        output.push_str(segment.text.trim());
-        output.push_str("\n\n");
-    }
-    output
+    text_analysis_transcription::format_srt(&transcription_segments(segments))
 }
 
-fn format_srt_timestamp(seconds: f64) -> String {
-    let total_millis = (seconds.max(0.0) * 1_000.0).round() as u64;
-    let millis = total_millis % 1_000;
-    let total_seconds = total_millis / 1_000;
-    let secs = total_seconds % 60;
-    let total_minutes = total_seconds / 60;
-    let minutes = total_minutes % 60;
-    let hours = total_minutes / 60;
-    format!("{hours:02}:{minutes:02}:{secs:02},{millis:03}")
+fn transcription_segments(
+    segments: &[TranscriptSegmentReport],
+) -> Vec<text_analysis_transcription::TranscriptSegment> {
+    segments
+        .iter()
+        .map(|segment| text_analysis_transcription::TranscriptSegment {
+            index: segment.index,
+            start_seconds: segment.start_seconds,
+            end_seconds: segment.end_seconds,
+            text: segment.text.clone(),
+            language: None,
+            speaker: None,
+            confidence: None,
+            is_final: true,
+        })
+        .collect()
 }
 
 fn write_json_report<T: Serialize>(path: &Path, value: &T) -> Result<()> {

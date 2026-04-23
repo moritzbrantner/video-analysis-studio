@@ -3,17 +3,161 @@ import { useMemo, useState } from "react";
 import type {
   CollectionItemReport,
   CollectionTableRow,
+  YoutubeCollectionManifest,
   YoutubeCollectionReport,
   YoutubeVideoReport,
 } from "../types";
 import { EventList, ObservationList, ScenePanel, VideoSummaryCards } from "../core";
 import { DataBucketOverview } from "../data";
 import { SourceSummary } from "../ingest";
+import { MediaPreviewPanel } from "../media";
 import { ModelObservationGrid } from "../models";
 import { Panel, EmptyState, StatCard } from "../shared/primitives";
 import { formatBytes, formatNumber, formatSeconds } from "../shared/utils";
 import { SplitPlanTable } from "../split";
-import { TranscriptPanel } from "../use-cases";
+import { TranscriptPanel } from "../workflows";
+export {
+  buildYoutubeCollectionManifestRequest,
+  filterYoutubeCollectionManifest,
+} from "./request";
+
+export type ManifestPreviewStatus = "idle" | "loading" | "ready" | "error";
+
+export interface CollectionManifestPreviewValue {
+  status: ManifestPreviewStatus;
+  manifest: YoutubeCollectionManifest | null;
+  selectedItemIds: string[];
+  stale: boolean;
+  error: string | null;
+}
+
+export function CollectionManifestPreviewPanel({
+  preview,
+  onPreview,
+  onSelectionChange,
+  disabled,
+}: {
+  preview: CollectionManifestPreviewValue;
+  onPreview: () => void;
+  onSelectionChange: (selectedItemIds: string[]) => void;
+  disabled?: boolean;
+}) {
+  const [query, setQuery] = useState("");
+  const manifest = preview.manifest;
+  const normalizedQuery = query.trim().toLowerCase();
+  const selected = useMemo(() => new Set(preview.selectedItemIds), [preview.selectedItemIds]);
+  const visibleItems = useMemo(() => {
+    if (!manifest) {
+      return [];
+    }
+    return normalizedQuery
+      ? manifest.items.filter((item) =>
+          [item.title, item.youtube_id, item.source_url, item.item_id]
+            .some((value) => String(value ?? "").toLowerCase().includes(normalizedQuery)),
+        )
+      : manifest.items;
+  }, [manifest, normalizedQuery]);
+  const selectedDuration = manifest?.items.reduce((sum, item) => (
+    selected.has(item.item_id) ? sum + (item.duration_seconds ?? 0) : sum
+  ), 0) ?? 0;
+
+  return (
+    <Panel
+      title="Collection Preview"
+      description={
+        manifest
+          ? `${formatNumber(manifest.items.length)} discovered · ${formatNumber(selected.size)} selected · ${formatSeconds(selectedDuration)}`
+          : "Inspect playlist or channel items before execution"
+      }
+      actions={
+        <button
+          type="button"
+          className="inline-flex items-center rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+          onClick={onPreview}
+          disabled={disabled || preview.status === "loading"}
+        >
+          {preview.status === "loading" ? "Previewing" : "Preview items"}
+        </button>
+      }
+    >
+      <div className="space-y-3">
+        {preview.error && <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{preview.error}</div>}
+        {preview.stale && manifest && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">Preview is stale after form changes.</div>}
+        {!manifest ? (
+          <EmptyState>No preview loaded</EmptyState>
+        ) : manifest.items.length === 0 ? (
+          <EmptyState>No items matched the collection filters</EmptyState>
+        ) : (
+          <>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input
+                className="min-w-0 flex-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={query}
+                placeholder="Search items"
+                onChange={(event) => setQuery(event.target.value)}
+              />
+              <button
+                type="button"
+                className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50"
+                onClick={() => onSelectionChange([...new Set([...preview.selectedItemIds, ...visibleItems.map((item) => item.item_id)])])}
+              >
+                Select visible
+              </button>
+              <button
+                type="button"
+                className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50"
+                onClick={() => onSelectionChange([])}
+              >
+                Clear
+              </button>
+            </div>
+            <div className="overflow-x-auto rounded-lg border border-zinc-200">
+              <table className="min-w-full text-left text-sm">
+                <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase text-zinc-500">
+                  <tr>
+                    <th className="w-10 px-3 py-2 font-medium">Sel</th>
+                    <th className="px-3 py-2 font-medium">#</th>
+                    <th className="px-3 py-2 font-medium">Title</th>
+                    <th className="px-3 py-2 font-medium">Duration</th>
+                    <th className="px-3 py-2 font-medium">Upload</th>
+                    <th className="px-3 py-2 font-medium">YouTube</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-100">
+                  {visibleItems.map((item) => (
+                    <tr key={item.item_id}>
+                      <td className="px-3 py-2">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-zinc-300 text-zinc-950 focus:ring-zinc-950"
+                          checked={selected.has(item.item_id)}
+                          onChange={(event) => {
+                            const next = new Set(selected);
+                            if (event.target.checked) {
+                              next.add(item.item_id);
+                            } else {
+                              next.delete(item.item_id);
+                            }
+                            onSelectionChange([...next]);
+                          }}
+                        />
+                      </td>
+                      <td className="px-3 py-2 tabular-nums text-zinc-700">{item.playlist_index ?? "n/a"}</td>
+                      <td className="max-w-[360px] truncate px-3 py-2 font-medium text-zinc-950">{item.title ?? item.item_id}</td>
+                      <td className="px-3 py-2 tabular-nums text-zinc-700">{formatSeconds(item.duration_seconds)}</td>
+                      <td className="px-3 py-2 text-zinc-700">{item.upload_date ?? "n/a"}</td>
+                      <td className="max-w-[280px] truncate px-3 py-2 text-zinc-700">{item.youtube_id ?? item.source_url}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
+    </Panel>
+  );
+}
 
 type FlattenedMode = "videos" | "scenes" | "observations" | "transcript" | "audio_events" | "text_events" | "buckets";
 type SortDirection = "asc" | "desc";
@@ -39,17 +183,17 @@ export function CollectionSummaryCards({ report }: { report: YoutubeCollectionRe
   );
 }
 
-export function CollectionDashboard({ report }: { report: YoutubeCollectionReport }) {
+export function CollectionDashboard({ report, runId }: { report: YoutubeCollectionReport; runId?: string | null }) {
   return (
     <section className="space-y-4">
       <CollectionSummaryCards report={report} />
-      <CollectionObjectBrowser report={report} />
+      <CollectionObjectBrowser report={report} runId={runId} />
       <FlattenedCollectionTable report={report} />
     </section>
   );
 }
 
-export function CollectionObjectBrowser({ report }: { report: YoutubeCollectionReport }) {
+export function CollectionObjectBrowser({ report, runId }: { report: YoutubeCollectionReport; runId?: string | null }) {
   const firstAnalyzed = report.items.find((item) => item.report)?.item_id ?? report.items[0]?.item_id ?? null;
   const [selectedItemId, setSelectedItemId] = useState<string | null>(firstAnalyzed);
   const selectedItem = report.items.find((item) => item.item_id === selectedItemId) ?? report.items[0] ?? null;
@@ -72,7 +216,7 @@ export function CollectionObjectBrowser({ report }: { report: YoutubeCollectionR
           />
           <div className="min-w-0">
             {selectedItem ? (
-              <CollectionItemDetail item={selectedItem} />
+              <CollectionItemDetail item={selectedItem} runId={runId} />
             ) : (
               <EmptyState>Select a collection item</EmptyState>
             )}
@@ -83,7 +227,7 @@ export function CollectionObjectBrowser({ report }: { report: YoutubeCollectionR
   );
 }
 
-export function CollectionItemDetail({ item }: { item: CollectionItemReport }) {
+export function CollectionItemDetail({ item, runId }: { item: CollectionItemReport; runId?: string | null }) {
   if (!item.report) {
     return (
       <div className="rounded-lg border border-zinc-200 p-4">
@@ -94,7 +238,7 @@ export function CollectionItemDetail({ item }: { item: CollectionItemReport }) {
     );
   }
 
-  return <NestedVideoDashboard report={item.report} />;
+  return <NestedVideoDashboard report={item.report} runId={runId} />;
 }
 
 export function FlattenedCollectionTable({ report }: { report: YoutubeCollectionReport }) {
@@ -388,9 +532,10 @@ function columnsForMode(mode: FlattenedMode): Array<{ key: string; label: string
   }
 }
 
-function NestedVideoDashboard({ report }: { report: YoutubeVideoReport }) {
+function NestedVideoDashboard({ report, runId }: { report: YoutubeVideoReport; runId?: string | null }) {
   return (
     <div className="space-y-4">
+      <MediaPreviewPanel report={report} runId={runId} />
       <VideoSummaryCards video={report.video} />
       <SourceSummary source={report.source} />
       <ScenePanel scenes={report.video.scenes} />

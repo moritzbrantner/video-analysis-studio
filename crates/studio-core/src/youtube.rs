@@ -431,131 +431,26 @@ pub fn run_youtube_video_workflow(
     report_path: PathBuf,
 ) -> Result<YoutubeVideoReport> {
     request.validate()?;
-    fs::create_dir_all(&work_dir)?;
-
-    let mut completed = Vec::new();
-    let mut skipped = Vec::new();
-
-    let (source_url, video_path) = match &request.source {
-        SourceSpec::LocalFile { path } => (None, path.clone()),
-        SourceSpec::YoutubeUrl { url } => {
-            let path = download_youtube_video(url, &work_dir)?;
-            completed.push("youtube_download".to_string());
-            (Some(url.clone()), path)
-        }
-    };
-
-    let mut data_buckets = Vec::new();
-    let mut aggregator = BucketAggregator::new(BucketConfig::record_count(1_000)?)?;
-    let (video_report, observations) =
-        analyze_video(&request, &video_path, &mut aggregator, &mut data_buckets)?;
-    completed.push("scene_detection".to_string());
-    if request.models.object.is_some() {
-        completed.push("object/person_detection".to_string());
-    } else {
-        skipped.push("object/person detection: configure object command".to_string());
-    }
-    if request.models.ocr.is_some() {
-        completed.push("ocr".to_string());
-    } else {
-        skipped.push("on-screen text OCR: configure OCR command".to_string());
-    }
-
-    let (transcription, audio_wav) = transcribe_video(&request, &video_path, &work_dir);
-    match transcription.status.as_str() {
-        "completed" => completed.push("transcription".to_string()),
-        _ => skipped.push(format!(
-            "transcription: {}",
-            transcription.message.as_deref().unwrap_or("not available")
-        )),
-    }
-
-    let audio_report = match analyze_audio(&video_path, &mut aggregator, &mut data_buckets) {
-        Ok(report) => {
-            completed.push("audio_analysis".to_string());
-            report
-        }
-        Err(err) => AudioReport {
-            status: "skipped".to_string(),
-            frames_processed: 0,
-            events: Vec::new(),
-            message: Some(err.to_string()),
-        },
-    };
-    if audio_report.status != "completed" {
-        skipped.push(format!(
-            "audio analysis: {}",
-            audio_report.message.as_deref().unwrap_or("not available")
-        ));
-    }
-
-    let text_report =
-        match analyze_transcript_text(&request, &transcription, &mut aggregator, &mut data_buckets)
-        {
-            Ok(report) => {
-                if report.status == "completed" {
-                    completed.push("transcript_text_analysis".to_string());
-                }
-                report
-            }
-            Err(err) => TextReport {
-                status: "skipped".to_string(),
-                segments_processed: 0,
-                events: Vec::new(),
-                message: Some(err.to_string()),
-            },
-        };
-    if text_report.status != "completed" {
-        skipped.push(format!(
-            "transcript text analysis: {}",
-            text_report.message.as_deref().unwrap_or("not available")
-        ));
-    }
-
-    if let Some(bucket) = aggregator.finish() {
-        data_buckets.push(bucket_report(&bucket));
-    }
-
-    let report = YoutubeVideoReport {
-        use_case: "youtube_video_analysis".to_string(),
-        source: SourceReport {
-            url: source_url,
-            local_video: display_path(&video_path),
-        },
-        assets: AssetReport {
-            work_dir: display_path(&work_dir),
-            report_path: display_path(&report_path),
-            audio_wav: audio_wav.as_ref().map(|path| display_path(path)),
-        },
-        capabilities: CapabilityReport { completed, skipped },
-        video: video_report_with_observations(video_report, observations),
-        transcription,
-        audio: audio_report,
-        text: text_report,
-        data_buckets,
-    };
-
-    write_json_report(&report_path, &report)?;
-    Ok(report)
+    let package_request =
+        to_package_value::<video_analysis_use_cases::youtube::YoutubeRunRequest>(&request)?;
+    let report = video_analysis_use_cases::youtube::run_youtube_video_workflow(
+        package_request,
+        work_dir,
+        report_path,
+    )?;
+    from_package_value(report)
 }
 
 pub fn discover_youtube_collection_manifest(
     request: YoutubeCollectionManifestRequest,
 ) -> Result<YoutubeCollectionManifest> {
     request.validate()?;
-    let mut manifest = discover_collection_manifest(&request.source, request.max_items)?;
-    let needs_enrichment = request.metadata_depth == MetadataDepth::Full
-        || (request.metadata_depth == MetadataDepth::EnrichedWhenNeeded
-            && manifest_filter_needs_enrichment(&request.metadata_filter));
-    if needs_enrichment {
-        enrich_manifest_items(&mut manifest)?;
-    }
-    manifest.items = manifest
-        .items
-        .into_iter()
-        .filter(|item| metadata_filter_matches(item, &request.metadata_filter))
-        .collect();
-    Ok(manifest)
+    let package_request = to_package_value::<
+        video_analysis_use_cases::youtube::YoutubeCollectionManifestRequest,
+    >(&request)?;
+    let manifest =
+        video_analysis_use_cases::youtube::discover_youtube_collection_manifest(package_request)?;
+    from_package_value(manifest)
 }
 
 pub fn run_youtube_collection_workflow(
@@ -564,242 +459,30 @@ pub fn run_youtube_collection_workflow(
     report_path: PathBuf,
 ) -> Result<YoutubeCollectionReport> {
     request.validate()?;
-    fs::create_dir_all(&work_dir)?;
+    let package_request = to_package_value::<
+        video_analysis_use_cases::youtube::YoutubeCollectionRunRequest,
+    >(&request)?;
+    let report = video_analysis_use_cases::youtube::run_youtube_collection_workflow(
+        package_request,
+        work_dir,
+        report_path,
+    )?;
+    from_package_value(report)
+}
 
-    let mut manifest = match request.manifest.clone() {
-        Some(manifest) => manifest,
-        None => {
-            let source = request.source.clone().ok_or_else(|| {
-                StudioError::InvalidRequest("source or manifest is required".to_string())
-            })?;
-            discover_collection_manifest(&source, request.max_items)?
-        }
-    };
-    if manifest_filter_needs_enrichment(&request.metadata_filter) {
-        enrich_manifest_items(&mut manifest)?;
-    }
+fn to_package_value<T>(value: &impl Serialize) -> Result<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    Ok(serde_json::from_value(serde_json::to_value(value)?)?)
+}
 
-    let manifest_path = work_dir.join("manifest.json");
-    write_json_report(&manifest_path, &manifest)?;
-
-    let mut completed = vec!["collection_discovery".to_string()];
-    let mut skipped = Vec::new();
-    let mut item_reports = Vec::new();
-    let mut selected_items = 0_u64;
-    let mut downloaded_items = 0_u64;
-
-    for item in &manifest.items {
-        if !metadata_filter_matches(item, &request.metadata_filter) {
-            item_reports.push(collection_item_report(
-                item,
-                None,
-                CollectionItemStatus::MetadataFiltered,
-                Some("filtered by metadata".to_string()),
-                None,
-            ));
-            continue;
-        }
-
-        let item_dir = work_dir.join("items").join(&item.item_id);
-        let media_dir = item_dir.join("media");
-        let existing = find_existing_item_video(&media_dir);
-        if existing.is_some()
-            && request.metadata_filter.already_downloaded == AlreadyDownloadedPolicy::Skip
-        {
-            item_reports.push(collection_item_report(
-                item,
-                existing.as_ref(),
-                CollectionItemStatus::SkippedExisting,
-                Some("already downloaded".to_string()),
-                None,
-            ));
-            continue;
-        }
-
-        selected_items += 1;
-        let mut local_video = existing;
-        if local_video.is_none() {
-            match download_youtube_video_to_dir(&item.source_url, &media_dir, &item.item_id) {
-                Ok(path) => {
-                    downloaded_items += 1;
-                    local_video = Some(path);
-                }
-                Err(error) => {
-                    item_reports.push(collection_item_report(
-                        item,
-                        None,
-                        CollectionItemStatus::Failed,
-                        Some(error.to_string()),
-                        None,
-                    ));
-                    continue;
-                }
-            }
-        }
-
-        let Some(local_video_path) = local_video.clone() else {
-            item_reports.push(collection_item_report(
-                item,
-                None,
-                CollectionItemStatus::Failed,
-                Some("download did not produce a local video".to_string()),
-                None,
-            ));
-            continue;
-        };
-
-        match local_file_filter_matches(&local_video_path, &request.local_file_filter) {
-            Ok(true) => {}
-            Ok(false) => {
-                if request.delete_filtered_downloads {
-                    let _ = fs::remove_file(&local_video_path);
-                }
-                item_reports.push(collection_item_report(
-                    item,
-                    Some(&local_video_path),
-                    CollectionItemStatus::FileFiltered,
-                    Some("filtered by local file metadata".to_string()),
-                    None,
-                ));
-                continue;
-            }
-            Err(error) => match request.local_file_filter.failed_probe_behavior {
-                FailedProbeBehavior::Include => {}
-                FailedProbeBehavior::Filtered => {
-                    item_reports.push(collection_item_report(
-                        item,
-                        Some(&local_video_path),
-                        CollectionItemStatus::FileFiltered,
-                        Some(error.to_string()),
-                        None,
-                    ));
-                    continue;
-                }
-                FailedProbeBehavior::Failed => {
-                    item_reports.push(collection_item_report(
-                        item,
-                        Some(&local_video_path),
-                        CollectionItemStatus::Failed,
-                        Some(error.to_string()),
-                        None,
-                    ));
-                    continue;
-                }
-            },
-        }
-
-        let analysis_work_dir = item_dir.join("analysis-work");
-        let item_report_path = item_dir.join("analysis.json");
-        let item_request = request.analysis.to_request(
-            SourceSpec::LocalFile {
-                path: local_video_path.clone(),
-            },
-            analysis_work_dir,
-        );
-        match run_youtube_video_workflow(
-            item_request,
-            item_dir.join("analysis-work"),
-            item_report_path,
-        ) {
-            Ok(report) => item_reports.push(collection_item_report(
-                item,
-                Some(&local_video_path),
-                CollectionItemStatus::Analyzed,
-                None,
-                Some(report),
-            )),
-            Err(error) => item_reports.push(collection_item_report(
-                item,
-                Some(&local_video_path),
-                CollectionItemStatus::Failed,
-                Some(error.to_string()),
-                None,
-            )),
-        }
-    }
-
-    let analyzed_items = item_reports
-        .iter()
-        .filter(|item| item.status == CollectionItemStatus::Analyzed)
-        .count() as u64;
-    let failed_items = item_reports
-        .iter()
-        .filter(|item| item.status == CollectionItemStatus::Failed)
-        .count() as u64;
-    let filtered_items = item_reports
-        .iter()
-        .filter(|item| {
-            matches!(
-                item.status,
-                CollectionItemStatus::MetadataFiltered | CollectionItemStatus::FileFiltered
-            )
-        })
-        .count() as u64;
-    let skipped_items = item_reports
-        .iter()
-        .filter(|item| item.status == CollectionItemStatus::SkippedExisting)
-        .count() as u64;
-
-    if analyzed_items > 0 {
-        completed.push("collection_analysis".to_string());
-    }
-    if failed_items > 0 {
-        skipped.push(format!("{failed_items} collection items failed"));
-    }
-    if filtered_items > 0 {
-        skipped.push(format!("{filtered_items} collection items filtered"));
-    }
-    if skipped_items > 0 {
-        skipped.push(format!("{skipped_items} existing collection items skipped"));
-    }
-
-    let total_duration_seconds = item_reports
-        .iter()
-        .filter_map(|item| item.report.as_ref()?.video.duration_seconds)
-        .reduce(|left, right| left + right);
-
-    let report = YoutubeCollectionReport {
-        use_case: "youtube_collection_analysis".to_string(),
-        collection: CollectionSummary {
-            collection_id: manifest.collection_id.clone(),
-            title: manifest.title.clone(),
-            source_url: manifest.source.url().to_string(),
-            discovered_items: manifest.items.len() as u64,
-            selected_items,
-            analyzed_items,
-            failed_items,
-            filtered_items,
-            skipped_items,
-            downloaded_items,
-            total_duration_seconds,
-        },
-        source: YoutubeCollectionSourceReport {
-            kind: manifest.source.kind_name().to_string(),
-            url: manifest.source.url().to_string(),
-            title: manifest.title.clone(),
-        },
-        filters: AppliedCollectionFilters {
-            metadata: describe_manifest_filter(&request.metadata_filter),
-            local_file: describe_local_file_filter(&request.local_file_filter),
-        },
-        items: item_reports,
-        assets: CollectionAssetReport {
-            work_dir: display_path(&work_dir),
-            report_path: display_path(&report_path),
-            manifest_path: display_path(&manifest_path),
-        },
-        capabilities: CapabilityReport { completed, skipped },
-    };
-
-    write_json_report(&report_path, &report)?;
-
-    if analyzed_items == 0 && failed_items > 0 {
-        return Err(StudioError::Workflow(
-            "collection analysis failed for every selected item".to_string(),
-        ));
-    }
-
-    Ok(report)
+fn from_package_value<T, U>(value: U) -> Result<T>
+where
+    T: for<'de> Deserialize<'de>,
+    U: Serialize,
+{
+    Ok(serde_json::from_value(serde_json::to_value(value)?)?)
 }
 
 fn validate_youtube_url(url: &str) -> Result<()> {
@@ -1966,7 +1649,7 @@ mod tests {
     #[test]
     fn serializes_report_shape_for_ui() {
         let report = YoutubeVideoReport {
-            use_case: "youtube_video_analysis".to_string(),
+            workflow: "youtube_video_analysis".to_string(),
             source: SourceReport {
                 url: None,
                 local_video: "video.mp4".to_string(),
@@ -2088,7 +1771,7 @@ mod tests {
     #[test]
     fn serializes_collection_report_shape_for_ui() {
         let report = YoutubeCollectionReport {
-            use_case: "youtube_collection_analysis".to_string(),
+            workflow: "youtube_collection_analysis".to_string(),
             collection: CollectionSummary {
                 collection_id: "collection".to_string(),
                 title: Some("Collection".to_string()),

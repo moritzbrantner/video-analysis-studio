@@ -19,7 +19,7 @@ import type { YoutubeVideoReport } from "./types";
 
 type SourceMode = "url" | "file";
 
-interface UseCaseFormSnapshot {
+interface WorkflowFormSnapshot {
   sourceMode: SourceMode;
   url: string;
   input: string;
@@ -316,7 +316,7 @@ export function WorkflowExecutionEditor({
   visualizedDataKinds,
   onVisualizeDataKind,
 }: {
-  form: UseCaseFormSnapshot;
+  form: WorkflowFormSnapshot;
   report: YoutubeVideoReport;
   workflowName?: string;
   visualizedDataKinds: string[];
@@ -718,7 +718,7 @@ function packetForPort(portValue: ExecutionPort, packets: Record<WorkflowDataKin
 }
 
 function buildPackets(
-  form: UseCaseFormSnapshot,
+  form: WorkflowFormSnapshot,
   report: YoutubeVideoReport,
   visualizedDataKinds: string[],
 ): Record<WorkflowDataKind, ExecutionDataPacket> {
@@ -767,7 +767,7 @@ function buildPackets(
     text_event: packet("text_event", "text events", report.text.events.length, `${report.text.status} | ${report.text.events.length} events`, "Transcript-derived labels"),
     data_record: packet("data_record", "records", dataRecords, `${formatNumber(dataRecords)} stream records`, "Intermediate bucket inputs"),
     data_bucket: packet("data_bucket", "buckets", report.data_buckets.length, `${report.data_buckets.length} bounded buckets`, "Used by data bucket dashboard components"),
-    json_report: packet("json_report", "report json", 1, report.assets.report_path, "Final serializable use-case output"),
+    json_report: packet("json_report", "report json", 1, report.assets.report_path, "Final serializable workflow output"),
     dashboard_view: packet("dashboard_view", "dashboard view", visualizedDataKinds.length, `${visualizedDataKinds.length} visualized data types`, "Result page component layout"),
   };
 }
@@ -928,7 +928,7 @@ function packet(
   return { kind, label, count, summary, detail };
 }
 
-function workflowInputSummary(form: UseCaseFormSnapshot): string {
+function workflowInputSummary(form: WorkflowFormSnapshot): string {
   const source = form.sourceMode === "url" ? form.url || "URL missing" : form.input || "file missing";
   const frameLimit = form.maxFrames.trim() ? `max ${form.maxFrames.trim()} frames` : "all frames";
   return `${source} | threshold ${form.sceneThreshold} | sample every ${form.visualSampleEvery} | ${frameLimit}`;

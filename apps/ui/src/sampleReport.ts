@@ -1,15 +1,15 @@
 import type { YoutubeVideoReport } from "./types";
 
 export const sampleReport: YoutubeVideoReport = {
-  use_case: "youtube-video",
+  workflow: "youtube_video_analysis",
   source: {
     url: "https://www.youtube.com/watch?v=sample",
-    local_video: "use-case-output/youtube-video/sample-video.mp4",
+    local_video: "workflow-output/youtube-video/sample-video.mp4",
   },
   assets: {
-    work_dir: "use-case-output/youtube-video",
-    report_path: "use-case-output/youtube-video/analysis.json",
-    audio_wav: "use-case-output/youtube-video/audio.wav",
+    work_dir: "workflow-output/youtube-video",
+    report_path: "workflow-output/youtube-video/analysis.json",
+    audio_wav: "workflow-output/youtube-video/audio.wav",
   },
   capabilities: {
     completed: ["download", "scene-detection", "audio", "transcript", "data-buckets"],

@@ -36,6 +36,8 @@ export interface RunEvent {
   status: RunStatus;
   message: string;
   timestamp: string;
+  stdout?: string | null;
+  stderr?: string | null;
 }
 
 export interface DependencyStatus {
@@ -48,6 +50,67 @@ export interface DependencyStatus {
 
 export interface SystemDependencyReport {
   dependencies: DependencyStatus[];
+}
+
+export type PortKind =
+  | "run_trigger"
+  | "run_config"
+  | "youtube_url"
+  | "youtube_collection_url"
+  | "video_file"
+  | "audio_file"
+  | "media_file"
+  | "transcript"
+  | "subtitle_file"
+  | "scene_list"
+  | "observation_list"
+  | "audio_events"
+  | "text_events"
+  | "data_buckets"
+  | "json_report"
+  | "collection_manifest"
+  | "collection_items"
+  | "song_fingerprint"
+  | "song_catalog"
+  | "song_matches"
+  | "music_features"
+  | "template_string"
+  | "string"
+  | "number"
+  | "boolean"
+  | "array"
+  | "object"
+  | "http_request"
+  | "http_response";
+
+export interface PortSpec {
+  id: string;
+  label: string;
+  kind: PortKind;
+  optional?: boolean;
+  stream?: boolean;
+}
+
+export interface NodeSpec {
+  id: string;
+  title: string;
+  package_name: string;
+  category: string;
+  ui_owned?: boolean;
+  inputs: PortSpec[];
+  outputs: PortSpec[];
+}
+
+export interface PortCompatibility {
+  source: PortKind;
+  target: PortKind;
+}
+
+export interface WorkflowCatalog {
+  version: number;
+  port_kinds: PortKind[];
+  nodes: NodeSpec[];
+  compatibility: PortCompatibility[];
 }
 
 export interface ExternalCommandConfig {
@@ -79,6 +142,7 @@ export interface YoutubeRunRequest {
 export interface WorkflowClient {
   label: string;
   checkDependencies(): Promise<SystemDependencyReport>;
+  getWorkflowCatalog(): Promise<WorkflowCatalog>;
   discoverYoutubeCollectionManifest(request: YoutubeCollectionManifestRequest): Promise<YoutubeCollectionManifest>;
   startYoutubeVideoRun(request: YoutubeRunRequest): Promise<RunRecord>;
   startYoutubeCollectionRun(request: YoutubeCollectionRunRequest): Promise<RunRecord>;
@@ -86,11 +150,13 @@ export interface WorkflowClient {
   startSubtitleGenerationRun(request: SubtitleGenerationRunRequest): Promise<RunRecord>;
   importSongCatalogItems(request: SongCatalogImportRequest): Promise<SongCatalogImportResponse>;
   getRun(runId: string): Promise<RunRecord>;
+  getRunEvents(runId: string): Promise<RunEvent[]>;
   getReport(runId: string): Promise<StudioReport>;
   getYoutubeVideoReport(runId: string): Promise<YoutubeVideoReport>;
   getYoutubeCollectionReport(runId: string): Promise<YoutubeCollectionReport>;
   getSongAnalysisReport(runId: string): Promise<SongAnalysisReport>;
   getSubtitleGenerationReport(runId: string): Promise<SubtitleGenerationReport>;
+  mediaUrl(runId: string | null, path: string): Promise<string | null>;
   cancelRun(runId: string): Promise<void>;
   subscribeRunEvents?(runId: string, onEvent: (event: RunEvent) => void): Promise<() => void>;
 }
@@ -100,7 +166,7 @@ export function getWorkflowClient(): WorkflowClient {
 }
 
 export function isYoutubeCollectionReport(report: StudioReport): report is YoutubeCollectionReport {
-  return report.use_case === "youtube_collection_analysis" && "items" in report && "collection" in report;
+  return reportWorkflow(report) === "youtube_collection_analysis" && "items" in report && "collection" in report;
 }
 
 export function isYoutubeVideoReport(report: StudioReport): report is YoutubeVideoReport {
@@ -108,11 +174,15 @@ export function isYoutubeVideoReport(report: StudioReport): report is YoutubeVid
 }
 
 export function isSongAnalysisReport(report: StudioReport): report is SongAnalysisReport {
-  return report.use_case === "song_analysis" && "identification" in report && "music" in report;
+  return reportWorkflow(report) === "song_analysis" && "identification" in report && "music" in report;
 }
 
 export function isSubtitleGenerationReport(report: StudioReport): report is SubtitleGenerationReport {
-  return report.use_case === "subtitle_generation" && "subtitle" in report && "transcription" in report;
+  return reportWorkflow(report) === "subtitle_generation" && "subtitle" in report && "transcription" in report;
+}
+
+function reportWorkflow(report: StudioReport): string | undefined {
+  return report.workflow ?? report.use_case;
 }
 
 export async function waitForRunCompletion(

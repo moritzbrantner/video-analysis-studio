@@ -330,7 +330,7 @@ pub fn run_song_analysis_workflow(
     }
 
     let report = SongAnalysisReport {
-        use_case: "song_analysis".to_string(),
+        workflow: "song_analysis".to_string(),
         source: SongSourceReport {
             url: source_url,
             local_media: display_path(&media_path),
@@ -592,38 +592,15 @@ fn match_candidates(
 }
 
 fn duration_prefilter(query_duration: f64, catalog_duration: f64) -> bool {
-    let tolerance = query_duration.max(catalog_duration) * 0.10;
-    (query_duration - catalog_duration).abs() <= tolerance.max(10.0)
+    audio_analysis_recognition::duration_prefilter(query_duration, catalog_duration)
 }
 
 fn shifted_similarity(left: &[i64], right: &[i64]) -> f32 {
-    (-12..=12)
-        .map(|offset| fingerprint_similarity_with_offset(left, right, offset))
-        .fold(0.0, f32::max)
+    audio_analysis_recognition::shifted_similarity(left, right)
 }
 
 fn fingerprint_similarity_with_offset(left: &[i64], right: &[i64], offset: isize) -> f32 {
-    if left.is_empty() || right.is_empty() {
-        return 0.0;
-    }
-    let (left_start, right_start) = if offset >= 0 {
-        (offset as usize, 0_usize)
-    } else {
-        (0_usize, (-offset) as usize)
-    };
-    if left_start >= left.len() || right_start >= right.len() {
-        return 0.0;
-    }
-    let len = (left.len() - left_start).min(right.len() - right_start);
-    if len == 0 {
-        return 0.0;
-    }
-    let mut distance = 0_u32;
-    for index in 0..len {
-        distance += (left[left_start + index] ^ right[right_start + index]).count_ones();
-    }
-    let max_distance = len as u32 * 64;
-    1.0 - (distance as f32 / max_distance as f32)
+    audio_analysis_recognition::fingerprint_similarity_with_offset(left, right, offset)
 }
 
 fn run_fpcalc(media_path: &Path, chunked: bool) -> Result<Vec<FingerprintRecord>> {
@@ -633,67 +610,46 @@ fn run_fpcalc(media_path: &Path, chunked: bool) -> Result<Vec<FingerprintRecord>
             "fpcalc is required for song fingerprinting".to_string(),
         ));
     }
-    let mut process = Command::new("fpcalc");
-    process.arg("-json").arg("-raw");
-    if chunked {
-        process
-            .arg("-chunk")
-            .arg(FINGERPRINT_CHUNK_SECONDS.to_string())
-            .arg("-overlap");
-    }
-    let output = process.arg(media_path).stdin(Stdio::null()).output()?;
-    if !output.status.success() {
-        return Err(StudioError::Workflow(format!(
-            "fpcalc failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    parse_fpcalc_json(&String::from_utf8_lossy(&output.stdout))
+    audio_analysis_recognition::run_fpcalc(
+        command,
+        media_path,
+        chunked.then_some(FINGERPRINT_CHUNK_SECONDS),
+    )
+    .map(fingerprint_records_from_package)
+    .map_err(StudioError::from)
 }
 
 fn parse_fpcalc_json(output: &str) -> Result<Vec<FingerprintRecord>> {
-    let trimmed = output.trim();
-    if trimmed.is_empty() {
-        return Ok(Vec::new());
-    }
-    if let Ok(parsed) = parse_fpcalc_record(trimmed) {
-        return Ok(vec![parsed]);
-    }
-    trimmed
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(parse_fpcalc_record)
-        .collect()
+    audio_analysis_recognition::parse_fpcalc_json(output)
+        .map(fingerprint_records_from_package)
+        .map_err(StudioError::from)
 }
 
 fn parse_fpcalc_record(line: &str) -> Result<FingerprintRecord> {
-    let parsed: FpcalcOutput = serde_json::from_str(line)?;
-    let raw = match &parsed.fingerprint {
-        serde_json::Value::Array(values) => values
-            .iter()
-            .map(|value| {
-                value.as_i64().ok_or_else(|| {
-                    StudioError::Workflow(
-                        "fpcalc raw fingerprint contains a non-integer".to_string(),
-                    )
-                })
-            })
-            .collect::<Result<Vec<_>>>()?,
-        serde_json::Value::String(_) => Vec::new(),
-        _ => {
-            return Err(StudioError::Workflow(
-                "fpcalc fingerprint has an unsupported shape".to_string(),
-            ))
-        }
-    };
-    let compressed = parsed.fingerprint.as_str().map(|value| value.to_string());
-    Ok(FingerprintRecord {
-        timestamp: parsed.timestamp,
-        duration: parsed.duration,
-        compressed,
-        raw,
-        raw_json: line.trim().to_string(),
-    })
+    audio_analysis_recognition::parse_fpcalc_record(line)
+        .map(fingerprint_record_from_package)
+        .map_err(StudioError::from)
+}
+
+fn fingerprint_records_from_package(
+    records: Vec<audio_analysis_recognition::FingerprintRecord>,
+) -> Vec<FingerprintRecord> {
+    records
+        .into_iter()
+        .map(fingerprint_record_from_package)
+        .collect()
+}
+
+fn fingerprint_record_from_package(
+    record: audio_analysis_recognition::FingerprintRecord,
+) -> FingerprintRecord {
+    FingerprintRecord {
+        timestamp: record.timestamp,
+        duration: record.duration,
+        compressed: record.compressed,
+        raw: record.raw,
+        raw_json: record.raw_json,
+    }
 }
 
 fn open_catalog(path: &Path) -> Result<Connection> {

@@ -1,22 +1,28 @@
+use std::collections::HashSet;
 use std::convert::Infallible;
+use std::path::{Path as FsPath, PathBuf};
 use std::time::Duration;
 
-use axum::extract::{Path, State};
+use axum::body::Body;
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::Stream;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use studio_core::{
     check_system_dependencies, discover_youtube_collection_manifest, RunEvent, RunId, RunManager,
-    SongAnalysisRunRequest, SongCatalogImportRequest, StudioError, SubtitleGenerationRunRequest,
-    WorkflowKind, YoutubeCollectionManifestRequest, YoutubeCollectionRunRequest, YoutubeRunRequest,
+    RunRecord, SongAnalysisRunRequest, SongCatalogImportRequest, StudioError, StudioReport,
+    SubtitleGenerationRunRequest, WorkflowKind, YoutubeCollectionManifestRequest,
+    YoutubeCollectionRunRequest, YoutubeRunRequest, YoutubeVideoReport,
 };
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
+use tower::ServiceExt;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::ServeFile;
 use tower_http::trace::TraceLayer;
 
 #[derive(Clone)]
@@ -30,6 +36,7 @@ pub fn build_app(manager: RunManager) -> Router {
         .route("/health", get(health))
         .route("/api/system/dependencies", get(system_dependencies))
         .route("/api/workflows", get(workflows))
+        .route("/api/workflow/catalog", get(workflow_catalog))
         .route(
             "/api/youtube/collection-manifests",
             post(discover_collection_manifest),
@@ -53,6 +60,8 @@ pub fn build_app(manager: RunManager) -> Router {
         .route("/api/song-catalog/imports", post(import_song_catalog_items))
         .route("/api/runs/{run_id}", get(get_run))
         .route("/api/runs/{run_id}/events", get(get_events))
+        .route("/api/runs/{run_id}/events/history", get(get_event_history))
+        .route("/api/runs/{run_id}/media", get(get_run_media))
         .route("/api/runs/{run_id}/report", get(get_report))
         .route("/api/runs/{run_id}/cancel", post(cancel_run))
         .layer(
@@ -96,6 +105,10 @@ async fn workflows() -> Json<Vec<WorkflowDescriptor>> {
             kind: WorkflowKind::SubtitleGeneration,
         },
     ])
+}
+
+async fn workflow_catalog() -> Json<studio_core::WorkflowCatalog> {
+    Json(studio_core::default_workflow_catalog())
 }
 
 async fn discover_collection_manifest(
@@ -155,6 +168,13 @@ async fn get_report(
     Ok(Json(state.manager.get_report(run_id).await?))
 }
 
+async fn get_event_history(
+    State(state): State<AppState>,
+    Path(run_id): Path<RunId>,
+) -> Result<Json<Vec<RunEvent>>, ApiError> {
+    Ok(Json(state.manager.list_events(run_id).await?))
+}
+
 async fn cancel_run(
     State(state): State<AppState>,
     Path(run_id): Path<RunId>,
@@ -177,6 +197,36 @@ async fn get_events(
             .interval(Duration::from_secs(10))
             .text("keep-alive"),
     ))
+}
+
+#[derive(Debug, Deserialize)]
+struct MediaQuery {
+    path: String,
+}
+
+async fn get_run_media(
+    State(state): State<AppState>,
+    Path(run_id): Path<RunId>,
+    Query(query): Query<MediaQuery>,
+    request: axum::http::Request<Body>,
+) -> Result<Response, MediaRouteError> {
+    let run = state.manager.get_run(run_id).await?;
+    let report = state.manager.get_report(run_id).await?;
+    let allowed_paths = allowed_media_paths_for_report(&run, &report);
+    let requested = canonical_report_path(&run, &query.path).ok_or(MediaRouteError::NotFound)?;
+
+    if !allowed_paths.contains(&requested) {
+        return Err(MediaRouteError::Forbidden);
+    }
+    if !requested.exists() {
+        return Err(MediaRouteError::NotFound);
+    }
+
+    let response = match ServeFile::new(requested).oneshot(request).await {
+        Ok(response) => response,
+        Err(error) => match error {},
+    };
+    Ok(response.into_response())
 }
 
 fn sse_event(event: RunEvent) -> Event {
@@ -203,12 +253,106 @@ struct ErrorResponse {
     error: String,
 }
 
+enum MediaRouteError {
+    Api(StudioError),
+    Forbidden,
+    NotFound,
+}
+
+impl From<StudioError> for MediaRouteError {
+    fn from(value: StudioError) -> Self {
+        Self::Api(value)
+    }
+}
+
+impl IntoResponse for MediaRouteError {
+    fn into_response(self) -> Response {
+        match self {
+            MediaRouteError::Api(error) => ApiError(error).into_response(),
+            MediaRouteError::Forbidden => (
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: "media path is not referenced by this run report".to_string(),
+                }),
+            )
+                .into_response(),
+            MediaRouteError::NotFound => (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "media path not found".to_string(),
+                }),
+            )
+                .into_response(),
+        }
+    }
+}
+
 struct ApiError(StudioError);
 
 impl From<StudioError> for ApiError {
     fn from(value: StudioError) -> Self {
         Self(value)
     }
+}
+
+fn allowed_media_paths_for_report(run: &RunRecord, report: &StudioReport) -> HashSet<PathBuf> {
+    let mut paths = HashSet::new();
+    match report {
+        StudioReport::YoutubeVideo(report) => add_video_report_paths(run, report, &mut paths),
+        StudioReport::YoutubeCollection(report) => {
+            for item in &report.items {
+                add_report_path(run, &mut paths, item.local_video.as_deref());
+                if let Some(report) = &item.report {
+                    add_video_report_paths(run, report, &mut paths);
+                }
+            }
+        }
+        StudioReport::SongAnalysis(report) => {
+            add_report_path(run, &mut paths, Some(&report.source.local_media));
+            add_report_path(run, &mut paths, report.assets.transcription_wav.as_deref());
+            add_report_path(run, &mut paths, report.assets.music_analysis_wav.as_deref());
+        }
+        StudioReport::SubtitleGeneration(report) => {
+            add_report_path(run, &mut paths, Some(&report.source.local_video));
+            add_report_path(run, &mut paths, report.assets.audio_wav.as_deref());
+            add_report_path(run, &mut paths, Some(&report.assets.subtitle_path));
+            add_report_path(run, &mut paths, Some(&report.subtitle.path));
+        }
+    }
+    paths
+}
+
+fn add_video_report_paths(
+    run: &RunRecord,
+    report: &YoutubeVideoReport,
+    paths: &mut HashSet<PathBuf>,
+) {
+    add_report_path(run, paths, Some(&report.source.local_video));
+    add_report_path(run, paths, report.assets.audio_wav.as_deref());
+}
+
+fn add_report_path(run: &RunRecord, paths: &mut HashSet<PathBuf>, value: Option<&str>) {
+    if let Some(value) = value.and_then(|value| canonical_report_path(run, value)) {
+        paths.insert(value);
+    }
+}
+
+fn canonical_report_path(run: &RunRecord, value: &str) -> Option<PathBuf> {
+    let path = FsPath::new(value);
+    if path.as_os_str().is_empty() {
+        return None;
+    }
+    let mut candidates = Vec::new();
+    candidates.push(PathBuf::from(path));
+    if !path.is_absolute() {
+        if let Some(parent) = run.report_path.parent() {
+            candidates.push(parent.join(path));
+        }
+        candidates.push(run.work_dir.join(path));
+    }
+    candidates
+        .into_iter()
+        .find_map(|candidate| candidate.canonicalize().ok())
 }
 
 impl IntoResponse for ApiError {
@@ -371,6 +515,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn workflow_catalog_endpoint_returns_package_owned_nodes() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = build_app(RunManager::new(dir.path().to_path_buf()));
+        let response = app
+            .oneshot(
+                Request::get("/api/workflow/catalog")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["version"], 1);
+        assert!(value["nodes"].as_array().unwrap().iter().any(|node| {
+            node["id"] == "youtube-workflow"
+                && node["package_name"] == "video-analysis-use-cases"
+        }));
+    }
+
+    #[tokio::test]
     async fn invalid_subtitle_generation_request_returns_400() {
         let dir = tempfile::tempdir().unwrap();
         let app = build_app(RunManager::new(dir.path().to_path_buf()));
@@ -494,5 +662,137 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(report_response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn event_history_returns_stored_run_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = RunManager::new(dir.path().to_path_buf());
+        let run = manager
+            .start_youtube_video(YoutubeRunRequest::local_file(
+                dir.path().join("missing.mp4"),
+            ))
+            .await
+            .unwrap();
+        manager.cancel_run(run.run_id).await.unwrap();
+        let app = build_app(manager);
+
+        let response = app
+            .oneshot(
+                Request::get(format!("/api/runs/{}/events/history", run.run_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(value
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["status"] == "canceled"));
+    }
+
+    #[tokio::test]
+    async fn media_route_serves_referenced_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let media_path = dir.path().join("sample.mp4");
+        std::fs::write(&media_path, b"media bytes").unwrap();
+        let manager = RunManager::new(dir.path().to_path_buf());
+        let run = manager
+            .start_youtube_video(YoutubeRunRequest::local_file(&media_path))
+            .await
+            .unwrap();
+        write_test_video_report(&run, &media_path);
+        let app = build_app(manager);
+
+        let response = app
+            .oneshot(
+                Request::get(format!(
+                    "/api/runs/{}/media?path={}",
+                    run.run_id,
+                    media_path.to_string_lossy()
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&bytes[..], b"media bytes");
+    }
+
+    #[tokio::test]
+    async fn media_route_rejects_unreferenced_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let media_path = dir.path().join("sample.mp4");
+        let other_path = dir.path().join("other.mp4");
+        std::fs::write(&media_path, b"media bytes").unwrap();
+        std::fs::write(&other_path, b"other bytes").unwrap();
+        let manager = RunManager::new(dir.path().to_path_buf());
+        let run = manager
+            .start_youtube_video(YoutubeRunRequest::local_file(&media_path))
+            .await
+            .unwrap();
+        write_test_video_report(&run, &media_path);
+        let app = build_app(manager);
+
+        let response = app
+            .oneshot(
+                Request::get(format!(
+                    "/api/runs/{}/media?path={}",
+                    run.run_id,
+                    other_path.to_string_lossy()
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    fn write_test_video_report(run: &studio_core::RunRecord, media_path: &std::path::Path) {
+        if let Some(parent) = run.report_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(
+            &run.report_path,
+            json!({
+                "workflow": "youtube_video_analysis",
+                "source": { "url": null, "local_video": media_path.to_string_lossy() },
+                "assets": {
+                    "work_dir": run.work_dir.to_string_lossy(),
+                    "report_path": run.report_path.to_string_lossy(),
+                    "audio_wav": null
+                },
+                "capabilities": { "completed": [], "skipped": [] },
+                "video": {
+                    "width": 1920,
+                    "height": 1080,
+                    "frame_rate": "30/1",
+                    "duration_seconds": 1.0,
+                    "frames_processed": 0,
+                    "scenes": [],
+                    "observations": []
+                },
+                "transcription": { "status": "skipped", "text": null, "segments": [], "message": null },
+                "audio": { "status": "skipped", "frames_processed": 0, "events": [], "message": null },
+                "text": { "status": "skipped", "segments_processed": 0, "events": [], "message": null },
+                "data_buckets": []
+            })
+            .to_string(),
+        )
+        .unwrap();
     }
 }

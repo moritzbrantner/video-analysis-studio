@@ -113,6 +113,10 @@ const allowedTones = new Set([
 ]);
 
 const workflowSource = readFileSync(join(import.meta.dir, "../src/main.tsx"), "utf8");
+const rustWorkflowCatalogSource = readFileSync(
+  join(import.meta.dir, "../../../../rust-packages/crates/video/video-analysis-use-cases/src/workflow_catalog.rs"),
+  "utf8",
+);
 const sourceFile = ts.createSourceFile("main.tsx", workflowSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const topLevelConstants = collectTopLevelConstants(sourceFile);
 const portTypes = new Set(readStringArrayConstant("portTypes") as PortType[]);
@@ -135,6 +139,15 @@ describe("workflow node catalog", () => {
   test("node IDs are unique across the catalog", () => {
     const ids = workflowNodes.map((node) => node.id);
     expect(ids).toHaveLength(new Set(ids).size);
+  });
+
+  test("Rust workflow catalog processing nodes exist in the TS template set", () => {
+    const rustNodeIds = [...rustWorkflowCatalogSource.matchAll(/node\(\s*"([^"]+)"/g)].map((match) => match[1]);
+    const tsNodeIds = new Set(workflowNodes.map((node) => node.id));
+    expect(rustNodeIds.length).toBeGreaterThan(10);
+    for (const id of rustNodeIds) {
+      expect(tsNodeIds.has(id)).toBe(true);
+    }
   });
 
   for (const node of workflowNodes) {

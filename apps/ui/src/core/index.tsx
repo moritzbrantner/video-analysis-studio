@@ -87,9 +87,11 @@ export function SceneTimeline({
 
 export function SceneTable({
   scenes,
+  activeSceneIndex,
   onSelectScene,
 }: {
   scenes: TimelineScene[];
+  activeSceneIndex?: number | null;
   onSelectScene?: (scene: TimelineScene, index: number) => void;
 }) {
   if (scenes.length === 0) {
@@ -112,10 +114,11 @@ export function SceneTable({
           {scenes.map((scene, index) => {
             const start = sceneStartSeconds(scene);
             const end = sceneEndSeconds(scene);
+            const selected = activeSceneIndex === sceneIndex(scene, index + 1);
             return (
               <tr
                 key={`${sceneStartFrame(scene)}-${sceneEndFrame(scene)}-${index}`}
-                className={cn(onSelectScene && "cursor-pointer hover:bg-zinc-50")}
+                className={cn(onSelectScene && "cursor-pointer hover:bg-zinc-50", selected && "bg-sky-50")}
                 onClick={() => onSelectScene?.(scene, index)}
               >
                 <td className="px-3 py-2 font-medium text-zinc-950">
@@ -230,12 +233,20 @@ export function EventList({
   );
 }
 
-export function ScenePanel({ scenes }: { scenes: SceneReport[] | TimelineScene[] }) {
+export function ScenePanel({
+  scenes,
+  activeSceneIndex,
+  onSelectScene,
+}: {
+  scenes: SceneReport[] | TimelineScene[];
+  activeSceneIndex?: number | null;
+  onSelectScene?: (scene: TimelineScene, index: number) => void;
+}) {
   return (
     <Panel title="Scenes" description={`${formatNumber(scenes.length)} detected`}>
-      <SceneTimeline scenes={scenes} />
+      <SceneTimeline scenes={scenes} activeSceneIndex={activeSceneIndex} onSelectScene={onSelectScene} />
       <div className="mt-4">
-        <SceneTable scenes={scenes} />
+        <SceneTable scenes={scenes} activeSceneIndex={activeSceneIndex} onSelectScene={onSelectScene} />
       </div>
     </Panel>
   );

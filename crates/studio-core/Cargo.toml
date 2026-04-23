@@ -13,12 +13,15 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+audio-analysis-recognition.workspace = true
+text-analysis-transcription.workspace = true
 video-analysis-core.workspace = true
 video-analysis-data.workspace = true
 video-analysis-detectors.workspace = true
 video-analysis-ffmpeg.workspace = true
 video-analysis-ingest.workspace = true
 video-analysis-models.workspace = true
+video-analysis-use-cases.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

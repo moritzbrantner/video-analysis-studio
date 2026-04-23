@@ -7,12 +7,15 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-video-analysis-core = { git = "https://github.com/moritzbrantner/rust-packages.git", branch = "main" }
-video-analysis-data = { git = "https://github.com/moritzbrantner/rust-packages.git", branch = "main" }
-video-analysis-detectors = { git = "https://github.com/moritzbrantner/rust-packages.git", branch = "main" }
-video-analysis-ffmpeg = { git = "https://github.com/moritzbrantner/rust-packages.git", branch = "main" }
-video-analysis-ingest = { git = "https://github.com/moritzbrantner/rust-packages.git", branch = "main" }
-video-analysis-models = { git = "https://github.com/moritzbrantner/rust-packages.git", branch = "main" }
+audio-analysis-recognition = { path = "../rust-packages/crates/audio/audio-analysis-recognition" }
+text-analysis-transcription = { path = "../rust-packages/crates/text/text-analysis-transcription" }
+video-analysis-core = { path = "../rust-packages/crates/video/video-analysis-core" }
+video-analysis-data = { path = "../rust-packages/crates/video/video-analysis-data" }
+video-analysis-detectors = { path = "../rust-packages/crates/video/video-analysis-detectors" }
+video-analysis-ffmpeg = { path = "../rust-packages/crates/video/video-analysis-ffmpeg" }
+video-analysis-ingest = { path = "../rust-packages/crates/video/video-analysis-ingest" }
+video-analysis-models = { path = "../rust-packages/crates/video/video-analysis-models" }
+video-analysis-use-cases = { path = "../rust-packages/crates/video/video-analysis-use-cases" }
 
 anyhow = "1"
 axum = "0.8"
@@ -28,7 +31,8 @@ tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "sync", "fs", "signal"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }

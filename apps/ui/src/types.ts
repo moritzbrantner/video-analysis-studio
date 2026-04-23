@@ -146,7 +146,8 @@ export interface DataBucketReport {
 }
 
 export interface YoutubeVideoReport {
-  use_case: "youtube-video" | string;
+  workflow?: "youtube_video_analysis" | "youtube-video" | string;
+  use_case?: "youtube-video" | string;
   source: SourceReport;
   assets: AssetReport;
   capabilities: CapabilityReport;
@@ -296,7 +297,8 @@ export interface CollectionItemReport {
 }
 
 export interface YoutubeCollectionReport {
-  use_case: "youtube_collection_analysis" | string;
+  workflow?: "youtube_collection_analysis" | string;
+  use_case?: "youtube_collection_analysis" | string;
   collection: CollectionSummary;
   source: YoutubeCollectionSourceReport;
   filters: AppliedCollectionFilters;
@@ -437,7 +439,8 @@ export interface MusicAnalysisReport {
 }
 
 export interface SongAnalysisReport {
-  use_case: "song_analysis" | string;
+  workflow?: "song_analysis" | string;
+  use_case?: "song_analysis" | string;
   source: SongSourceReport;
   assets: SongAssetReport;
   capabilities: CapabilityReport;
@@ -469,7 +472,8 @@ export interface SubtitleReport {
 }
 
 export interface SubtitleGenerationReport {
-  use_case: "subtitle_generation" | string;
+  workflow?: "subtitle_generation" | string;
+  use_case?: "subtitle_generation" | string;
   source: SourceReport;
   assets: SubtitleAssetReport;
   capabilities: CapabilityReport;

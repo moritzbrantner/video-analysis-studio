@@ -2,6 +2,7 @@ import type {
   RunEvent,
   RunRecord,
   SystemDependencyReport,
+  WorkflowCatalog,
   WorkflowClient,
   YoutubeRunRequest,
 } from "./client";
@@ -27,6 +28,7 @@ export function createHttpClient(baseUrl = import.meta.env.VITE_STUDIO_API_URL ?
   return {
     label: "HTTP API",
     checkDependencies: () => request<SystemDependencyReport>(baseUrl, "/api/system/dependencies"),
+    getWorkflowCatalog: () => request<WorkflowCatalog>(baseUrl, "/api/workflow/catalog"),
     discoverYoutubeCollectionManifest: (payload) =>
       request<YoutubeCollectionManifest>(baseUrl, "/api/youtube/collection-manifests", {
         method: "POST",
@@ -58,6 +60,7 @@ export function createHttpClient(baseUrl = import.meta.env.VITE_STUDIO_API_URL ?
         body: JSON.stringify(payload),
       }),
     getRun: (runId) => request<RunRecord>(baseUrl, `/api/runs/${runId}`),
+    getRunEvents: (runId) => request<RunEvent[]>(baseUrl, `/api/runs/${runId}/events/history`),
     getReport: (runId) => request<StudioReport>(baseUrl, `/api/runs/${runId}/report`),
     getYoutubeVideoReport: async (runId) => {
       const report = await request<StudioReport>(baseUrl, `/api/runs/${runId}/report`);
@@ -91,6 +94,12 @@ export function createHttpClient(baseUrl = import.meta.env.VITE_STUDIO_API_URL ?
       request<void>(baseUrl, `/api/runs/${runId}/cancel`, {
         method: "POST",
       }),
+    mediaUrl: async (runId, path) => {
+      if (!runId || !path.trim()) {
+        return null;
+      }
+      return `${baseUrl}/api/runs/${runId}/media?path=${encodeURIComponent(path)}`;
+    },
     subscribeRunEvents: async (runId, onEvent) => {
       const source = new EventSource(`${baseUrl}/api/runs/${runId}/events`);
       source.addEventListener("run-event", (event) => {

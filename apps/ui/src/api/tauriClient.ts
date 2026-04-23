@@ -2,6 +2,7 @@ import type {
   RunEvent,
   RunRecord,
   SystemDependencyReport,
+  WorkflowCatalog,
   WorkflowClient,
   YoutubeRunRequest,
 } from "./client";
@@ -29,6 +30,7 @@ export function createTauriClient(): WorkflowClient {
   return {
     label: "Tauri",
     checkDependencies: async () => invoke<SystemDependencyReport>("check_dependencies"),
+    getWorkflowCatalog: async () => invoke<WorkflowCatalog>("get_workflow_catalog"),
     discoverYoutubeCollectionManifest: async (request) =>
       invoke<YoutubeCollectionManifest>("discover_youtube_collection_manifest_command", { request }),
     startYoutubeVideoRun: async (request) =>
@@ -42,6 +44,7 @@ export function createTauriClient(): WorkflowClient {
     importSongCatalogItems: async (request: SongCatalogImportRequest) =>
       invoke<SongCatalogImportResponse>("import_song_catalog_items", { request }),
     getRun: async (runId) => invoke<RunRecord>("get_run", { runId }),
+    getRunEvents: async (runId) => invoke<RunEvent[]>("get_run_events", { runId }),
     getReport: async (runId) => invoke<StudioReport>("get_report", { runId }),
     getYoutubeVideoReport: async (runId) => {
       const report = await invoke<StudioReport>("get_report", { runId });
@@ -72,6 +75,13 @@ export function createTauriClient(): WorkflowClient {
       return report;
     },
     cancelRun: async (runId) => invoke<void>("cancel_run", { runId }),
+    mediaUrl: async (_runId, path) => {
+      if (!path.trim()) {
+        return null;
+      }
+      const { convertFileSrc } = await import("@tauri-apps/api/core");
+      return convertFileSrc(path);
+    },
     subscribeRunEvents: async (runId, onEvent) => {
       const { listen } = await import("@tauri-apps/api/event");
       return listen<RunEvent>("workflow://run-event", (event) => {

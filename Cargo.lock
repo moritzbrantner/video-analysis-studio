@@ -270,6 +270,42 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "audio-analysis-core"
+version = "0.1.0"
+dependencies = [
+ "video-analysis-core",
+]
+
+[[package]]
+name = "audio-analysis-fourier"
+version = "0.1.0"
+dependencies = [
+ "audio-analysis-core",
+ "rustfft",
+ "video-analysis-core",
+]
+
+[[package]]
+name = "audio-analysis-processing"
+version = "0.1.0"
+dependencies = [
+ "audio-analysis-core",
+ "video-analysis-core",
+ "video-analysis-ingest",
+]
+
+[[package]]
+name = "audio-analysis-recognition"
+version = "0.1.0"
+dependencies = [
+ "audio-analysis-core",
+ "audio-analysis-fourier",
+ "serde",
+ "serde_json",
+ "video-analysis-core",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1800,6 +1836,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-range-header"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9171a2ea8a68358193d15dd5d70c1c10a2afc3e7e4c5bc92bc9f025cebd7359c"
+
+[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2409,6 +2451,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
+name = "mime_guess"
+version = "2.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
+dependencies = [
+ "mime",
+ "unicase",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2508,6 +2560,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9"
 dependencies = [
  "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "num-complex"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495"
+dependencies = [
  "num-traits",
 ]
 
@@ -3095,6 +3156,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "primal-check"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc0d895b311e3af9902528fbb8f928688abbd95872819320517cc24ca6b2bd08"
+dependencies = [
+ "num-integer",
+]
+
+[[package]]
 name = "proc-macro-crate"
 version = "1.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3476,6 +3546,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
 dependencies = [
  "semver",
+]
+
+[[package]]
+name = "rustfft"
+version = "6.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21db5f9893e91f41798c88680037dba611ca6674703c1a18601b01a72c8adb89"
+dependencies = [
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "primal-check",
+ "strength_reduce",
+ "transpose",
 ]
 
 [[package]]
@@ -3983,6 +4067,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
+name = "strength_reduce"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe895eb47f22e2ddd4dabc02bce419d2e643c8e3b585c78158b349195bc24d82"
+
+[[package]]
 name = "string_cache"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4063,11 +4153,13 @@ dependencies = [
 name = "studio-core"
 version = "0.1.0"
 dependencies = [
+ "audio-analysis-recognition",
  "chrono",
  "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
+ "text-analysis-transcription",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -4078,6 +4170,7 @@ dependencies = [
  "video-analysis-ffmpeg",
  "video-analysis-ingest",
  "video-analysis-models",
+ "video-analysis-use-cases",
 ]
 
 [[package]]
@@ -4552,6 +4645,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "text-analysis-core"
+version = "0.1.0"
+dependencies = [
+ "unicode-normalization",
+ "unicode-segmentation",
+ "video-analysis-core",
+]
+
+[[package]]
+name = "text-analysis-features"
+version = "0.1.0"
+dependencies = [
+ "text-analysis-core",
+ "video-analysis-core",
+]
+
+[[package]]
+name = "text-analysis-transcription"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "video-analysis-core",
+ "video-analysis-ingest",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4640,6 +4761,21 @@ dependencies = [
  "displaydoc",
  "zerovec",
 ]
+
+[[package]]
+name = "tinyvec"
+version = "1.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e61e67053d25a4e82c844e8424039d9745781b3fc4f32b8d55ed50f5f667ef3"
+dependencies = [
+ "tinyvec_macros",
+]
+
+[[package]]
+name = "tinyvec_macros"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
@@ -4822,11 +4958,20 @@ checksum = "d4e6559d53cc268e5031cd8429d05415bc4cb4aefc4aa5d6cc35fbf5b924a1f8"
 dependencies = [
  "bitflags 2.11.1",
  "bytes",
+ "futures-core",
  "futures-util",
  "http",
  "http-body",
+ "http-body-util",
+ "http-range-header",
+ "httpdate",
  "iri-string",
+ "mime",
+ "mime_guess",
+ "percent-encoding",
  "pin-project-lite",
+ "tokio",
+ "tokio-util",
  "tower",
  "tower-layer",
  "tower-service",
@@ -4905,6 +5050,16 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "transpose"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ad61aed86bc3faea4300c7aee358b4c6d0c8d6ccc36524c96e4c92ccf26e77e"
+dependencies = [
+ "num-integer",
+ "strength_reduce",
 ]
 
 [[package]]
@@ -5000,10 +5155,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "unicase"
+version = "2.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-segmentation"
@@ -5156,7 +5326,6 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "video-analysis-core"
 version = "0.1.0"
-source = "git+https://github.com/moritzbrantner/rust-packages.git?branch=main#89037dca632159188ea33242de543533ce2b06b8"
 dependencies = [
  "num-rational",
  "num-traits",
@@ -5166,7 +5335,6 @@ dependencies = [
 [[package]]
 name = "video-analysis-data"
 version = "0.1.0"
-source = "git+https://github.com/moritzbrantner/rust-packages.git?branch=main#89037dca632159188ea33242de543533ce2b06b8"
 dependencies = [
  "video-analysis-core",
 ]
@@ -5174,7 +5342,6 @@ dependencies = [
 [[package]]
 name = "video-analysis-detectors"
 version = "0.1.0"
-source = "git+https://github.com/moritzbrantner/rust-packages.git?branch=main#89037dca632159188ea33242de543533ce2b06b8"
 dependencies = [
  "video-analysis-core",
 ]
@@ -5182,7 +5349,6 @@ dependencies = [
 [[package]]
 name = "video-analysis-ffmpeg"
 version = "0.1.0"
-source = "git+https://github.com/moritzbrantner/rust-packages.git?branch=main#89037dca632159188ea33242de543533ce2b06b8"
 dependencies = [
  "num-rational",
  "thiserror 2.0.18",
@@ -5191,9 +5357,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "video-analysis-gaussian-splatting"
+version = "0.1.0"
+dependencies = [
+ "video-analysis-core",
+ "video-analysis-radiance-fields",
+]
+
+[[package]]
 name = "video-analysis-ingest"
 version = "0.1.0"
-source = "git+https://github.com/moritzbrantner/rust-packages.git?branch=main#89037dca632159188ea33242de543533ce2b06b8"
 dependencies = [
  "num-rational",
  "video-analysis-core",
@@ -5202,13 +5375,71 @@ dependencies = [
 [[package]]
 name = "video-analysis-models"
 version = "0.1.0"
-source = "git+https://github.com/moritzbrantner/rust-packages.git?branch=main#89037dca632159188ea33242de543533ce2b06b8"
 dependencies = [
  "base64 0.22.1",
  "hf-hub",
  "serde",
  "serde_json",
  "video-analysis-core",
+]
+
+[[package]]
+name = "video-analysis-radiance-fields"
+version = "0.1.0"
+dependencies = [
+ "video-analysis-core",
+]
+
+[[package]]
+name = "video-analysis-radiance-io"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "video-analysis-core",
+ "video-analysis-gaussian-splatting",
+ "video-analysis-radiance-fields",
+ "video-analysis-reconstruction",
+]
+
+[[package]]
+name = "video-analysis-radiance-pipeline"
+version = "0.1.0"
+dependencies = [
+ "video-analysis-core",
+ "video-analysis-ffmpeg",
+ "video-analysis-gaussian-splatting",
+ "video-analysis-ingest",
+ "video-analysis-radiance-fields",
+ "video-analysis-radiance-io",
+]
+
+[[package]]
+name = "video-analysis-reconstruction"
+version = "0.1.0"
+dependencies = [
+ "video-analysis-core",
+ "video-analysis-radiance-fields",
+]
+
+[[package]]
+name = "video-analysis-use-cases"
+version = "0.1.0"
+dependencies = [
+ "audio-analysis-processing",
+ "clap",
+ "serde",
+ "serde_json",
+ "text-analysis-features",
+ "text-analysis-transcription",
+ "video-analysis-core",
+ "video-analysis-data",
+ "video-analysis-detectors",
+ "video-analysis-ffmpeg",
+ "video-analysis-ingest",
+ "video-analysis-models",
+ "video-analysis-radiance-pipeline",
 ]
 
 [[package]]

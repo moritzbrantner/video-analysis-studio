@@ -4,8 +4,9 @@ use std::path::PathBuf;
 
 use commands::{
     cancel_run, check_dependencies, discover_youtube_collection_manifest_command, get_report,
-    get_run, import_song_catalog_items, start_song_analysis_run, start_subtitle_generation_run,
-    start_youtube_collection_run, start_youtube_video_run, StudioState,
+    get_run, get_run_events, get_workflow_catalog, import_song_catalog_items,
+    start_song_analysis_run, start_subtitle_generation_run, start_youtube_collection_run,
+    start_youtube_video_run, StudioState,
 };
 use studio_core::RunManager;
 use tauri::Manager;
@@ -26,6 +27,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             check_dependencies,
+            get_workflow_catalog,
             discover_youtube_collection_manifest_command,
             start_youtube_video_run,
             start_youtube_collection_run,
@@ -34,6 +36,7 @@ pub fn run() {
             import_song_catalog_items,
             get_run,
             get_report,
+            get_run_events,
             cancel_run
         ])
         .run(tauri::generate_context!())

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -20,6 +20,7 @@ use crate::youtube::{
 };
 
 pub type RunId = Uuid;
+const MAX_RUN_EVENT_HISTORY: usize = 500;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -75,6 +76,7 @@ struct RunManagerInner {
 struct RunState {
     record: RunRecord,
     events: broadcast::Sender<RunEvent>,
+    history: VecDeque<RunEvent>,
 }
 
 impl RunManager {
@@ -113,6 +115,7 @@ impl RunManager {
                 RunState {
                     record: record.clone(),
                     events: events.clone(),
+                    history: VecDeque::new(),
                 },
             );
         }
@@ -192,6 +195,7 @@ impl RunManager {
                 RunState {
                     record: record.clone(),
                     events: events.clone(),
+                    history: VecDeque::new(),
                 },
             );
         }
@@ -275,6 +279,7 @@ impl RunManager {
                 RunState {
                     record: record.clone(),
                     events: events.clone(),
+                    history: VecDeque::new(),
                 },
             );
         }
@@ -356,6 +361,7 @@ impl RunManager {
                 RunState {
                     record: record.clone(),
                     events: events.clone(),
+                    history: VecDeque::new(),
                 },
             );
         }
@@ -455,13 +461,22 @@ impl RunManager {
         state.record.updated_at = now;
         state.record.finished_at = Some(now);
         state.record.message = Some("canceled".to_string());
-        let _ = state.events.send(RunEvent {
+        let event = RunEvent {
             run_id,
             status: RunStatus::Canceled,
             message: "canceled".to_string(),
             timestamp: now,
-        });
+        };
+        push_event_history(&mut state.history, event.clone());
+        let _ = state.events.send(event);
         Ok(())
+    }
+
+    pub async fn list_events(&self, run_id: RunId) -> Result<Vec<RunEvent>> {
+        let runs = self.inner.runs.lock().await;
+        runs.get(&run_id)
+            .map(|state| state.history.iter().cloned().collect())
+            .ok_or_else(|| StudioError::RunNotFound(run_id.to_string()))
     }
 
     pub async fn subscribe_events(&self, run_id: RunId) -> Result<broadcast::Receiver<RunEvent>> {
@@ -498,16 +513,30 @@ impl RunManager {
     }
 
     async fn emit(&self, run_id: RunId, status: RunStatus, message: impl Into<String>) {
-        let runs = self.inner.runs.lock().await;
-        if let Some(state) = runs.get(&run_id) {
-            let _ = state.events.send(RunEvent {
+        let mut runs = self.inner.runs.lock().await;
+        if let Some(state) = runs.get_mut(&run_id) {
+            if state.record.status == RunStatus::Canceled
+                && matches!(status, RunStatus::Succeeded | RunStatus::Failed)
+            {
+                return;
+            }
+            let event = RunEvent {
                 run_id,
                 status,
                 message: message.into(),
                 timestamp: Utc::now(),
-            });
+            };
+            push_event_history(&mut state.history, event.clone());
+            let _ = state.events.send(event);
         }
     }
+}
+
+fn push_event_history(history: &mut VecDeque<RunEvent>, event: RunEvent) {
+    if history.len() == MAX_RUN_EVENT_HISTORY {
+        history.pop_front();
+    }
+    history.push_back(event);
 }
 
 #[cfg(test)]
@@ -529,5 +558,58 @@ mod tests {
 
         let error = manager.get_report(run.run_id).await.unwrap_err();
         assert!(matches!(error, StudioError::ReportNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn cancel_run_stores_status_and_event() {
+        let dir = tempdir().unwrap();
+        let manager = RunManager::new(dir.path().to_path_buf());
+        let run = manager
+            .start_youtube_video(YoutubeRunRequest::local_file(
+                dir.path().join("missing.mp4"),
+            ))
+            .await
+            .unwrap();
+
+        manager.cancel_run(run.run_id).await.unwrap();
+
+        let record = manager.get_run(run.run_id).await.unwrap();
+        assert_eq!(record.status, RunStatus::Canceled);
+        let events = manager.list_events(run.run_id).await.unwrap();
+        assert!(events
+            .iter()
+            .any(|event| event.status == RunStatus::Canceled && event.message == "canceled"));
+    }
+
+    #[tokio::test]
+    async fn terminal_worker_update_does_not_overwrite_canceled_record() {
+        let dir = tempdir().unwrap();
+        let manager = RunManager::new(dir.path().to_path_buf());
+        let run = manager
+            .start_youtube_video(YoutubeRunRequest::local_file(
+                dir.path().join("missing.mp4"),
+            ))
+            .await
+            .unwrap();
+
+        manager.cancel_run(run.run_id).await.unwrap();
+        manager
+            .update_run(
+                run.run_id,
+                RunStatus::Succeeded,
+                Some("analysis completed".to_string()),
+                true,
+            )
+            .await;
+        manager
+            .emit(run.run_id, RunStatus::Succeeded, "analysis completed")
+            .await;
+
+        let record = manager.get_run(run.run_id).await.unwrap();
+        assert_eq!(record.status, RunStatus::Canceled);
+        let events = manager.list_events(run.run_id).await.unwrap();
+        assert!(!events
+            .iter()
+            .any(|event| event.status == RunStatus::Succeeded));
     }
 }

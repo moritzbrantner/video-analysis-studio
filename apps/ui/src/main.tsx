@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createRoot } from "react-dom/client";
 import {
   addEdge,
+  applyNodeChanges,
   Background,
   Controls,
   Handle,
@@ -17,17 +18,22 @@ import {
   type Connection,
   type Edge,
   type Node,
+  type NodeChange,
   type NodeProps,
   type ReactFlowInstance,
 } from "@xyflow/react";
 import {
   AssetSummary,
+  buildYoutubeCollectionManifestRequest,
   CapabilityPanel,
   CliRunPanel,
   CollectionDashboard,
+  CollectionManifestPreviewPanel,
   DataBucketOverview,
   EventList,
+  filterYoutubeCollectionManifest,
   JsonReportLoader,
+  MediaPreviewPanel,
   ModelObservationGrid,
   ObservationList,
   ScenePanel,
@@ -42,6 +48,7 @@ import {
   type SubtitleGenerationReport,
   type SubtitleGenerationRunRequest,
   type TranscriptionEngine,
+  type YoutubeCollectionManifest,
   type YoutubeCollectionRunRequest,
   type YoutubeVideoReport,
 } from "./index";
@@ -61,18 +68,21 @@ import {
   isYoutubeCollectionReport,
   isYoutubeVideoReport,
   waitForRunCompletion,
+  type RunEvent,
   type RunRecord,
   type RunStatus,
   type SystemDependencyReport,
+  type WorkflowCatalog as RustWorkflowCatalog,
+  type PortSpec as RustPortSpec,
   type YoutubeRunRequest,
 } from "./api/client";
 
-type UseCaseId = "youtube-video" | "youtube-collection" | "song-analysis" | "subtitle-generation";
+type WorkflowKindId = "youtube-video" | "youtube-collection" | "song-analysis" | "subtitle-generation";
 type SourceMode = "url" | "file" | "collection";
 type AppPage = "analysis" | "workflow" | "settings";
 type ViewMode = "overview" | "run" | "result" | "scenes" | "signals" | "data";
 
-interface UseCaseForm {
+interface WorkflowRunForm {
   sourceMode: SourceMode;
   url: string;
   input: string;
@@ -108,44 +118,57 @@ interface UseCaseForm {
   workflowInputs: Record<string, string>;
 }
 
-const useCases: Array<{
-  id: UseCaseId;
+interface CollectionManifestPreviewState {
+  status: "idle" | "loading" | "ready" | "error";
+  manifest: YoutubeCollectionManifest | null;
+  selectedItemIds: string[];
+  stale: boolean;
+  error: string | null;
+}
+
+const workflowKinds: Array<{
+  id: WorkflowKindId;
   name: string;
+  defaultWorkflowName: string;
   packageName: string;
   status: string;
 }> = [
   {
     id: "youtube-video",
     name: "YouTube Video",
+    defaultWorkflowName: "YouTube Video Workflow",
     packageName: "studio-core",
     status: "Ready",
   },
   {
     id: "youtube-collection",
     name: "YouTube Collection",
+    defaultWorkflowName: "YouTube Collection Workflow",
     packageName: "studio-core",
     status: "Ready",
   },
   {
     id: "song-analysis",
     name: "Song Analysis",
+    defaultWorkflowName: "Song Analysis Workflow",
     packageName: "studio-core",
     status: "Ready",
   },
   {
     id: "subtitle-generation",
     name: "Subtitle Generation",
+    defaultWorkflowName: "Subtitle Generation Workflow",
     packageName: "studio-core",
     status: "Ready",
   },
 ];
 
-const initialForm: UseCaseForm = {
+const initialForm: WorkflowRunForm = {
   sourceMode: "url",
   url: "",
   input: "./video.mp4",
-  output: "use-case-output/youtube-video/analysis.json",
-  workDir: "use-case-output/youtube-video",
+  output: "workflow-output/youtube-video/analysis.json",
+  workDir: "workflow-output/youtube-video",
   sceneThreshold: 27,
   minSceneLen: 15,
   maxFrames: "",
@@ -176,11 +199,18 @@ const initialForm: UseCaseForm = {
   workflowInputs: {},
 };
 
+const initialCollectionManifestPreview: CollectionManifestPreviewState = {
+  status: "idle",
+  manifest: null,
+  selectedItemIds: [],
+  stale: false,
+  error: null,
+};
+
 const mainSidebarCollapsedStorageKey = "video-analysis.mainSidebarCollapsed.v1";
 
 function App() {
-  const [selectedUseCase, setSelectedUseCase] = useState<UseCaseId>("youtube-video");
-  const [form, setForm] = useState<UseCaseForm>(initialForm);
+  const [form, setForm] = useState<WorkflowRunForm>(initialForm);
   const [report, setReport] = useState<StudioReport>(sampleReport);
   const [page, setPage] = useState<AppPage>(() =>
     typeof window === "undefined" ? "analysis" : appPageFromPath(window.location.pathname),
@@ -189,9 +219,17 @@ function App() {
   const [runStatus, setRunStatus] = useState<CliRun["status"]>("pending");
   const [lastRun, setLastRun] = useState<CliRun | null>(null);
   const [runOutput, setRunOutput] = useState<{ stdout?: string; stderr?: string }>({});
+  const [activeBackendRunId, setActiveBackendRunId] = useState<string | null>(null);
+  const [activeRunRecord, setActiveRunRecord] = useState<RunRecord | null>(null);
+  const [activeReportRunId, setActiveReportRunId] = useState<string | null>(null);
+  const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
+  const [collectionManifestPreview, setCollectionManifestPreview] = useState<CollectionManifestPreviewState>(
+    initialCollectionManifestPreview,
+  );
   const [dashboardLayout, setDashboardLayout] = useState<DashboardLayout>(defaultDashboardLayout);
   const [workflowLibrary, setWorkflowLibrary] = useState<SavedWorkflowLibrary>(loadSavedWorkflowLibrary);
   const [workflowRuns, setWorkflowRuns] = useState<SavedWorkflowRun[]>(loadSavedWorkflowRuns);
+  const [workflowCatalog, setWorkflowCatalog] = useState<RustWorkflowCatalog | null>(null);
   const [portTypeColors, setPortTypeColors] = useState<PortTypeColors>(loadPortTypeColors);
   const [hotkeyBindings, setHotkeyBindings] = useState<HotkeyBindings>(loadHotkeyBindings);
   const [workflowFocusTarget, setWorkflowFocusTarget] = useState<WorkflowFocusTarget | null>(null);
@@ -200,9 +238,10 @@ function App() {
   );
 
   const activeWorkflow = useMemo(() => activeSavedWorkflow(workflowLibrary), [workflowLibrary]);
+  const selectedWorkflowKind = activeWorkflow.kind;
   const activeWorkflowInputModel = useMemo(() => deriveWorkflowRunInputModel(activeWorkflow), [activeWorkflow]);
-  const command = useMemo(() => buildCommand(form, activeWorkflowInputModel, selectedUseCase), [form, activeWorkflowInputModel, selectedUseCase]);
-  const validationMessage = getRunValidation(form, activeWorkflowInputModel, selectedUseCase);
+  const command = useMemo(() => buildCommand(form, activeWorkflowInputModel, selectedWorkflowKind), [form, activeWorkflowInputModel, selectedWorkflowKind]);
+  const validationMessage = getRunValidation(form, activeWorkflowInputModel, selectedWorkflowKind);
   const songReport = isSongAnalysisReport(report) ? report : null;
   const subtitleReport = isSubtitleGenerationReport(report) ? report : null;
   const collectionReport = isYoutubeCollectionReport(report) ? report : null;
@@ -226,7 +265,7 @@ function App() {
       message:
         runStatus === "running"
           ? `Running ${activeWorkflow.name}`
-          : selectedUseCase === "youtube-video"
+          : selectedWorkflowKind === "youtube-video"
             ? activeWorkflow.name
             : null,
     };
@@ -238,6 +277,25 @@ function App() {
   useEffect(() => {
     persistPortTypeColors(portTypeColors);
   }, [portTypeColors]);
+
+  useEffect(() => {
+    let canceled = false;
+    getWorkflowClient()
+      .getWorkflowCatalog()
+      .then((catalog) => {
+        if (!canceled) {
+          setWorkflowCatalog(catalog);
+        }
+      })
+      .catch(() => {
+        if (!canceled) {
+          setWorkflowCatalog(null);
+        }
+      });
+    return () => {
+      canceled = true;
+    };
+  }, []);
 
   useEffect(() => {
     persistHotkeyBindings(hotkeyBindings);
@@ -270,10 +328,18 @@ function App() {
 
   const activateWorkflowDefinition = useCallback(
     (workflowId: string) => {
-      if (!workflowLibrary.workflows.some((workflow) => workflow.id === workflowId)) {
+      const workflow = workflowLibrary.workflows.find((candidate) => candidate.id === workflowId);
+      if (!workflow) {
         return;
       }
       commitWorkflowLibrary({ ...workflowLibrary, activeWorkflowId: workflowId });
+      setForm((current) => ({
+        ...current,
+        sourceMode: workflow.kind === "youtube-collection" ? "collection" : current.sourceMode === "collection" ? "url" : current.sourceMode,
+        workDir: defaultWorkDirForWorkflowKind(workflow.kind),
+        output: defaultOutputForWorkflowKind(workflow.kind),
+      }));
+      setCollectionManifestPreview(initialCollectionManifestPreview);
     },
     [commitWorkflowLibrary, workflowLibrary],
   );
@@ -287,28 +353,32 @@ function App() {
   );
 
   const createWorkflowDefinition = useCallback(() => {
-    const workflow = createBlankSavedWorkflow();
+    const workflow = createBlankSavedWorkflow("Untitled Workflow", activeWorkflow.kind);
     commitWorkflowLibrary({
       ...workflowLibrary,
       activeWorkflowId: workflow.id,
       workflows: [workflow, ...workflowLibrary.workflows],
     });
     navigateToPage("workflow");
-  }, [commitWorkflowLibrary, navigateToPage, workflowLibrary]);
+  }, [activeWorkflow.kind, commitWorkflowLibrary, navigateToPage, workflowLibrary]);
 
   const startNewWorkflowRun = useCallback(() => {
     setForm({
       ...initialForm,
-      sourceMode: selectedUseCase === "youtube-collection" ? "collection" : "url",
-      workDir: defaultWorkDirForUseCase(selectedUseCase),
-      output: defaultOutputForUseCase(selectedUseCase),
+      sourceMode: selectedWorkflowKind === "youtube-collection" ? "collection" : "url",
+      workDir: defaultWorkDirForWorkflowKind(selectedWorkflowKind),
+      output: defaultOutputForWorkflowKind(selectedWorkflowKind),
     });
     setRunStatus("pending");
     setLastRun(null);
     setRunOutput({});
+    setActiveBackendRunId(null);
+    setActiveRunRecord(null);
+    setRunEvents([]);
+    setCollectionManifestPreview(initialCollectionManifestPreview);
     navigateToPage("analysis");
     setViewMode("run");
-  }, [navigateToPage, selectedUseCase]);
+  }, [navigateToPage, selectedWorkflowKind]);
 
   const focusWorkflowInput = useCallback(
     (input: WorkflowRunInput) => {
@@ -375,8 +445,17 @@ function App() {
   );
 
   const openWorkflowRun = useCallback(
-    (run: SavedWorkflowRun) => {
-      activateWorkflowDefinition(run.workflowId);
+    async (run: SavedWorkflowRun) => {
+      const workflowKind = workflowKindFromRunRequest(run.request);
+      if (workflowLibrary.workflows.some((workflow) => workflow.id === run.workflowId)) {
+        commitWorkflowLibrary({
+          ...workflowLibrary,
+          activeWorkflowId: run.workflowId,
+          workflows: workflowLibrary.workflows.map((workflow) =>
+            workflow.id === run.workflowId ? { ...workflow, kind: workflowKind } : workflow,
+          ),
+        });
+      }
       setForm(
         isYoutubeCollectionRunRequest(run.request)
           ? formFromYoutubeCollectionRunRequest(run.request)
@@ -386,27 +465,155 @@ function App() {
             ? formFromSongAnalysisRunRequest(run.request)
             : formFromYoutubeRunRequest(run.request),
       );
-      setSelectedUseCase(
-        isYoutubeCollectionRunRequest(run.request)
-          ? "youtube-collection"
-          : isSubtitleGenerationRunRequest(run.request)
-            ? "subtitle-generation"
-          : isSongAnalysisRunRequest(run.request)
-            ? "song-analysis"
-            : "youtube-video",
-      );
       setRunStatus(run.status);
       setLastRun(workflowRunToCliRun(run));
       setRunOutput({});
+      setActiveBackendRunId(run.backendRunId ?? null);
+      setActiveRunRecord(null);
+      setRunEvents([]);
+      if (isYoutubeCollectionRunRequest(run.request) && run.request.manifest) {
+        setCollectionManifestPreview({
+          status: "ready",
+          manifest: run.request.manifest,
+          selectedItemIds: run.request.manifest.items.map((item) => item.item_id),
+          stale: false,
+          error: null,
+        });
+      } else {
+        setCollectionManifestPreview(initialCollectionManifestPreview);
+      }
       navigateToPage("analysis");
       setViewMode("run");
+      if (run.backendRunId) {
+        try {
+          const client = getWorkflowClient();
+          const [record, events] = await Promise.all([
+            client.getRun(run.backendRunId),
+            client.getRunEvents(run.backendRunId),
+          ]);
+          setActiveRunRecord(record);
+          setRunStatus(record.status);
+          setRunEvents(events);
+          setLastRun(runRecordToCliRun(record, client.label, run.workflowName));
+        } catch (error) {
+          setRunEvents([
+            {
+              run_id: run.backendRunId,
+              status: "failed",
+              message: error instanceof Error ? error.message : String(error),
+              timestamp: new Date().toISOString(),
+            },
+          ]);
+        }
+      }
     },
-    [activateWorkflowDefinition, navigateToPage],
+    [commitWorkflowLibrary, navigateToPage, workflowLibrary],
   );
 
+  const handleRunFormChange = useCallback(
+    (nextForm: WorkflowRunForm) => {
+      const collectionKeyChanged = collectionManifestFormKey(form) !== collectionManifestFormKey(nextForm);
+      setForm(nextForm);
+      setRunStatus("pending");
+      setLastRun(null);
+      setRunOutput({});
+      setActiveBackendRunId(null);
+      setActiveRunRecord(null);
+      setRunEvents([]);
+      if (selectedWorkflowKind !== "youtube-collection") {
+        setCollectionManifestPreview(initialCollectionManifestPreview);
+      } else if (collectionKeyChanged) {
+        setCollectionManifestPreview((current) =>
+          current.manifest ? { ...current, stale: true, error: null } : current,
+        );
+      }
+    },
+    [form, selectedWorkflowKind],
+  );
+
+  const previewYoutubeCollectionManifest = useCallback(async () => {
+    setCollectionManifestPreview((current) => ({ ...current, status: "loading", error: null }));
+    try {
+      const manifest = await getWorkflowClient().discoverYoutubeCollectionManifest(
+        buildYoutubeCollectionManifestRequest(form),
+      );
+      setCollectionManifestPreview({
+        status: "ready",
+        manifest,
+        selectedItemIds: manifest.items.map((item) => item.item_id),
+        stale: false,
+        error: null,
+      });
+    } catch (error) {
+      setCollectionManifestPreview((current) => ({
+        ...current,
+        status: "error",
+        stale: false,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }, [form]);
+
+  const cancelActiveRun = useCallback(async () => {
+    if (!activeBackendRunId) {
+      return;
+    }
+    const client = getWorkflowClient();
+    await client.cancelRun(activeBackendRunId);
+    const now = new Date().toISOString();
+    const event: RunEvent = {
+      run_id: activeBackendRunId,
+      status: "canceled",
+      message: "cancel requested",
+      timestamp: now,
+    };
+    setRunEvents((events) => [...events, event]);
+    setRunStatus("canceled");
+    setActiveRunRecord((record) =>
+      record
+        ? { ...record, status: "canceled", updated_at: now, finished_at: now, message: "canceled" }
+        : record,
+    );
+    setLastRun((run) =>
+      run ? { ...run, status: "canceled", exit_code: null, message: "canceled" } : run,
+    );
+    setWorkflowRuns((currentRuns) => {
+      const nextRuns = currentRuns.map((run) =>
+        run.backendRunId === activeBackendRunId
+          ? { ...run, status: "canceled" as RunStatus, updatedAt: now, message: "canceled" }
+          : run,
+      );
+      persistSavedWorkflowRuns(nextRuns);
+      return nextRuns;
+    });
+  }, [activeBackendRunId]);
+
+  const openActiveReport = useCallback(async () => {
+    if (!activeBackendRunId) {
+      return;
+    }
+    const client = getWorkflowClient();
+    const record = activeRunRecord ?? (await client.getRun(activeBackendRunId));
+    const workflowKind = workflowKindFromRunRequest(
+      workflowRuns.find((run) => run.backendRunId === activeBackendRunId)?.request ??
+        buildYoutubeRunRequest(form, activeWorkflowInputModel),
+    );
+    setReport(
+      workflowKind === "youtube-collection"
+        ? await client.getYoutubeCollectionReport(record.run_id)
+        : workflowKind === "subtitle-generation"
+          ? await client.getSubtitleGenerationReport(record.run_id)
+        : workflowKind === "song-analysis"
+          ? await client.getSongAnalysisReport(record.run_id)
+        : await client.getYoutubeVideoReport(record.run_id),
+    );
+    setActiveReportRunId(record.run_id);
+    setViewMode("overview");
+  }, [activeBackendRunId, activeRunRecord, activeWorkflowInputModel, form, workflowRuns]);
+
   async function runAnalysis() {
-    const message = getRunValidation(form, activeWorkflowInputModel, selectedUseCase);
-    const workflowKind = selectedUseCase;
+    const message = getRunValidation(form, activeWorkflowInputModel, selectedWorkflowKind);
+    const workflowKind = selectedWorkflowKind;
     if (message) {
       setRunStatus("failed");
       setLastRun({
@@ -423,7 +630,7 @@ function App() {
     setRunStatus("running");
     const request =
       workflowKind === "youtube-collection"
-        ? buildYoutubeCollectionRunRequest(form)
+        ? buildYoutubeCollectionRunRequest(form, collectionManifestPreview)
         : workflowKind === "subtitle-generation"
           ? buildSubtitleGenerationRunRequest(form, activeWorkflowInputModel)
         : workflowKind === "song-analysis"
@@ -440,6 +647,9 @@ function App() {
       message: `Starting ${activeWorkflow.name}`,
     });
     setRunOutput({});
+    setRunEvents([]);
+    setActiveBackendRunId(null);
+    setActiveRunRecord(null);
 
     try {
       const client = getWorkflowClient();
@@ -451,6 +661,8 @@ function App() {
           : workflowKind === "song-analysis"
             ? await client.startSongAnalysisRun(request as SongAnalysisRunRequest)
           : await client.startYoutubeVideoRun(request as YoutubeRunRequest);
+      setActiveBackendRunId(started.run_id);
+      setActiveRunRecord(started);
       updateWorkflowRun(localRun.id, (run) => workflowRunFromRunRecord(run, started));
       setLastRun(runRecordToCliRun(started, client.label, activeWorkflow.name));
 
@@ -459,14 +671,19 @@ function App() {
         started.run_id,
         (run) => {
           setRunStatus(run.status);
+          setActiveRunRecord(run);
           updateWorkflowRun(localRun.id, (currentRun) => workflowRunFromRunRecord(currentRun, run));
           setLastRun(runRecordToCliRun(run, client.label, activeWorkflow.name));
         },
-        (event) => setRunOutput({ stdout: event.message }),
+        (event) => {
+          setRunEvents((events) => [...events, event]);
+          setRunOutput({ stdout: event.stdout ?? event.message, stderr: event.stderr ?? undefined });
+        },
       );
 
       if (finalRun.status !== "succeeded") {
-        setRunStatus("failed");
+        setRunStatus(finalRun.status);
+        setActiveRunRecord(finalRun);
         updateWorkflowRun(localRun.id, (run) => workflowRunFromRunRecord(run, finalRun));
         setLastRun(runRecordToCliRun(finalRun, client.label, activeWorkflow.name));
         return;
@@ -481,13 +698,24 @@ function App() {
             ? await client.getSongAnalysisReport(finalRun.run_id)
           : await client.getYoutubeVideoReport(finalRun.run_id),
       );
+      setActiveReportRunId(finalRun.run_id);
       setRunStatus("succeeded");
+      setActiveRunRecord(finalRun);
       updateWorkflowRun(localRun.id, (run) => workflowRunFromRunRecord(run, finalRun));
       setLastRun(runRecordToCliRun(finalRun, client.label, activeWorkflow.name));
       setViewMode("overview");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setRunStatus("failed");
+      setRunEvents((events) => [
+        ...events,
+        {
+          run_id: activeBackendRunId ?? localRun.id,
+          status: "failed",
+          message,
+          timestamp: new Date().toISOString(),
+        },
+      ]);
       updateWorkflowRun(localRun.id, (run) => ({
         ...run,
         status: "failed",
@@ -519,7 +747,7 @@ function App() {
               {!mainSidebarCollapsed && (
                 <div>
                   <div className="text-lg font-semibold tracking-normal">Video Analysis Studio</div>
-                  <div className="mt-1 text-sm text-zinc-500">Use cases and reports</div>
+                  <div className="mt-1 text-sm text-zinc-500">Workflows and reports</div>
                 </div>
               )}
               <button
@@ -600,38 +828,6 @@ function App() {
                 )}
                 <SettingsIcon className="h-4 w-4 shrink-0" />
               </button>
-              {useCases.map((useCase) => (
-                <button
-                  key={useCase.id}
-                  className={classNames(
-                    "flex w-full items-center justify-between rounded-lg border px-3 py-3 text-left transition",
-                    mainSidebarCollapsed && "h-10 justify-center px-0 py-0",
-                    page === "analysis" && selectedUseCase === useCase.id
-                      ? "border-zinc-950 bg-zinc-950 text-white"
-                      : "border-zinc-200 bg-white text-zinc-800 hover:border-zinc-300 hover:bg-zinc-50",
-                  )}
-                  onClick={() => {
-                    setSelectedUseCase(useCase.id);
-                    setForm((current) => ({
-                      ...current,
-                      sourceMode: useCase.id === "youtube-collection" ? "collection" : "url",
-                      workDir: defaultWorkDirForUseCase(useCase.id),
-                      output: defaultOutputForUseCase(useCase.id),
-                    }));
-                    navigateToPage("analysis");
-                  }}
-                  title={useCase.name}
-                  aria-label={useCase.name}
-                >
-                  {!mainSidebarCollapsed && (
-                    <span>
-                      <span className="block text-sm font-medium">{useCase.name}</span>
-                      <span className="block text-xs opacity-70">{useCase.packageName}</span>
-                    </span>
-                  )}
-                  <PlayIcon className="h-4 w-4 shrink-0" />
-                </button>
-              ))}
             </nav>
             <div className="space-y-3">
               <div className={classNames("flex items-center justify-between gap-2", mainSidebarCollapsed && "justify-center")}>
@@ -674,7 +870,7 @@ function App() {
                         <span className="min-w-0">
                           <span className="block truncate text-xs font-semibold">{workflow.name}</span>
                           <span className="block text-[10px] opacity-70">
-                            v{workflow.version} · {workflow.nodes.length} components, {workflow.edges.length} connections
+                            {workflowKindName(workflow.kind)} · v{workflow.version} · {workflow.nodes.length} components
                           </span>
                         </span>
                       )}
@@ -739,7 +935,7 @@ function App() {
                         <span className="min-w-0">
                           <span className="block truncate text-xs font-semibold">{run.workflowName}</span>
                           <span className="block truncate text-[10px] text-zinc-500">
-                            {run.status} · {run.workflowVersion ? `v${run.workflowVersion} · ` : ""}{run.inputSummary}
+                            {run.status} · {workflowKindName(run.workflowKind ?? workflowKindFromRunRequest(run.request))} · {run.workflowVersion ? `v${run.workflowVersion} · ` : ""}{run.inputSummary}
                           </span>
                         </span>
                       )}
@@ -780,14 +976,14 @@ function App() {
                       ? "Workflow Builder"
                       : page === "settings"
                         ? "Settings"
-                        : currentUseCase(selectedUseCase).name}
+                        : activeWorkflow.name}
                   </h1>
                   <p className="mt-1 text-sm text-zinc-500">
                     {page === "workflow"
-                      ? activeWorkflow.name
+                      ? workflowKindName(activeWorkflow.kind)
                       : page === "settings"
                         ? "Hotkeys and workflow type colors"
-                        : reportTitle}
+                        : `${workflowKindName(activeWorkflow.kind)} · ${reportTitle}`}
                   </p>
                 </div>
                 {page === "analysis" && (
@@ -797,6 +993,7 @@ function App() {
                       label="Sample"
                       onClick={() => {
                         setReport(sampleReport);
+                        setActiveReportRunId(null);
                         setRunStatus("succeeded");
                         setLastRun({
                           command: "cargo",
@@ -839,6 +1036,7 @@ function App() {
               <WorkflowBuilder
                 workflowLibrary={workflowLibrary}
                 onWorkflowLibraryChange={setWorkflowLibrary}
+                workflowCatalog={workflowCatalog}
                 portTypeColors={portTypeColors}
                 hotkeyBindings={hotkeyBindings}
                 focusTarget={workflowFocusTarget?.workflowId === activeWorkflow.id ? workflowFocusTarget : null}
@@ -866,10 +1064,7 @@ function App() {
               <RunWorkspace
                 form={form}
                 onFormChange={(next) => {
-                  setForm(next);
-                  setRunStatus("pending");
-                  setLastRun(null);
-                  setRunOutput({});
+                  handleRunFormChange(next);
                 }}
                 onRun={runAnalysis}
                 isRunning={runStatus === "running"}
@@ -877,16 +1072,28 @@ function App() {
                 validationMessage={validationMessage}
                 cliRun={cliRun}
                 runOutput={runOutput}
+                activeRunId={activeBackendRunId}
+                activeRunRecord={activeRunRecord}
+                runEvents={runEvents}
+                collectionManifestPreview={collectionManifestPreview}
                 workflowLibrary={workflowLibrary}
                 activeWorkflow={activeWorkflow}
                 activeWorkflowInputModel={activeWorkflowInputModel}
-                selectedUseCase={selectedUseCase}
+                selectedWorkflowKind={selectedWorkflowKind}
                 onSelectWorkflow={activateWorkflowDefinition}
                 onCreateWorkflow={createWorkflowDefinition}
                 onEditWorkflow={() => navigateToPage("workflow")}
                 onFocusWorkflowInput={focusWorkflowInput}
+                onCancelRun={cancelActiveRun}
+                onRetryRun={runAnalysis}
+                onOpenReport={openActiveReport}
+                onPreviewCollectionManifest={previewYoutubeCollectionManifest}
+                onCollectionManifestSelectionChange={(selectedItemIds) =>
+                  setCollectionManifestPreview((current) => ({ ...current, selectedItemIds }))
+                }
                 onLoadReport={(nextReport) => {
                   setReport(nextReport);
+                  setActiveReportRunId(null);
                   setRunStatus("succeeded");
                   setLastRun({
                     command: "cargo",
@@ -901,13 +1108,13 @@ function App() {
               />
             ) : (
               <section className="min-w-0 space-y-4">
-                {viewMode === "overview" && (songReport ? <SongDashboard report={songReport} /> : subtitleReport ? <SubtitleDashboard report={subtitleReport} /> : collectionReport ? <CollectionDashboard report={collectionReport} /> : <Overview report={videoReport} />)}
+                {viewMode === "overview" && (songReport ? <SongDashboard report={songReport} runId={activeReportRunId} /> : subtitleReport ? <SubtitleDashboard report={subtitleReport} runId={activeReportRunId} /> : collectionReport ? <CollectionDashboard report={collectionReport} runId={activeReportRunId} /> : <Overview report={videoReport} runId={activeReportRunId} />)}
                 {viewMode === "result" && (
                   <ResultPageEditor report={report} layout={dashboardLayout} onLayoutChange={setDashboardLayout} />
                 )}
-                {viewMode === "scenes" && (songReport ? <SongMusicPanel report={songReport} /> : subtitleReport ? <SubtitleDashboard report={subtitleReport} /> : collectionReport ? <CollectionDashboard report={collectionReport} /> : <Scenes report={videoReport} />)}
-                {viewMode === "signals" && (songReport ? <SongSignals report={songReport} /> : subtitleReport ? <SubtitleDashboard report={subtitleReport} /> : collectionReport ? <CollectionDashboard report={collectionReport} /> : <Signals report={videoReport} />)}
-                {viewMode === "data" && (songReport ? <DataBucketOverview buckets={songReport.data_buckets} /> : subtitleReport ? <SubtitleDashboard report={subtitleReport} /> : collectionReport ? <CollectionDashboard report={collectionReport} /> : <Data report={videoReport} />)}
+                {viewMode === "scenes" && (songReport ? <SongMusicPanel report={songReport} /> : subtitleReport ? <SubtitleDashboard report={subtitleReport} runId={activeReportRunId} /> : collectionReport ? <CollectionDashboard report={collectionReport} runId={activeReportRunId} /> : <Scenes report={videoReport} runId={activeReportRunId} />)}
+                {viewMode === "signals" && (songReport ? <SongSignals report={songReport} runId={activeReportRunId} /> : subtitleReport ? <SubtitleDashboard report={subtitleReport} runId={activeReportRunId} /> : collectionReport ? <CollectionDashboard report={collectionReport} runId={activeReportRunId} /> : <Signals report={videoReport} runId={activeReportRunId} />)}
+                {viewMode === "data" && (songReport ? <DataBucketOverview buckets={songReport.data_buckets} /> : subtitleReport ? <SubtitleDashboard report={subtitleReport} runId={activeReportRunId} /> : collectionReport ? <CollectionDashboard report={collectionReport} runId={activeReportRunId} /> : <Data report={videoReport} />)}
               </section>
             )}
           </div>
@@ -917,9 +1124,10 @@ function App() {
   );
 }
 
-function Overview({ report }: { report: YoutubeVideoReport }) {
+function Overview({ report, runId }: { report: YoutubeVideoReport; runId?: string | null }) {
   return (
     <>
+      <MediaPreviewPanel report={report} runId={runId} />
       <VideoSummaryCards video={report.video} />
       <div className="grid gap-4 2xl:grid-cols-2">
         <SourceSummary source={report.source} />
@@ -931,18 +1139,30 @@ function Overview({ report }: { report: YoutubeVideoReport }) {
   );
 }
 
-function Scenes({ report }: { report: YoutubeVideoReport }) {
+function Scenes({ report, runId }: { report: YoutubeVideoReport; runId?: string | null }) {
+  const [activeSceneIndex, setActiveSceneIndex] = useState<number | null>(report.video.scenes[0]?.index ?? null);
   return (
     <>
-      <ScenePanel scenes={report.video.scenes} />
+      <MediaPreviewPanel
+        report={report}
+        runId={runId}
+        activeSceneIndex={activeSceneIndex}
+        onSelectScene={(scene) => setActiveSceneIndex(scene.index)}
+      />
+      <ScenePanel
+        scenes={report.video.scenes}
+        activeSceneIndex={activeSceneIndex}
+        onSelectScene={(scene, index) => setActiveSceneIndex("index" in scene ? scene.index : index + 1)}
+      />
       <SplitPlanTable scenes={report.video.scenes} videoName={basename(report.source.local_video)} />
     </>
   );
 }
 
-function Signals({ report }: { report: YoutubeVideoReport }) {
+function Signals({ report, runId }: { report: YoutubeVideoReport; runId?: string | null }) {
   return (
     <>
+      <MediaPreviewPanel report={report} runId={runId} />
       <ObservationList observations={report.video.observations} title="Video Observations" />
       <ModelObservationGrid observations={report.video.observations} />
       <TranscriptPanel transcription={report.transcription} />
@@ -958,9 +1178,10 @@ function Data({ report }: { report: YoutubeVideoReport }) {
   return <DataBucketOverview buckets={report.data_buckets} />;
 }
 
-function SongDashboard({ report }: { report: SongAnalysisReport }) {
+function SongDashboard({ report, runId }: { report: SongAnalysisReport; runId?: string | null }) {
   return (
     <>
+      <MediaPreviewPanel report={report} runId={runId} />
       <SongSummaryCards report={report} />
       <SongIdentificationPanel report={report} />
       <SongMusicPanel report={report} />
@@ -969,9 +1190,10 @@ function SongDashboard({ report }: { report: SongAnalysisReport }) {
   );
 }
 
-function SubtitleDashboard({ report }: { report: SubtitleGenerationReport }) {
+function SubtitleDashboard({ report, runId }: { report: SubtitleGenerationReport; runId?: string | null }) {
   return (
     <>
+      <MediaPreviewPanel report={report} runId={runId} />
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard label="Subtitle" value={report.subtitle.format.toUpperCase()} detail={`${report.subtitle.segments} segments`} />
         <MetricCard label="Transcription" value={report.transcription.status} detail={report.transcription.message ?? "Transcript generated"} />
@@ -988,9 +1210,10 @@ function SubtitleDashboard({ report }: { report: SubtitleGenerationReport }) {
   );
 }
 
-function SongSignals({ report }: { report: SongAnalysisReport }) {
+function SongSignals({ report, runId }: { report: SongAnalysisReport; runId?: string | null }) {
   return (
     <>
+      <MediaPreviewPanel report={report} runId={runId} />
       <TranscriptPanel transcription={report.lyrics} />
       <SongMusicPanel report={report} />
     </>
@@ -1117,32 +1340,50 @@ function RunWorkspace({
   validationMessage,
   cliRun,
   runOutput,
+  activeRunId,
+  activeRunRecord,
+  runEvents,
+  collectionManifestPreview,
   workflowLibrary,
   activeWorkflow,
   activeWorkflowInputModel,
-  selectedUseCase,
+  selectedWorkflowKind,
   onSelectWorkflow,
   onCreateWorkflow,
   onEditWorkflow,
   onFocusWorkflowInput,
+  onCancelRun,
+  onRetryRun,
+  onOpenReport,
+  onPreviewCollectionManifest,
+  onCollectionManifestSelectionChange,
   onLoadReport,
 }: {
-  form: UseCaseForm;
-  onFormChange: (form: UseCaseForm) => void;
+  form: WorkflowRunForm;
+  onFormChange: (form: WorkflowRunForm) => void;
   onRun: () => void;
   isRunning: boolean;
   runDisabled: boolean;
   validationMessage: string | null;
   cliRun: CliRun;
   runOutput: { stdout?: string; stderr?: string };
+  activeRunId: string | null;
+  activeRunRecord: RunRecord | null;
+  runEvents: RunEvent[];
+  collectionManifestPreview: CollectionManifestPreviewState;
   workflowLibrary: SavedWorkflowLibrary;
   activeWorkflow: SavedWorkflow;
   activeWorkflowInputModel: WorkflowRunInputModel;
-  selectedUseCase: UseCaseId;
+  selectedWorkflowKind: WorkflowKindId;
   onSelectWorkflow: (workflowId: string) => void;
   onCreateWorkflow: () => void;
   onEditWorkflow: () => void;
   onFocusWorkflowInput: (input: WorkflowRunInput) => void;
+  onCancelRun: () => void;
+  onRetryRun: () => void;
+  onOpenReport: () => void;
+  onPreviewCollectionManifest: () => void;
+  onCollectionManifestSelectionChange: (selectedItemIds: string[]) => void;
   onLoadReport: (report: StudioReport) => void;
 }) {
   return (
@@ -1167,29 +1408,42 @@ function RunWorkspace({
           onEditWorkflow={onEditWorkflow}
         />
         <DependencyStatusPanel />
-        <UseCaseControls
+        <WorkflowRunControls
           form={form}
           inputModel={activeWorkflowInputModel}
-          selectedUseCase={selectedUseCase}
+          selectedWorkflowKind={selectedWorkflowKind}
           onChange={onFormChange}
           onFocusWorkflowInput={onFocusWorkflowInput}
           onRun={onRun}
           isRunning={isRunning}
           runDisabled={runDisabled}
           validationMessage={validationMessage}
+          activeRunId={activeRunId}
+          activeRunRecord={activeRunRecord}
+          onCancelRun={onCancelRun}
+          onRetryRun={onRetryRun}
+          onOpenReport={onOpenReport}
         />
-        {selectedUseCase === "song-analysis" && <SongCatalogImportPanel form={form} />}
+        {selectedWorkflowKind === "youtube-collection" && (
+          <CollectionManifestPreviewPanel
+            preview={collectionManifestPreview}
+            onPreview={onPreviewCollectionManifest}
+            onSelectionChange={onCollectionManifestSelectionChange}
+            disabled={isRunning || validationMessage !== null}
+          />
+        )}
+        {selectedWorkflowKind === "song-analysis" && <SongCatalogImportPanel form={form} />}
         <JsonReportLoader<StudioReport> label="Load report JSON" onLoad={onLoadReport} />
       </section>
       <section className="min-w-0 space-y-4">
         <CliRunPanel run={cliRun} />
-        <RunOutputPanel stdout={runOutput.stdout} stderr={runOutput.stderr} />
+        <RunEventTimeline events={runEvents} stdout={runOutput.stdout} stderr={runOutput.stderr} />
       </section>
     </div>
   );
 }
 
-function SongCatalogImportPanel({ form }: { form: UseCaseForm }) {
+function SongCatalogImportPanel({ form }: { form: WorkflowRunForm }) {
   const [path, setPath] = useState(form.input);
   const [title, setTitle] = useState("");
   const [artist, setArtist] = useState("");
@@ -1547,6 +1801,7 @@ interface SavedWorkflowFile {
   version: number;
   lastUpdated: string;
   workflowName?: string;
+  workflowKind?: WorkflowKindId;
   workflowVersion?: number;
   nodes: SavedWorkflowBlockNode[];
   edges: SavedWorkflowBlockEdge[];
@@ -1563,6 +1818,7 @@ interface SavedWorkflowVersion {
 
 interface SavedWorkflow {
   id: string;
+  kind: WorkflowKindId;
   name: string;
   createdAt: string;
   updatedAt: string;
@@ -1576,6 +1832,7 @@ interface SavedWorkflowRun {
   id: string;
   workflowId: string;
   workflowName: string;
+  workflowKind?: WorkflowKindId;
   workflowVersion?: number;
   createdAt: string;
   updatedAt: string;
@@ -1674,6 +1931,21 @@ interface WorkflowClipboardState {
   pasteCount: number;
 }
 
+interface WorkflowLayoutEdge {
+  source: string;
+  target: string;
+}
+
+interface WorkflowLayoutSize {
+  width: number;
+  height: number;
+}
+
+interface WorkflowInlineAttachment {
+  edge: Edge;
+  position: { x: number; y: number };
+}
+
 const workflowNodeTypes = { workflow: WorkflowNode };
 const workflowComponentDragDataType = "application/x-video-analysis-workflow-component";
 const savedWorkflowJsonFormat = "video-analysis.workflow";
@@ -1686,13 +1958,23 @@ const savedWorkflowBlocksStorageKey = "video-analysis.workflowBlocks.v1";
 const savedWorkflowBlocksJsonFormat = "video-analysis.workflowBlocks";
 const portTypeColorsStorageKey = "video-analysis.portTypeColors.v1";
 const hotkeyBindingsStorageKey = "video-analysis.hotkeys.v1";
-const defaultSeedWorkflowName = "Default Analysis Pipeline";
+const defaultSeedWorkflowName = "YouTube Video Workflow";
 const legacySeedWorkflowName = "YouTube Analysis Workflow";
+const legacySeedWorkflowNames = new Set([legacySeedWorkflowName, "Default Analysis Pipeline"]);
 const maxSavedWorkflowVersions = 25;
 const defaultWorkflowNodeWidth = 310;
 const defaultWorkflowGroupHeight = 190;
+const inlineWorkflowNodeWidth = 240;
+const inlineWorkflowNodeHeight = 48;
+const workflowInlineAttachGap = 8;
+const workflowInlineSnapDistance = 72;
 const minWorkflowGroupWidth = 260;
 const minWorkflowGroupHeight = 140;
+const workflowLayoutStartX = 80;
+const workflowLayoutStartY = 60;
+const workflowLayoutColumnGap = 170;
+const workflowLayoutRowGap = 64;
+const workflowLayoutBackEdgeTolerance = 80;
 
 const portTypes: PortType[] = [
   "run_request",
@@ -1908,8 +2190,8 @@ const initialWorkflowNodes: WorkflowNodeModel[] = [
     ],
     outputs: [port("args", "cargo args", "run_config")],
   }),
-  workflowNode("use-case", 720, 190, {
-    title: "YouTube Use Case",
+  workflowNode("youtube-workflow", 720, 190, {
+    title: "YouTube Workflow",
     packageName: "studio-core",
     description: "Coordinates download, ingest, analysis, buckets, and report JSON.",
     tone: "amber",
@@ -1926,8 +2208,8 @@ const initialWorkflowNodes: WorkflowNodeModel[] = [
       port("config", "pipeline config", "run_config"),
     ],
   }),
-  workflowNode("song-use-case", 720, 560, {
-    title: "Song Use Case",
+  workflowNode("song-workflow", 720, 560, {
+    title: "Song Workflow",
     packageName: "studio-core",
     description: "Coordinates song source resolution, catalog matching, lyrics transcription, BPM, key, and report JSON.",
     tone: "amber",
@@ -1942,8 +2224,8 @@ const initialWorkflowNodes: WorkflowNodeModel[] = [
     ],
     tags: ["song", "music", "audio", "analysis"],
   }),
-  workflowNode("subtitle-use-case", 720, 900, {
-    title: "Subtitle Use Case",
+  workflowNode("subtitle-workflow", 720, 900, {
+    title: "Subtitle Workflow",
     packageName: "studio-core",
     description: "Coordinates source resolution, transcription, SRT writing next to the video, and JSON report output.",
     tone: "amber",
@@ -2385,7 +2667,7 @@ const dashboardWorkflowNodes: WorkflowNodeModel[] = [
   }),
   workflowNode("transcript-panel", 0, 0, {
     title: "Transcript Panel",
-    packageName: "@video-analysis-studio/ui/use-cases",
+    packageName: "@video-analysis-studio/ui/workflows",
     description: "Displays transcript segments with timestamps and transcription status.",
     category: "Dashboard",
     tone: "indigo",
@@ -2713,42 +2995,42 @@ const workflowNodeTemplates: WorkflowNodeModel[] = initialWorkflowNodes.concat(
 const initialWorkflowEdges: Edge[] = [
   workflowEdge("react-page", "run", "vite-api", "run"),
   workflowEdge("react-page", "config", "vite-api", "config"),
-  workflowEdge("source", "url", "use-case", "url"),
-  workflowEdge("source", "collection", "use-case", "collection"),
-  workflowEdge("source", "file", "use-case", "file"),
-  workflowEdge("vite-api", "args", "use-case", "args"),
-  workflowEdge("source", "url", "song-use-case", "url"),
-  workflowEdge("source", "file", "song-use-case", "file"),
-  workflowEdge("vite-api", "args", "song-use-case", "args"),
-  workflowEdge("source", "url", "subtitle-use-case", "url"),
-  workflowEdge("source", "file", "subtitle-use-case", "file"),
-  workflowEdge("vite-api", "args", "subtitle-use-case", "args"),
-  workflowEdge("song-use-case", "file", "song-fingerprinter", "file"),
-  workflowEdge("song-use-case", "file", "song-music-analyzer", "file"),
-  workflowEdge("song-use-case", "file", "ffmpeg", "file"),
-  workflowEdge("song-use-case", "config", "song-catalog-matcher", "config"),
-  workflowEdge("song-use-case", "config", "song-music-analyzer", "config"),
+  workflowEdge("source", "url", "youtube-workflow", "url"),
+  workflowEdge("source", "collection", "youtube-workflow", "collection"),
+  workflowEdge("source", "file", "youtube-workflow", "file"),
+  workflowEdge("vite-api", "args", "youtube-workflow", "args"),
+  workflowEdge("source", "url", "song-workflow", "url"),
+  workflowEdge("source", "file", "song-workflow", "file"),
+  workflowEdge("vite-api", "args", "song-workflow", "args"),
+  workflowEdge("source", "url", "subtitle-workflow", "url"),
+  workflowEdge("source", "file", "subtitle-workflow", "file"),
+  workflowEdge("vite-api", "args", "subtitle-workflow", "args"),
+  workflowEdge("song-workflow", "file", "song-fingerprinter", "file"),
+  workflowEdge("song-workflow", "file", "song-music-analyzer", "file"),
+  workflowEdge("song-workflow", "file", "ffmpeg", "file"),
+  workflowEdge("song-workflow", "config", "song-catalog-matcher", "config"),
+  workflowEdge("song-workflow", "config", "song-music-analyzer", "config"),
   workflowEdge("song-fingerprinter", "fingerprint", "song-catalog-matcher", "fingerprint"),
   workflowEdge("song-catalog-matcher", "matches", "song-report-writer", "matches"),
   workflowEdge("song-music-analyzer", "features", "song-report-writer", "features"),
-  workflowEdge("use-case", "url", "download", "url"),
-  workflowEdge("subtitle-use-case", "url", "download", "url"),
-  workflowEdge("use-case", "collection", "collection-manifest", "url"),
+  workflowEdge("youtube-workflow", "url", "download", "url"),
+  workflowEdge("subtitle-workflow", "url", "download", "url"),
+  workflowEdge("youtube-workflow", "collection", "collection-manifest", "url"),
   workflowEdge("collection-manifest", "manifest", "collection-download-loop", "manifest"),
-  workflowEdge("use-case", "config", "collection-download-loop", "config"),
+  workflowEdge("youtube-workflow", "config", "collection-download-loop", "config"),
   workflowEdge("collection-download-loop", "files", "ffmpeg", "file"),
   workflowEdge("collection-download-loop", "items", "collection-report", "items"),
   workflowEdge("report-writer", "report", "collection-report", "reports"),
-  workflowEdge("use-case", "file", "ffmpeg", "file"),
-  workflowEdge("subtitle-use-case", "file", "ffmpeg", "file"),
-  workflowEdge("subtitle-use-case", "file", "subtitle-writer", "file"),
-  workflowEdge("subtitle-use-case", "config", "subtitle-writer", "config"),
+  workflowEdge("youtube-workflow", "file", "ffmpeg", "file"),
+  workflowEdge("subtitle-workflow", "file", "ffmpeg", "file"),
+  workflowEdge("subtitle-workflow", "file", "subtitle-writer", "file"),
+  workflowEdge("subtitle-workflow", "config", "subtitle-writer", "config"),
   workflowEdge("download", "file", "ffmpeg", "file"),
   workflowEdge("download", "file", "subtitle-writer", "file"),
-  workflowEdge("use-case", "config", "video-pipeline", "config"),
-  workflowEdge("use-case", "config", "content-detector", "config"),
-  workflowEdge("use-case", "config", "model-sampler", "config"),
-  workflowEdge("use-case", "config", "text-pipeline", "config"),
+  workflowEdge("youtube-workflow", "config", "video-pipeline", "config"),
+  workflowEdge("youtube-workflow", "config", "content-detector", "config"),
+  workflowEdge("youtube-workflow", "config", "model-sampler", "config"),
+  workflowEdge("youtube-workflow", "config", "text-pipeline", "config"),
   workflowEdge("ffmpeg", "metadata", "report-writer", "metadata"),
   workflowEdge("ffmpeg", "frames", "video-pipeline", "frames"),
   workflowEdge("ffmpeg", "frames", "content-detector", "frames"),
@@ -2792,12 +3074,14 @@ const initialWorkflowEdges: Edge[] = [
 function WorkflowBuilder({
   workflowLibrary,
   onWorkflowLibraryChange,
+  workflowCatalog,
   portTypeColors,
   hotkeyBindings,
   focusTarget,
 }: {
   workflowLibrary: SavedWorkflowLibrary;
   onWorkflowLibraryChange: React.Dispatch<React.SetStateAction<SavedWorkflowLibrary>>;
+  workflowCatalog: RustWorkflowCatalog | null;
   portTypeColors: PortTypeColors;
   hotkeyBindings: HotkeyBindings;
   focusTarget: WorkflowFocusTarget | null;
@@ -2807,7 +3091,7 @@ function WorkflowBuilder({
     () => workflowStateFromSavedWorkflow(activeWorkflow),
     [],
   );
-  const [nodes, setNodes, onNodesChange] = useNodesState<WorkflowNodeModel>(initialWorkflowState.nodes);
+  const [nodes, setNodes] = useNodesState<WorkflowNodeModel>(initialWorkflowState.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialWorkflowState.edges);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [savedBlocks, setSavedBlocks] = useState<SavedWorkflowBlock[]>(loadSavedWorkflowBlocks);
@@ -2934,9 +3218,31 @@ function WorkflowBuilder({
     [nodes, setEdges],
   );
 
+  const onWorkflowNodesChange = useCallback(
+    (changes: NodeChange<WorkflowNodeModel>[]) => {
+      setNodes((currentNodes) => stickWorkflowInlineAttachments(applyNodeChanges(changes, currentNodes), edges));
+    },
+    [edges, setNodes],
+  );
+
   const onSelectionChange = useCallback(({ nodes: selectedNodes }: { nodes: WorkflowNodeModel[] }) => {
     setSelectedNodeIds(selectedNodes.map((node) => node.id));
   }, []);
+
+  const arrangeWorkflow = useCallback(() => {
+    if (nodes.length === 0) {
+      setBlockLibraryMessage("No components to arrange");
+      return;
+    }
+
+    setNodes(autoArrangeWorkflowNodes(nodes, edges));
+    setContextMenu(null);
+    setOutputConnectorMenu(null);
+    setBlockLibraryMessage(`Arranged ${nodes.length} component${nodes.length === 1 ? "" : "s"}`);
+    requestAnimationFrame(() => {
+      flowInstance?.fitView({ padding: 0.18, duration: 350 });
+    });
+  }, [edges, flowInstance, nodes, setNodes]);
 
   const selectedNodes = useMemo(
     () => nodes.filter((node) => selectedNodeIds.includes(node.id)),
@@ -2974,7 +3280,7 @@ function WorkflowBuilder({
   );
 
   const createBlankWorkflow = useCallback(() => {
-    const workflow = createBlankSavedWorkflow();
+    const workflow = createBlankSavedWorkflow("Untitled Workflow", activeWorkflow.kind);
     const nextLibrary: SavedWorkflowLibrary = {
       ...workflowLibrary,
       activeWorkflowId: workflow.id,
@@ -2987,10 +3293,10 @@ function WorkflowBuilder({
     setContextMenu(null);
     setOutputConnectorMenu(null);
     setBlockLibraryMessage("Created blank workflow");
-  }, [commitWorkflowLibrary, setEdges, setNodes, workflowLibrary]);
+  }, [activeWorkflow.kind, commitWorkflowLibrary, setEdges, setNodes, workflowLibrary]);
 
   const cloneActiveWorkflow = useCallback(() => {
-    const workflow = createSavedWorkflow(`${activeWorkflow.name} Copy`, nodes, edges);
+    const workflow = createSavedWorkflow(`${activeWorkflow.name} Copy`, nodes, edges, activeWorkflow.kind);
     const nextLibrary: SavedWorkflowLibrary = {
       ...workflowLibrary,
       activeWorkflowId: workflow.id,
@@ -3004,7 +3310,7 @@ function WorkflowBuilder({
     setContextMenu(null);
     setOutputConnectorMenu(null);
     setBlockLibraryMessage("Cloned workflow");
-  }, [activeWorkflow.name, commitWorkflowLibrary, edges, nodes, setEdges, setNodes, workflowLibrary]);
+  }, [activeWorkflow.kind, activeWorkflow.name, commitWorkflowLibrary, edges, nodes, setEdges, setNodes, workflowLibrary]);
 
   const deleteWorkflow = useCallback(
     (workflowId: string) => {
@@ -3019,7 +3325,7 @@ function WorkflowBuilder({
       const remainingWorkflows = workflowLibrary.workflows.filter((candidate) => candidate.id !== workflowId);
       const activeWasDeleted = workflowLibrary.activeWorkflowId === workflowId;
       const nextActiveWorkflow = activeWasDeleted
-        ? (remainingWorkflows[0] ?? createBlankSavedWorkflow())
+        ? (remainingWorkflows[0] ?? createBlankSavedWorkflow("Untitled Workflow", activeWorkflow.kind))
         : activeWorkflow;
       const nextWorkflows = remainingWorkflows.length === 0 ? [nextActiveWorkflow] : remainingWorkflows;
       const nextLibrary: SavedWorkflowLibrary = {
@@ -3056,6 +3362,20 @@ function WorkflowBuilder({
       if (workflowLibrary.activeWorkflowId === workflowId) {
         setWorkflowNameDraft(nextName);
       }
+    },
+    [commitWorkflowLibrary, workflowLibrary],
+  );
+
+  const changeWorkflowKind = useCallback(
+    (workflowId: string, kind: WorkflowKindId) => {
+      const updatedAt = new Date().toISOString();
+      const nextLibrary: SavedWorkflowLibrary = {
+        ...workflowLibrary,
+        workflows: workflowLibrary.workflows.map((workflow) =>
+          workflow.id === workflowId ? { ...workflow, kind, updatedAt } : workflow,
+        ),
+      };
+      commitWorkflowLibrary(nextLibrary);
     },
     [commitWorkflowLibrary, workflowLibrary],
   );
@@ -3395,6 +3715,9 @@ function WorkflowBuilder({
         const workflow = parseWorkflowJson(await file.text());
         setNodes(workflow.nodes);
         setEdges(workflow.edges);
+        if (workflow.workflowKind) {
+          changeWorkflowKind(activeWorkflow.id, workflow.workflowKind);
+        }
         setSelectedNodeIds([]);
         setContextMenu(null);
         setOutputConnectorMenu(null);
@@ -3403,18 +3726,22 @@ function WorkflowBuilder({
         setBlockLibraryMessage(error instanceof Error ? error.message : "Could not load workflow");
       }
     },
-    [setEdges, setNodes],
+    [activeWorkflow.id, changeWorkflowKind, setEdges, setNodes],
   );
 
   const contextNodes = useMemo(
     () => (contextMenu ? nodes.filter((node) => contextMenu.nodeIds.includes(node.id)) : []),
     [contextMenu, nodes],
   );
+  const primitiveNodeTemplates = useMemo(
+    () => workflowCatalogNodeTemplates(workflowCatalog, workflowNodeTemplates),
+    [workflowCatalog],
+  );
   const contextGroupNode = contextNodes.length === 1 && contextNodes[0].data.group ? contextNodes[0] : null;
   const contextNodesAllMinimized = contextNodes.length > 0 && contextNodes.every((node) => node.data.minimized);
   const filteredPrimitiveNodes = useMemo(
-    () => filterWorkflowNodeTemplates(workflowNodeTemplates, componentSearch),
-    [componentSearch],
+    () => filterWorkflowNodeTemplates(primitiveNodeTemplates, componentSearch),
+    [componentSearch, primitiveNodeTemplates],
   );
   const filteredSavedBlocks = useMemo(
     () => filterSavedWorkflowBlocks(savedBlocks, componentSearch),
@@ -3423,9 +3750,9 @@ function WorkflowBuilder({
   const outputConnectorPrimitiveTargets = useMemo(
     () =>
       outputConnectorMenu
-        ? workflowPrimitiveConnectorTargets(workflowNodeTemplates, outputConnectorMenu.sourcePort)
+        ? workflowPrimitiveConnectorTargets(primitiveNodeTemplates, outputConnectorMenu.sourcePort)
         : [],
-    [outputConnectorMenu?.sourcePort],
+    [outputConnectorMenu?.sourcePort, primitiveNodeTemplates],
   );
   const outputConnectorSavedBlockTargets = useMemo(
     () =>
@@ -3434,6 +3761,7 @@ function WorkflowBuilder({
         : [],
     [outputConnectorMenu?.sourcePort, savedBlocks],
   );
+  const displayEdges = useMemo(() => workflowDisplayEdges(edges, nodes), [edges, nodes]);
   const openOutputConnectorMenu = useCallback(
     (event: React.MouseEvent, nodeId: string, portValue: FlowPort) => {
       event.preventDefault();
@@ -3465,12 +3793,16 @@ function WorkflowBuilder({
       }
 
       const nodeId = createWorkflowNodeInstanceId(template.id);
-      const position = connectedWorkflowNodePosition(sourceNode, nodes);
+      const data = cloneWorkflowNodeData(template.data);
+      if (workflowNodeDataCanUseInlineLayout(data)) {
+        data.minimized = true;
+      }
+      const position = connectedWorkflowNodePosition(sourceNode, nodes, data);
       const nextNode: WorkflowNodeModel = {
         id: nodeId,
         type: "workflow",
         position,
-        data: cloneWorkflowNodeData(template.data),
+        data,
         selected: true,
       };
       const edge = workflowEdgeFromConnection(
@@ -3538,6 +3870,45 @@ function WorkflowBuilder({
     },
     [nodes, outputConnectorMenu, setEdges, setNodes],
   );
+  const attachDraggedInlineNode = useCallback(
+    (draggedNode: WorkflowNodeModel) => {
+      if (!workflowNodeDataCanUseInlineLayout(draggedNode.data)) {
+        return;
+      }
+
+      const draggableNodes = nodes.map((node) =>
+        node.id === draggedNode.id
+          ? {
+              ...node,
+              position: { ...draggedNode.position },
+              data: { ...node.data, minimized: true },
+            }
+          : node,
+      );
+      const attachment = workflowInlineAttachmentForDraggedNode(draggedNode.id, draggableNodes, edges);
+      if (!attachment) {
+        return;
+      }
+
+      setNodes((currentNodes) =>
+        currentNodes.map((node) =>
+          node.id === draggedNode.id
+            ? {
+                ...node,
+                position: attachment.position,
+                data: { ...node.data, minimized: true },
+                selected: true,
+              }
+            : node,
+        ),
+      );
+      setEdges((currentEdges) => dedupeEdges(currentEdges.concat(attachment.edge)));
+      setSelectedNodeIds([draggedNode.id]);
+      setContextMenu(null);
+      setOutputConnectorMenu(null);
+    },
+    [edges, nodes, setEdges, setNodes],
+  );
   const dropComponent = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault();
@@ -3547,8 +3918,35 @@ function WorkflowBuilder({
       }
       const position = flowInstance?.screenToFlowPosition({ x: event.clientX, y: event.clientY });
       if (payload.type === "primitive") {
-        const template = workflowNodeTemplates.find((node) => node.id === payload.id);
+        const template = primitiveNodeTemplates.find((node) => node.id === payload.id);
         if (template) {
+          if (position && workflowNodeDataCanUseInlineLayout(template.data)) {
+            const nodeId = createWorkflowNodeInstanceId(template.id);
+            const data = { ...cloneWorkflowNodeData(template.data), minimized: true };
+            const nextNode: WorkflowNodeModel = {
+              id: nodeId,
+              type: "workflow",
+              position,
+              data,
+              selected: true,
+            };
+            const attachment = workflowInlineAttachmentForDrop(nodeId, nodes.concat(nextNode), edges, position);
+            setNodes((currentNodes) => {
+              const nextNodes: WorkflowNodeModel[] = currentNodes.map((node) => ({ ...node, selected: false }));
+              return nextNodes.concat({
+                  ...nextNode,
+                  position: attachment?.position ?? position,
+                  selected: true,
+                });
+            });
+            if (attachment) {
+              setEdges((currentEdges) => dedupeEdges(currentEdges.concat(attachment.edge)));
+            }
+            setSelectedNodeIds([nodeId]);
+            setContextMenu(null);
+            setOutputConnectorMenu(null);
+            return;
+          }
           addPrimitiveNode(template, position);
         }
         return;
@@ -3558,7 +3956,7 @@ function WorkflowBuilder({
         addSavedBlock(block, position);
       }
     },
-    [addPrimitiveNode, addSavedBlock, flowInstance, savedBlocks],
+    [addPrimitiveNode, addSavedBlock, edges, flowInstance, nodes, primitiveNodeTemplates, savedBlocks, setEdges, setNodes],
   );
 
   const runWorkflowHotkeyAction = useCallback(
@@ -3662,7 +4060,7 @@ function WorkflowBuilder({
             <div className="min-w-0">
               <h2 className="truncate text-sm font-semibold text-zinc-950">{activeWorkflow.name}</h2>
               <p className="mt-1 text-xs text-zinc-500">
-                v{activeWorkflow.version} · {nodes.length} components · {edges.length} connections
+                {workflowKindName(activeWorkflow.kind)} · v{activeWorkflow.version} · {nodes.length} components · {edges.length} connections
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -3698,6 +4096,18 @@ function WorkflowBuilder({
                 onChange={importWorkflow}
               />
               <button
+                className={classNames(
+                  "inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50",
+                  nodes.length === 0 && "cursor-not-allowed opacity-50",
+                )}
+                onClick={arrangeWorkflow}
+                disabled={nodes.length === 0}
+                title="Arrange workflow to reduce overlap"
+              >
+                <ArrangeIcon className="h-4 w-4" />
+                Arrange
+              </button>
+              <button
                 className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
                 onClick={() => {
                   setNodes(initialWorkflowNodes);
@@ -3716,12 +4126,13 @@ function WorkflowBuilder({
           <div className="h-[720px] min-h-[560px] w-full">
             <ReactFlow<WorkflowNodeModel, Edge>
               nodes={nodes}
-              edges={edges}
+              edges={displayEdges}
               nodeTypes={workflowNodeTypes}
-              onNodesChange={onNodesChange}
+              onNodesChange={onWorkflowNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
               isValidConnection={isValidConnection}
+              onNodeDragStop={(_event, node) => attachDraggedInlineNode(node)}
               onSelectionChange={onSelectionChange}
               onPaneClick={() => {
                 setContextMenu(null);
@@ -3816,6 +4227,7 @@ function WorkflowBuilder({
           workflowNameDraft={workflowNameDraft}
           onWorkflowNameDraftChange={setWorkflowNameDraft}
           onCommitWorkflowName={commitActiveWorkflowName}
+          onWorkflowKindChange={(kind) => changeWorkflowKind(activeWorkflow.id, kind)}
           onSaveSelectedBlock={saveSelectedBlock}
           onGroupSelected={() => groupNodes(selectedNodeIds)}
           onDeleteSelected={() => deleteWorkflowNodes(selectedNodeIds)}
@@ -4096,6 +4508,7 @@ function WorkflowDetailsPanel({
   onDeleteWorkflow,
   onWorkflowNameDraftChange,
   onCommitWorkflowName,
+  onWorkflowKindChange,
   onSaveSelectedBlock,
   onGroupSelected,
   onDeleteSelected,
@@ -4125,6 +4538,7 @@ function WorkflowDetailsPanel({
   onDeleteWorkflow: () => void;
   onWorkflowNameDraftChange: (value: string) => void;
   onCommitWorkflowName: () => void;
+  onWorkflowKindChange: (kind: WorkflowKindId) => void;
   onSaveSelectedBlock: () => void;
   onGroupSelected: () => void;
   onDeleteSelected: () => void;
@@ -4326,8 +4740,22 @@ function WorkflowDetailsPanel({
                 }}
               />
             </Field>
+            <Field label="Workflow type">
+              <select
+                className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={activeWorkflow.kind}
+                onChange={(event) => onWorkflowKindChange(event.target.value as WorkflowKindId)}
+              >
+                {workflowKinds.map((workflowKind) => (
+                  <option key={workflowKind.id} value={workflowKind.id}>
+                    {workflowKind.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <div className="grid grid-cols-2 gap-2">
               <Metric label="Version" value={`v${activeWorkflow.version}`} />
+              <Metric label="Type" value={workflowKindName(activeWorkflow.kind)} />
               <Metric label="Updated" value={formatWorkflowTimestamp(activeWorkflow.updatedAt)} />
               <Metric label="Components" value={String(nodes.length)} />
               <Metric label="Connections" value={String(edges.length)} />
@@ -5150,6 +5578,685 @@ function dedupeEdges(edges: Edge[]): Edge[] {
   });
 }
 
+function workflowDisplayEdges(edges: Edge[], nodes: WorkflowNodeModel[]): Edge[] {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  return edges.map((edge) => {
+    const source = nodeById.get(edge.source);
+    const target = nodeById.get(edge.target);
+    const hidden = source && target ? workflowEdgeHiddenByInlineAttachment(edge, source, target) : false;
+    return hidden === Boolean(edge.hidden) ? edge : { ...edge, hidden };
+  });
+}
+
+function workflowEdgeHiddenByInlineAttachment(edge: Edge, source: WorkflowNodeModel, target: WorkflowNodeModel): boolean {
+  if (!workflowEdgeTouchesInlineNode(edge, source, target)) {
+    return false;
+  }
+  return workflowNodesAreVisuallyAttached(source, target);
+}
+
+function workflowEdgeTouchesInlineNode(edge: Edge, source: WorkflowNodeModel, target: WorkflowNodeModel): boolean {
+  const sourceInline = workflowNodeDataUsesInlineLayout(source.data);
+  const targetInline = workflowNodeDataUsesInlineLayout(target.data);
+  if (!sourceInline && !targetInline) {
+    return false;
+  }
+  if (sourceInline) {
+    const sourceOutput = source.data.outputs[0];
+    if (!sourceOutput || edge.sourceHandle !== handleId("out", sourceOutput)) {
+      return false;
+    }
+  }
+  if (targetInline) {
+    const targetInput = target.data.inputs[0];
+    if (!targetInput || edge.targetHandle !== handleId("in", targetInput)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function workflowNodesAreVisuallyAttached(source: WorkflowNodeModel, target: WorkflowNodeModel): boolean {
+  const sourceSize = workflowLayoutNodeSize(source);
+  const targetSize = workflowLayoutNodeSize(target);
+  const gap = target.position.x - (source.position.x + sourceSize.width);
+  if (gap < -2 || gap > workflowInlineAttachGap + 10) {
+    return false;
+  }
+
+  const sourceCenterY = source.position.y + sourceSize.height / 2;
+  const targetCenterY = target.position.y + targetSize.height / 2;
+  const yTolerance = Math.max(42, Math.max(sourceSize.height, targetSize.height) / 2 + workflowInlineAttachGap);
+  return Math.abs(sourceCenterY - targetCenterY) <= yTolerance;
+}
+
+function workflowNodeDataCanUseInlineLayout(data: WorkflowNodeData): boolean {
+  return data.kind !== "group" && data.inputs.length <= 1 && data.outputs.length <= 1 && data.inputs.length + data.outputs.length > 0;
+}
+
+function workflowNodeDataUsesInlineLayout(data: WorkflowNodeData): boolean {
+  return data.minimized === true && workflowNodeDataCanUseInlineLayout(data);
+}
+
+function stickWorkflowInlineAttachments(nodes: WorkflowNodeModel[], edges: Edge[]): WorkflowNodeModel[] {
+  if (nodes.length === 0 || edges.length === 0) {
+    return nodes;
+  }
+
+  let nextNodes = nodes;
+  for (let pass = 0; pass < 4; pass += 1) {
+    const nodeById = new Map(nextNodes.map((node) => [node.id, node]));
+    const incomingInlineNodeIds = new Set(
+      edges
+        .map((edge) => {
+          const target = nodeById.get(edge.target);
+          return target && workflowNodeDataUsesInlineLayout(target.data) ? target.id : null;
+        })
+        .filter((id): id is string => id !== null),
+    );
+    const positionByInlineNodeId = new Map<string, { x: number; y: number }>();
+
+    for (const edge of edges) {
+      const source = nodeById.get(edge.source);
+      const target = nodeById.get(edge.target);
+      if (!source || !target) {
+        continue;
+      }
+
+      const incomingPosition = workflowInlineIncomingAttachmentPosition(edge, source, target);
+      if (incomingPosition) {
+        positionByInlineNodeId.set(target.id, incomingPosition);
+        continue;
+      }
+
+      if (incomingInlineNodeIds.has(source.id)) {
+        continue;
+      }
+
+      const outgoingPosition = workflowInlineOutgoingAttachmentPosition(edge, source, target);
+      if (outgoingPosition) {
+        positionByInlineNodeId.set(source.id, outgoingPosition);
+      }
+    }
+
+    if (positionByInlineNodeId.size === 0) {
+      return nextNodes;
+    }
+
+    let changed = false;
+    nextNodes = nextNodes.map((node) => {
+      const position = positionByInlineNodeId.get(node.id);
+      if (!position || (node.position.x === position.x && node.position.y === position.y)) {
+        return node;
+      }
+      changed = true;
+      return { ...node, position };
+    });
+
+    if (!changed) {
+      return nextNodes;
+    }
+  }
+
+  return nextNodes;
+}
+
+function workflowInlineIncomingAttachmentPosition(
+  edge: Edge,
+  source: WorkflowNodeModel,
+  target: WorkflowNodeModel,
+): { x: number; y: number } | null {
+  if (!workflowNodeDataUsesInlineLayout(target.data)) {
+    return null;
+  }
+  const input = target.data.inputs[0];
+  if (!input || edge.targetHandle !== handleId("in", input)) {
+    return null;
+  }
+  const sourcePort = source.data.outputs.find((portValue) => edge.sourceHandle === handleId("out", portValue));
+  if (!sourcePort || !portsCompatible(sourcePort, input)) {
+    return null;
+  }
+  const sourceSize = workflowLayoutNodeSize(source);
+  const sourceHandlePoint = workflowPortHandlePoint(source, "out", sourcePort);
+  return {
+    x: source.position.x + sourceSize.width + workflowInlineAttachGap,
+    y: sourceHandlePoint.y - inlineWorkflowNodeHeight / 2,
+  };
+}
+
+function workflowInlineOutgoingAttachmentPosition(
+  edge: Edge,
+  source: WorkflowNodeModel,
+  target: WorkflowNodeModel,
+): { x: number; y: number } | null {
+  if (!workflowNodeDataUsesInlineLayout(source.data)) {
+    return null;
+  }
+  const output = source.data.outputs[0];
+  if (!output || edge.sourceHandle !== handleId("out", output)) {
+    return null;
+  }
+  const targetPort = target.data.inputs.find((portValue) => edge.targetHandle === handleId("in", portValue));
+  if (!targetPort || !portsCompatible(output, targetPort)) {
+    return null;
+  }
+  const targetHandlePoint = workflowPortHandlePoint(target, "in", targetPort);
+  return {
+    x: target.position.x - inlineWorkflowNodeWidth - workflowInlineAttachGap,
+    y: targetHandlePoint.y - inlineWorkflowNodeHeight / 2,
+  };
+}
+
+function workflowInlineAttachmentForDraggedNode(
+  nodeId: string,
+  nodes: WorkflowNodeModel[],
+  edges: Edge[],
+): WorkflowInlineAttachment | null {
+  return workflowInlineAttachmentForNode(nodeId, nodes, edges, "drag");
+}
+
+function workflowInlineAttachmentForDrop(
+  nodeId: string,
+  nodes: WorkflowNodeModel[],
+  edges: Edge[],
+  dropPoint: { x: number; y: number },
+): WorkflowInlineAttachment | null {
+  return workflowInlineAttachmentForNode(nodeId, nodes, edges, "drop", dropPoint);
+}
+
+function workflowInlineAttachmentForNode(
+  nodeId: string,
+  nodes: WorkflowNodeModel[],
+  edges: Edge[],
+  mode: "drag" | "drop",
+  dropPoint?: { x: number; y: number },
+): WorkflowInlineAttachment | null {
+  const node = nodes.find((candidate) => candidate.id === nodeId);
+  if (!node || !workflowNodeDataCanUseInlineLayout(node.data)) {
+    return null;
+  }
+
+  const candidates: Array<WorkflowInlineAttachment & { score: number }> = [];
+  const input = node.data.inputs[0];
+  const output = node.data.outputs[0];
+  const currentInputPoint = mode === "drop" && dropPoint
+    ? dropPoint
+    : { x: node.position.x, y: node.position.y + workflowLayoutNodeSize(node).height / 2 };
+  const currentOutputPoint = mode === "drop" && dropPoint
+    ? dropPoint
+    : { x: node.position.x + workflowLayoutNodeSize(node).width, y: node.position.y + workflowLayoutNodeSize(node).height / 2 };
+
+  if (input) {
+    for (const source of nodes) {
+      if (source.id === node.id) {
+        continue;
+      }
+      for (const sourcePort of source.data.outputs) {
+        if (!portsCompatible(sourcePort, input)) {
+          continue;
+        }
+        const sourceHandlePoint = workflowPortHandlePoint(source, "out", sourcePort);
+        const score = distanceBetweenPoints(currentInputPoint, sourceHandlePoint);
+        if (score > workflowInlineSnapDistance) {
+          continue;
+        }
+        const sourceSize = workflowLayoutNodeSize(source);
+        const position = {
+          x: source.position.x + sourceSize.width + workflowInlineAttachGap,
+          y: sourceHandlePoint.y - inlineWorkflowNodeHeight / 2,
+        };
+        candidates.push({
+          score,
+          position,
+          edge: workflowEdgeFromConnection(
+            {
+              source: source.id,
+              sourceHandle: handleId("out", sourcePort),
+              target: node.id,
+              targetHandle: handleId("in", input),
+            },
+            sourcePort,
+          ),
+        });
+      }
+    }
+  }
+
+  if (output) {
+    for (const target of nodes) {
+      if (target.id === node.id) {
+        continue;
+      }
+      for (const targetPort of target.data.inputs) {
+        if (!portsCompatible(output, targetPort)) {
+          continue;
+        }
+        const targetHandlePoint = workflowPortHandlePoint(target, "in", targetPort);
+        const score = distanceBetweenPoints(currentOutputPoint, targetHandlePoint);
+        if (score > workflowInlineSnapDistance) {
+          continue;
+        }
+        const position = {
+          x: target.position.x - inlineWorkflowNodeWidth - workflowInlineAttachGap,
+          y: targetHandlePoint.y - inlineWorkflowNodeHeight / 2,
+        };
+        candidates.push({
+          score,
+          position,
+          edge: workflowEdgeFromConnection(
+            {
+              source: node.id,
+              sourceHandle: handleId("out", output),
+              target: target.id,
+              targetHandle: handleId("in", targetPort),
+            },
+            output,
+          ),
+        });
+      }
+    }
+  }
+
+  const existingEdgeIds = new Set(edges.map((edge) => edge.id));
+  return (
+    candidates
+      .filter((candidate) => !existingEdgeIds.has(candidate.edge.id))
+      .sort((left, right) => left.score - right.score)[0] ??
+    candidates.sort((left, right) => left.score - right.score)[0] ??
+    null
+  );
+}
+
+function workflowPortHandlePoint(
+  node: WorkflowNodeModel,
+  direction: PortDirection,
+  portValue: FlowPort,
+): { x: number; y: number } {
+  const size = workflowLayoutNodeSize(node);
+  return {
+    x: direction === "in" ? node.position.x : node.position.x + size.width,
+    y: node.position.y + workflowPortCenterY(node, direction, portValue, size),
+  };
+}
+
+function workflowPortCenterY(
+  node: WorkflowNodeModel,
+  direction: PortDirection,
+  portValue: FlowPort,
+  size = workflowLayoutNodeSize(node),
+): number {
+  if (workflowNodeDataUsesInlineLayout(node.data)) {
+    return size.height / 2;
+  }
+
+  const ports = direction === "in" ? node.data.inputs : node.data.outputs;
+  const index = Math.max(0, ports.findIndex((candidate) => candidate.id === portValue.id && candidate.type === portValue.type));
+  if (node.data.minimized) {
+    return ((index + 1) / (ports.length + 1)) * size.height;
+  }
+
+  const portRows = Math.max(1, node.data.inputs.length, node.data.outputs.length);
+  const portAreaHeight = portRows * 48;
+  const headerHeight = Math.max(64, size.height - portAreaHeight);
+  return Math.min(size.height - 18, headerHeight + index * 48 + 24);
+}
+
+function distanceBetweenPoints(left: { x: number; y: number }, right: { x: number; y: number }): number {
+  return Math.hypot(left.x - right.x, left.y - right.y);
+}
+
+function autoArrangeWorkflowNodes(nodes: WorkflowNodeModel[], edges: Edge[]): WorkflowNodeModel[] {
+  if (nodes.length <= 1) {
+    return nodes.map((node) => ({
+      ...node,
+      position: { x: workflowLayoutStartX, y: workflowLayoutStartY },
+    }));
+  }
+
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const layoutEdges = workflowLayoutEdges(edges, nodeById);
+  const rankEdges = workflowLayoutRankEdges(layoutEdges, nodeById);
+  const rankById = compactWorkflowLayoutRanks(workflowLayoutRanks(nodes, rankEdges));
+  const columns = workflowLayoutColumns(nodes, rankById);
+  const orderedColumns = orderWorkflowLayoutColumns(columns, layoutEdges);
+  const sizeById = new Map(nodes.map((node) => [node.id, workflowLayoutNodeSize(node)]));
+  const positionById = new Map<string, { x: number; y: number }>();
+  let x = workflowLayoutStartX;
+
+  for (const column of orderedColumns) {
+    const columnWidth = Math.max(
+      defaultWorkflowNodeWidth,
+      ...column.map((node) => sizeById.get(node.id)?.width ?? defaultWorkflowNodeWidth),
+    );
+    let y = workflowLayoutStartY;
+
+    for (const node of column) {
+      const size = sizeById.get(node.id) ?? { width: defaultWorkflowNodeWidth, height: defaultWorkflowGroupHeight };
+      positionById.set(node.id, { x, y });
+      y += size.height + workflowLayoutRowGap;
+    }
+
+    x += columnWidth + workflowLayoutColumnGap;
+  }
+
+  positionInlineWorkflowNodes(nodes, edges, sizeById, positionById);
+
+  return nodes.map((node) => ({
+    ...node,
+    position: positionById.get(node.id) ?? { ...node.position },
+  }));
+}
+
+function positionInlineWorkflowNodes(
+  nodes: WorkflowNodeModel[],
+  edges: Edge[],
+  sizeById: Map<string, WorkflowLayoutSize>,
+  positionById: Map<string, { x: number; y: number }>,
+) {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const inlineNodesBySource = new Map<string, WorkflowNodeModel[]>();
+  const inlineNodesByTarget = new Map<string, WorkflowNodeModel[]>();
+  const positionedInlineNodeIds = new Set<string>();
+
+  for (const node of nodes) {
+    if (!workflowNodeDataUsesInlineLayout(node.data)) {
+      continue;
+    }
+    const incomingEdge = edges.find((edge) => edge.target === node.id && nodeById.has(edge.source));
+    if (!incomingEdge) {
+      continue;
+    }
+    inlineNodesBySource.set(incomingEdge.source, [...(inlineNodesBySource.get(incomingEdge.source) ?? []), node]);
+    positionedInlineNodeIds.add(node.id);
+  }
+
+  for (const node of nodes) {
+    if (!workflowNodeDataUsesInlineLayout(node.data) || positionedInlineNodeIds.has(node.id)) {
+      continue;
+    }
+    const outgoingEdge = edges.find((edge) => edge.source === node.id && nodeById.has(edge.target));
+    if (!outgoingEdge) {
+      continue;
+    }
+    inlineNodesByTarget.set(outgoingEdge.target, [...(inlineNodesByTarget.get(outgoingEdge.target) ?? []), node]);
+  }
+
+  for (let pass = 0; pass < 4; pass += 1) {
+    for (const [sourceId, inlineNodes] of inlineNodesBySource) {
+      const source = nodeById.get(sourceId);
+      const sourcePosition = positionById.get(sourceId);
+      if (!source || !sourcePosition) {
+        continue;
+      }
+
+      const sourceSize = sizeById.get(source.id) ?? workflowLayoutNodeSize(source);
+      const orderedInlineNodes = [...inlineNodes].sort(compareWorkflowLayoutNodesByPosition);
+      const totalHeight =
+        orderedInlineNodes.length * inlineWorkflowNodeHeight +
+        Math.max(0, orderedInlineNodes.length - 1) * workflowInlineAttachGap;
+      const startY = sourcePosition.y + sourceSize.height / 2 - totalHeight / 2;
+
+      orderedInlineNodes.forEach((node, index) => {
+        positionById.set(node.id, {
+          x: sourcePosition.x + sourceSize.width + workflowInlineAttachGap,
+          y: startY + index * (inlineWorkflowNodeHeight + workflowInlineAttachGap),
+        });
+      });
+    }
+
+    for (const [targetId, inlineNodes] of inlineNodesByTarget) {
+      const target = nodeById.get(targetId);
+      const targetPosition = positionById.get(targetId);
+      if (!target || !targetPosition) {
+        continue;
+      }
+
+      const targetSize = sizeById.get(target.id) ?? workflowLayoutNodeSize(target);
+      const orderedInlineNodes = [...inlineNodes].sort(compareWorkflowLayoutNodesByPosition);
+      const totalHeight =
+        orderedInlineNodes.length * inlineWorkflowNodeHeight +
+        Math.max(0, orderedInlineNodes.length - 1) * workflowInlineAttachGap;
+      const startY = targetPosition.y + targetSize.height / 2 - totalHeight / 2;
+
+      orderedInlineNodes.forEach((node, index) => {
+        positionById.set(node.id, {
+          x: targetPosition.x - inlineWorkflowNodeWidth - workflowInlineAttachGap,
+          y: startY + index * (inlineWorkflowNodeHeight + workflowInlineAttachGap),
+        });
+      });
+    }
+  }
+}
+
+function workflowLayoutEdges(edges: Edge[], nodeById: Map<string, WorkflowNodeModel>): WorkflowLayoutEdge[] {
+  const seen = new Set<string>();
+  const layoutEdges: WorkflowLayoutEdge[] = [];
+
+  for (const edge of edges) {
+    if (!edge.source || !edge.target || edge.source === edge.target) {
+      continue;
+    }
+    if (!nodeById.has(edge.source) || !nodeById.has(edge.target)) {
+      continue;
+    }
+    const key = `${edge.source}|${edge.target}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    layoutEdges.push({ source: edge.source, target: edge.target });
+  }
+
+  return layoutEdges;
+}
+
+function workflowLayoutRankEdges(
+  edges: WorkflowLayoutEdge[],
+  nodeById: Map<string, WorkflowNodeModel>,
+): WorkflowLayoutEdge[] {
+  const forwardEdges = edges.filter((edge) => {
+    const source = nodeById.get(edge.source);
+    const target = nodeById.get(edge.target);
+    return Boolean(source && target && target.position.x + workflowLayoutBackEdgeTolerance >= source.position.x);
+  });
+  return forwardEdges.length > 0 ? forwardEdges : edges;
+}
+
+function workflowLayoutRanks(nodes: WorkflowNodeModel[], edges: WorkflowLayoutEdge[]): Map<string, number> {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const outgoing = new Map<string, string[]>();
+  const incomingCount = new Map(nodes.map((node) => [node.id, 0]));
+  const rankById = new Map(nodes.map((node) => [node.id, 0]));
+
+  for (const edge of edges) {
+    outgoing.set(edge.source, [...(outgoing.get(edge.source) ?? []), edge.target]);
+    incomingCount.set(edge.target, (incomingCount.get(edge.target) ?? 0) + 1);
+  }
+
+  const queue = nodes
+    .filter((node) => (incomingCount.get(node.id) ?? 0) === 0)
+    .map((node) => node.id)
+    .sort((left, right) => compareWorkflowLayoutNodeIds(left, right, nodeById));
+  const processed = new Set<string>();
+
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (processed.has(id)) {
+      continue;
+    }
+    processed.add(id);
+
+    for (const target of outgoing.get(id) ?? []) {
+      rankById.set(target, Math.max(rankById.get(target) ?? 0, (rankById.get(id) ?? 0) + 1));
+      const nextIncomingCount = (incomingCount.get(target) ?? 0) - 1;
+      incomingCount.set(target, nextIncomingCount);
+      if (nextIncomingCount === 0) {
+        queue.push(target);
+        queue.sort((left, right) => compareWorkflowLayoutNodeIds(left, right, nodeById));
+      }
+    }
+  }
+
+  const minX = Math.min(...nodes.map((node) => node.position.x));
+  const fallbackColumnWidth = defaultWorkflowNodeWidth + workflowLayoutColumnGap;
+  for (const node of nodes) {
+    if (processed.has(node.id)) {
+      continue;
+    }
+    rankById.set(node.id, Math.max(0, Math.round((node.position.x - minX) / fallbackColumnWidth)));
+  }
+
+  return rankById;
+}
+
+function compactWorkflowLayoutRanks(rankById: Map<string, number>): Map<string, number> {
+  const compactRankByValue = new Map(
+    [...new Set([...rankById.values()])]
+      .sort((left, right) => left - right)
+      .map((rank, index) => [rank, index]),
+  );
+  return new Map([...rankById.entries()].map(([id, rank]) => [id, compactRankByValue.get(rank) ?? 0]));
+}
+
+function workflowLayoutColumns(
+  nodes: WorkflowNodeModel[],
+  rankById: Map<string, number>,
+): WorkflowNodeModel[][] {
+  const columnCount = Math.max(0, ...rankById.values()) + 1;
+  const columns: WorkflowNodeModel[][] = Array.from({ length: columnCount }, () => []);
+
+  for (const node of nodes) {
+    columns[rankById.get(node.id) ?? 0].push(node);
+  }
+
+  return columns.map((column) => [...column].sort(compareWorkflowLayoutNodesByPosition));
+}
+
+function orderWorkflowLayoutColumns(
+  columns: WorkflowNodeModel[][],
+  edges: WorkflowLayoutEdge[],
+): WorkflowNodeModel[][] {
+  const incoming = new Map<string, string[]>();
+  const outgoing = new Map<string, string[]>();
+  for (const edge of edges) {
+    incoming.set(edge.target, [...(incoming.get(edge.target) ?? []), edge.source]);
+    outgoing.set(edge.source, [...(outgoing.get(edge.source) ?? []), edge.target]);
+  }
+
+  const ordered = columns.map((column) => [...column]);
+  let orderById = workflowLayoutOrderById(ordered);
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    for (let columnIndex = 1; columnIndex < ordered.length; columnIndex += 1) {
+      ordered[columnIndex].sort((left, right) =>
+        compareWorkflowLayoutBarycenter(left, right, incoming, orderById),
+      );
+    }
+    orderById = workflowLayoutOrderById(ordered);
+
+    for (let columnIndex = ordered.length - 2; columnIndex >= 0; columnIndex -= 1) {
+      ordered[columnIndex].sort((left, right) =>
+        compareWorkflowLayoutBarycenter(left, right, outgoing, orderById),
+      );
+    }
+    orderById = workflowLayoutOrderById(ordered);
+  }
+
+  return ordered;
+}
+
+function workflowLayoutOrderById(columns: WorkflowNodeModel[][]): Map<string, number> {
+  const orderById = new Map<string, number>();
+  for (const column of columns) {
+    column.forEach((node, index) => orderById.set(node.id, index));
+  }
+  return orderById;
+}
+
+function compareWorkflowLayoutBarycenter(
+  left: WorkflowNodeModel,
+  right: WorkflowNodeModel,
+  neighborsById: Map<string, string[]>,
+  orderById: Map<string, number>,
+): number {
+  const leftCenter = workflowLayoutNeighborMedian(left.id, neighborsById, orderById);
+  const rightCenter = workflowLayoutNeighborMedian(right.id, neighborsById, orderById);
+
+  if (leftCenter !== null && rightCenter !== null && leftCenter !== rightCenter) {
+    return leftCenter - rightCenter;
+  }
+  if (leftCenter !== null && rightCenter === null) {
+    return -1;
+  }
+  if (leftCenter === null && rightCenter !== null) {
+    return 1;
+  }
+  return compareWorkflowLayoutNodesByPosition(left, right);
+}
+
+function workflowLayoutNeighborMedian(
+  nodeId: string,
+  neighborsById: Map<string, string[]>,
+  orderById: Map<string, number>,
+): number | null {
+  const neighborOrders = (neighborsById.get(nodeId) ?? [])
+    .map((neighborId) => orderById.get(neighborId))
+    .filter((order): order is number => order !== undefined)
+    .sort((left, right) => left - right);
+
+  if (neighborOrders.length === 0) {
+    return null;
+  }
+  const middle = Math.floor(neighborOrders.length / 2);
+  return neighborOrders.length % 2 === 1
+    ? neighborOrders[middle]
+    : (neighborOrders[middle - 1] + neighborOrders[middle]) / 2;
+}
+
+function workflowLayoutNodeSize(node: WorkflowNodeModel): WorkflowLayoutSize {
+  if (workflowNodeDataUsesInlineLayout(node.data)) {
+    return { width: inlineWorkflowNodeWidth, height: inlineWorkflowNodeHeight };
+  }
+  if (node.data.minimized) {
+    return { width: 230, height: 54 };
+  }
+
+  const groupSize = node.data.kind === "group" ? normalizedWorkflowNodeSize(node.data.size) : null;
+  if (groupSize) {
+    const openGroupHeight =
+      node.data.groupOpen && node.data.group ? workflowGroupOpenViewLayout(node.data.group).height + 128 : 0;
+    return {
+      width: groupSize.width,
+      height: Math.max(groupSize.height, openGroupHeight),
+    };
+  }
+
+  const portRows = Math.max(1, node.data.inputs.length, node.data.outputs.length);
+  const descriptionRows = Math.max(1, Math.min(4, Math.ceil(node.data.description.length / 58)));
+  return {
+    width: defaultWorkflowNodeWidth,
+    height: 112 + descriptionRows * 20 + portRows * 48,
+  };
+}
+
+function compareWorkflowLayoutNodeIds(
+  left: string,
+  right: string,
+  nodeById: Map<string, WorkflowNodeModel>,
+): number {
+  const leftNode = nodeById.get(left);
+  const rightNode = nodeById.get(right);
+  if (!leftNode || !rightNode) {
+    return left.localeCompare(right);
+  }
+  return compareWorkflowLayoutNodesByPosition(leftNode, rightNode);
+}
+
+function compareWorkflowLayoutNodesByPosition(left: WorkflowNodeModel, right: WorkflowNodeModel): number {
+  return left.position.y - right.position.y || left.position.x - right.position.x || left.id.localeCompare(right.id);
+}
+
 function nextBlockAnchor(nodes: WorkflowNodeModel[]): { x: number; y: number } {
   if (nodes.length === 0) {
     return { x: 80, y: 80 };
@@ -5159,13 +6266,22 @@ function nextBlockAnchor(nodes: WorkflowNodeModel[]): { x: number; y: number } {
   return { x: maxX + 420, y: Math.max(40, minY) };
 }
 
-function connectedWorkflowNodePosition(sourceNode: WorkflowNodeModel, nodes: WorkflowNodeModel[]): { x: number; y: number } {
-  const sourceSize = normalizedWorkflowNodeSize(sourceNode.data.size);
-  const sourceWidth = sourceNode.data.minimized ? 230 : sourceSize?.width ?? defaultWorkflowNodeWidth;
-  const basePosition = {
-    x: sourceNode.position.x + sourceWidth + 140,
-    y: sourceNode.position.y,
-  };
+function connectedWorkflowNodePosition(
+  sourceNode: WorkflowNodeModel,
+  nodes: WorkflowNodeModel[],
+  connectedNodeData?: WorkflowNodeData,
+): { x: number; y: number } {
+  const sourceSize = workflowLayoutNodeSize(sourceNode);
+  const inlineTarget = connectedNodeData ? workflowNodeDataUsesInlineLayout(connectedNodeData) : false;
+  const basePosition = inlineTarget
+    ? {
+        x: sourceNode.position.x + sourceSize.width + workflowInlineAttachGap,
+        y: sourceNode.position.y + sourceSize.height / 2 - inlineWorkflowNodeHeight / 2,
+      }
+    : {
+        x: sourceNode.position.x + sourceSize.width + 140,
+        y: sourceNode.position.y,
+      };
   return avoidOccupiedWorkflowPosition(basePosition, nodes);
 }
 
@@ -5275,6 +6391,7 @@ function downloadWorkflowJson(workflow: SavedWorkflow, nodes: WorkflowNodeModel[
     version: savedWorkflowJsonVersion,
     lastUpdated,
     workflowName: workflow.name,
+    workflowKind: workflow.kind,
     workflowVersion: workflow.version,
     nodes: nodes.map(serializeWorkflowNode),
     edges: edges.map(serializeWorkflowEdge),
@@ -5290,7 +6407,7 @@ function downloadWorkflowJson(workflow: SavedWorkflow, nodes: WorkflowNodeModel[
   URL.revokeObjectURL(url);
 }
 
-function parseWorkflowJson(text: string): { lastUpdated: string; nodes: WorkflowNodeModel[]; edges: Edge[] } {
+function parseWorkflowJson(text: string): { lastUpdated: string; workflowKind?: WorkflowKindId; nodes: WorkflowNodeModel[]; edges: Edge[] } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -5326,6 +6443,7 @@ function parseWorkflowJson(text: string): { lastUpdated: string; nodes: Workflow
 
   return {
     lastUpdated: parsed.lastUpdated,
+    workflowKind: parsed.workflowKind,
     nodes,
     edges: dedupeEdges(edges.filter((edge): edge is Edge => edge !== null)),
   };
@@ -5404,7 +6522,7 @@ function loadSavedWorkflowLibrary(): SavedWorkflowLibrary {
       return fallback;
     }
 
-    const workflows = parsed.workflows.filter(savedWorkflowHasValidGraph).map(normalizeSavedWorkflow);
+    const workflows = ensureWorkflowKindCoverage(parsed.workflows.filter(savedWorkflowHasValidGraph).map(normalizeSavedWorkflow));
     if (workflows.length === 0) {
       persistSavedWorkflowLibrary(fallback);
       return fallback;
@@ -5435,17 +6553,20 @@ function persistSavedWorkflowLibrary(library: SavedWorkflowLibrary) {
 }
 
 function seedSavedWorkflowLibrary(): SavedWorkflowLibrary {
-  const workflow = createSavedWorkflow(defaultSeedWorkflowName, initialWorkflowNodes, initialWorkflowEdges);
+  const workflows = workflowKinds.map((workflowKind) =>
+    createSavedWorkflow(workflowKind.defaultWorkflowName, initialWorkflowNodes, initialWorkflowEdges, workflowKind.id),
+  );
   return {
     format: savedWorkflowsJsonFormat,
     version: savedWorkflowsJsonVersion,
-    activeWorkflowId: workflow.id,
-    workflows: [workflow],
+    activeWorkflowId: workflows[0].id,
+    workflows,
   };
 }
 
 function normalizeSavedWorkflow(workflow: SavedWorkflow): SavedWorkflow {
-  const name = workflow.name === legacySeedWorkflowName ? defaultSeedWorkflowName : workflow.name;
+  const name = legacySeedWorkflowNames.has(workflow.name) ? defaultSeedWorkflowName : workflow.name;
+  const kind = workflowKindId((workflow as Partial<SavedWorkflow>).kind) ?? inferWorkflowKindFromName(name);
   const savedVersions = Array.isArray(workflow.versions) ? workflow.versions : [];
   const currentVersion = typeof workflow.version === "number" ? workflow.version : 1;
   const version = Math.max(
@@ -5476,17 +6597,34 @@ function normalizeSavedWorkflow(workflow: SavedWorkflow): SavedWorkflow {
         ];
   return {
     ...workflow,
+    kind,
     name,
     version: Math.max(version, ...versions.map((savedVersion) => savedVersion.version)),
     versions,
-    updatedAt: workflow.name === legacySeedWorkflowName ? new Date().toISOString() : workflow.updatedAt,
+    updatedAt: legacySeedWorkflowNames.has(workflow.name) ? new Date().toISOString() : workflow.updatedAt,
   };
 }
 
-function createSavedWorkflow(name: string, nodes: WorkflowNodeModel[], edges: Edge[]): SavedWorkflow {
+function ensureWorkflowKindCoverage(workflows: SavedWorkflow[]): SavedWorkflow[] {
+  const presentKinds = new Set(workflows.map((workflow) => workflow.kind));
+  const missingWorkflows = workflowKinds
+    .filter((workflowKind) => !presentKinds.has(workflowKind.id))
+    .map((workflowKind) =>
+      createSavedWorkflow(workflowKind.defaultWorkflowName, initialWorkflowNodes, initialWorkflowEdges, workflowKind.id),
+    );
+  return workflows.concat(missingWorkflows);
+}
+
+function createSavedWorkflow(
+  name: string,
+  nodes: WorkflowNodeModel[],
+  edges: Edge[],
+  kind: WorkflowKindId = "youtube-video",
+): SavedWorkflow {
   const createdAt = new Date().toISOString();
   const workflow: SavedWorkflow = {
     id: createWorkflowId(),
+    kind,
     name,
     createdAt,
     updatedAt: createdAt,
@@ -5526,8 +6664,8 @@ function nextSavedWorkflowVersionNumber(workflow: SavedWorkflow): number {
   return Math.max(0, currentVersion, ...savedVersions.map((version) => version.version)) + 1;
 }
 
-function createBlankSavedWorkflow(name = "Untitled Workflow"): SavedWorkflow {
-  return createSavedWorkflow(name, [], []);
+function createBlankSavedWorkflow(name = "Untitled Workflow", kind: WorkflowKindId = "youtube-video"): SavedWorkflow {
+  return createSavedWorkflow(name, [], [], kind);
 }
 
 function activeSavedWorkflow(library: SavedWorkflowLibrary): SavedWorkflow {
@@ -5606,6 +6744,7 @@ function createSavedWorkflowRun(
     id: createWorkflowRunId(),
     workflowId: workflow.id,
     workflowName: workflow.name,
+    workflowKind: workflow.kind,
     workflowVersion: workflow.version,
     createdAt,
     updatedAt: createdAt,
@@ -5757,6 +6896,7 @@ function isSavedWorkflowBlock(value: unknown): value is SavedWorkflowBlock {
   }
   return (
     typeof value.id === "string" &&
+    (value.kind === undefined || isWorkflowKindId(value.kind)) &&
     typeof value.name === "string" &&
     typeof value.createdAt === "string" &&
     (value.category === undefined || isWorkflowComponentCategory(value.category)) &&
@@ -5813,11 +6953,13 @@ function isSavedWorkflowRun(value: unknown): value is SavedWorkflowRun {
   const backendRunIdValid = value.backendRunId === undefined || typeof value.backendRunId === "string";
   const reportPathValid = value.reportPath === undefined || typeof value.reportPath === "string";
   const messageValid = value.message === undefined || value.message === null || typeof value.message === "string";
+  const workflowKindValid = value.workflowKind === undefined || isWorkflowKindId(value.workflowKind);
   const workflowVersionValid = value.workflowVersion === undefined || typeof value.workflowVersion === "number";
   return (
     typeof value.id === "string" &&
     typeof value.workflowId === "string" &&
     typeof value.workflowName === "string" &&
+    workflowKindValid &&
     workflowVersionValid &&
     typeof value.createdAt === "string" &&
     typeof value.updatedAt === "string" &&
@@ -5855,6 +6997,7 @@ function isSavedWorkflowFile(value: unknown): value is SavedWorkflowFile {
     typeof value.version === "number" &&
     typeof value.lastUpdated === "string" &&
     (value.workflowName === undefined || typeof value.workflowName === "string") &&
+    (value.workflowKind === undefined || isWorkflowKindId(value.workflowKind)) &&
     (value.workflowVersion === undefined || typeof value.workflowVersion === "number") &&
     Array.isArray(value.nodes) &&
     value.nodes.every(isSavedWorkflowBlockNode) &&
@@ -6153,6 +7296,7 @@ function safeFlowId(value: string): string {
 function WorkflowNode({ id, data, selected, isConnectable }: NodeProps) {
   const nodeData = data as unknown as WorkflowNodeData;
   const minimized = nodeData.minimized === true;
+  const inlineLayout = workflowNodeDataUsesInlineLayout(nodeData);
   const { updateNodeData } = useReactFlow<WorkflowNodeModel, Edge>();
   const updateNodeInternals = useUpdateNodeInternals();
   const isGroup = nodeData.kind === "group";
@@ -6161,7 +7305,17 @@ function WorkflowNode({ id, data, selected, isConnectable }: NodeProps) {
 
   useEffect(() => {
     updateNodeInternals(id);
-  }, [groupOpen, groupSize?.height, groupSize?.width, id, minimized, nodeData.inputs.length, nodeData.outputs.length, updateNodeInternals]);
+  }, [
+    groupOpen,
+    groupSize?.height,
+    groupSize?.width,
+    id,
+    inlineLayout,
+    minimized,
+    nodeData.inputs.length,
+    nodeData.outputs.length,
+    updateNodeInternals,
+  ]);
 
   const toggleMinimized = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
@@ -6191,7 +7345,9 @@ function WorkflowNode({ id, data, selected, isConnectable }: NodeProps) {
   return (
     <div
       className={classNames(
-        minimized
+        inlineLayout
+          ? "w-[240px]"
+          : minimized
           ? "w-[230px]"
           : isGroup
             ? "min-w-[260px]"
@@ -6219,73 +7375,186 @@ function WorkflowNode({ id, data, selected, isConnectable }: NodeProps) {
           onResizeEnd={updateGroupSize}
         />
       )}
-      <div className={classNames(!minimized && "border-b", "px-3 py-2", workflowHeaderClass(nodeData.tone))}>
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-zinc-950">{nodeData.title}</div>
-            <div className="mt-0.5 text-[11px] font-medium text-zinc-600">{nodeData.packageName}</div>
-          </div>
-          <div className="mt-0.5 flex shrink-0 items-center gap-2">
-            {nodeData.group && (
-              <span className="rounded bg-white/70 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-zinc-600">
-                {nodeData.group.memberCount}
-              </span>
-            )}
-            <span className={classNames("h-2.5 w-2.5 rounded-full", flowToneClass(nodeData.tone))} />
-            {isGroup && !minimized && (
-              <button
-                type="button"
-                className="nodrag nopan inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-300 bg-white/80 text-zinc-700 hover:bg-white focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-1"
-                onClick={toggleGroupOpen}
-                title={groupOpen ? "Close group" : "Open group"}
-                aria-label={groupOpen ? "Close group" : "Open group"}
-              >
-                {groupOpen ? <PanelCollapseIcon className="h-3.5 w-3.5" /> : <PanelExpandIcon className="h-3.5 w-3.5" />}
-              </button>
-            )}
-            <button
-              type="button"
-              className="nodrag nopan inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-300 bg-white/80 text-zinc-700 hover:bg-white focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-1"
-              onClick={toggleMinimized}
-              title={minimized ? "Expand component" : "Minimize component"}
-              aria-label={minimized ? "Expand component" : "Minimize component"}
-            >
-              {minimized ? <ExpandIcon className="h-3.5 w-3.5" /> : <MinimizeIcon className="h-3.5 w-3.5" />}
-            </button>
-          </div>
-        </div>
-        {!minimized && <p className="mt-2 text-xs leading-5 text-zinc-600">{nodeData.description}</p>}
-      </div>
-      {minimized ? (
-        <MinimizedPortHandles
+      {inlineLayout ? (
+        <InlineWorkflowNode
           nodeId={id}
-          inputs={nodeData.inputs}
-          outputs={nodeData.outputs}
+          data={nodeData}
           isConnectable={isConnectable}
+          onExpand={toggleMinimized}
         />
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 p-3">
-            <PortColumn
-              nodeId={id}
-              title="Inputs"
-              direction="in"
-              ports={nodeData.inputs}
-              isConnectable={isConnectable}
-            />
-            <PortColumn
-              nodeId={id}
-              title="Outputs"
-              direction="out"
-              ports={nodeData.outputs}
-              isConnectable={isConnectable}
-            />
+          <div className={classNames(!minimized && "border-b", "px-3 py-2", workflowHeaderClass(nodeData.tone))}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-zinc-950">{nodeData.title}</div>
+                <div className="mt-0.5 text-[11px] font-medium text-zinc-600">{nodeData.packageName}</div>
+              </div>
+              <div className="mt-0.5 flex shrink-0 items-center gap-2">
+                {nodeData.group && (
+                  <span className="rounded bg-white/70 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-zinc-600">
+                    {nodeData.group.memberCount}
+                  </span>
+                )}
+                <span className={classNames("h-2.5 w-2.5 rounded-full", flowToneClass(nodeData.tone))} />
+                {isGroup && !minimized && (
+                  <button
+                    type="button"
+                    className="nodrag nopan inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-300 bg-white/80 text-zinc-700 hover:bg-white focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-1"
+                    onClick={toggleGroupOpen}
+                    title={groupOpen ? "Close group" : "Open group"}
+                    aria-label={groupOpen ? "Close group" : "Open group"}
+                  >
+                    {groupOpen ? <PanelCollapseIcon className="h-3.5 w-3.5" /> : <PanelExpandIcon className="h-3.5 w-3.5" />}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="nodrag nopan inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-300 bg-white/80 text-zinc-700 hover:bg-white focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-1"
+                  onClick={toggleMinimized}
+                  title={minimized ? "Expand component" : "Minimize component"}
+                  aria-label={minimized ? "Expand component" : "Minimize component"}
+                >
+                  {minimized ? <ExpandIcon className="h-3.5 w-3.5" /> : <MinimizeIcon className="h-3.5 w-3.5" />}
+                </button>
+              </div>
+            </div>
+            {!minimized && <p className="mt-2 text-xs leading-5 text-zinc-600">{nodeData.description}</p>}
           </div>
-          {isGroup && groupOpen && nodeData.group && <WorkflowGroupOpenView group={nodeData.group} />}
+          {minimized ? (
+            <MinimizedPortHandles
+              nodeId={id}
+              inputs={nodeData.inputs}
+              outputs={nodeData.outputs}
+              isConnectable={isConnectable}
+            />
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-3 p-3">
+                <PortColumn
+                  nodeId={id}
+                  title="Inputs"
+                  direction="in"
+                  ports={nodeData.inputs}
+                  isConnectable={isConnectable}
+                />
+                <PortColumn
+                  nodeId={id}
+                  title="Outputs"
+                  direction="out"
+                  ports={nodeData.outputs}
+                  isConnectable={isConnectable}
+                />
+              </div>
+              {isGroup && groupOpen && nodeData.group && <WorkflowGroupOpenView group={nodeData.group} />}
+            </>
+          )}
         </>
       )}
     </div>
   );
+}
+
+function InlineWorkflowNode({
+  nodeId,
+  data,
+  isConnectable,
+  onExpand,
+}: {
+  nodeId: string;
+  data: WorkflowNodeData;
+  isConnectable: boolean;
+  onExpand: (event: React.MouseEvent<HTMLButtonElement>) => void;
+}) {
+  const input = data.inputs[0];
+  const output = data.outputs[0];
+  const colors = usePortTypeColors();
+  const { onOutputDoubleClick } = React.useContext(WorkflowOutputConnectorContext);
+  const inputColor = input ? portTypeColor(input.type, colors) : null;
+  const outputColor = output ? portTypeColor(output.type, colors) : null;
+
+  return (
+    <div
+      className={classNames(
+        "relative flex h-12 items-center gap-2 rounded-lg px-3",
+        workflowHeaderClass(data.tone),
+      )}
+      title={inlineWorkflowNodeTitle(data)}
+    >
+      {input && inputColor && (
+        <>
+          <Handle
+            type="target"
+            position={Position.Left}
+            id={handleId("in", input)}
+            isConnectable={isConnectable}
+            className="!h-3 !w-3 !border-2 !border-white"
+            style={{
+              backgroundColor: inputColor,
+              left: -7,
+              top: "50%",
+            }}
+          />
+          <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: inputColor }} />
+        </>
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-xs font-semibold text-zinc-950">{data.title}</div>
+        <div className="truncate text-[10px] font-medium text-zinc-600">{inlineWorkflowNodePortSummary(data)}</div>
+      </div>
+      {output && outputColor && <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: outputColor }} />}
+      <button
+        type="button"
+        className="nodrag nopan inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-zinc-300 bg-white/80 text-zinc-700 hover:bg-white focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-1"
+        onClick={onExpand}
+        title="Expand component"
+        aria-label="Expand component"
+      >
+        <ExpandIcon className="h-3.5 w-3.5" />
+      </button>
+      {output && outputColor && (
+        <Handle
+          type="source"
+          position={Position.Right}
+          id={handleId("out", output)}
+          isConnectable={isConnectable}
+          onDoubleClick={(event) => {
+            onOutputDoubleClick(event, nodeId, output);
+          }}
+          className="!h-3 !w-3 !border-2 !border-white"
+          style={{
+            backgroundColor: outputColor,
+            right: -7,
+            top: "50%",
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function inlineWorkflowNodeTitle(data: WorkflowNodeData): string {
+  const input = data.inputs[0];
+  const output = data.outputs[0];
+  if (input && output) {
+    return `${data.title} - ${input.label} to ${output.label}`;
+  }
+  return `${data.title} - ${(input ?? output)?.label ?? "port"}`;
+}
+
+function inlineWorkflowNodePortSummary(data: WorkflowNodeData): string {
+  const input = data.inputs[0];
+  const output = data.outputs[0];
+  if (input && output) {
+    return `${formatPortType(input.type, portIsStream(input))} -> ${formatPortType(output.type, portIsStream(output))}`;
+  }
+  if (input) {
+    return formatPortType(input.type, portIsStream(input));
+  }
+  if (output) {
+    return formatPortType(output.type, portIsStream(output));
+  }
+  return "port";
 }
 
 const workflowGroupPreviewNodeWidth = 148;
@@ -6786,6 +8055,78 @@ function workflowNode(id: string, x: number, y: number, data: WorkflowNodeData):
   };
 }
 
+function workflowCatalogNodeTemplates(
+  catalog: RustWorkflowCatalog | null,
+  fallbackTemplates: WorkflowNodeModel[],
+): WorkflowNodeModel[] {
+  if (!catalog) {
+    return fallbackTemplates;
+  }
+  const catalogNodes = new Map(catalog.nodes.map((node) => [node.id, node]));
+  return fallbackTemplates.map((template) => {
+    const spec = catalogNodes.get(template.id);
+    if (!spec || spec.ui_owned) {
+      return template;
+    }
+    return {
+      ...template,
+      data: {
+        ...template.data,
+        title: spec.title || template.data.title,
+        packageName: spec.package_name || template.data.packageName,
+        inputs: spec.inputs.map(rustPortSpecToFlowPort).filter(Boolean) as FlowPort[],
+        outputs: spec.outputs.map(rustPortSpecToFlowPort).filter(Boolean) as FlowPort[],
+      },
+    };
+  });
+}
+
+function rustPortSpecToFlowPort(spec: RustPortSpec): FlowPort | null {
+  const type = rustPortKindToPortType(spec.kind);
+  if (!type) {
+    return null;
+  }
+  return port(spec.id, spec.label, type, {
+    optional: Boolean(spec.optional),
+    stream: Boolean(spec.stream),
+  });
+}
+
+function rustPortKindToPortType(kind: RustPortSpec["kind"]): PortType | null {
+  const mapped: Partial<Record<RustPortSpec["kind"], PortType>> = {
+    run_trigger: "run_request",
+    run_config: "run_config",
+    youtube_url: "youtube_url",
+    youtube_collection_url: "youtube_collection_url",
+    video_file: "video_file",
+    audio_file: "audio_wav",
+    media_file: "video_file",
+    transcript: "transcript_segment",
+    subtitle_file: "template_string",
+    scene_list: "scene_result",
+    observation_list: "video_observation",
+    audio_events: "audio_event",
+    text_events: "text_event",
+    data_buckets: "data_bucket",
+    json_report: "json_report",
+    collection_manifest: "collection_manifest",
+    collection_items: "collection_item",
+    song_fingerprint: "song_fingerprint",
+    song_catalog: "data_value",
+    song_matches: "song_match",
+    music_features: "music_feature",
+    template_string: "template_string",
+    string: "string_value",
+    number: "number_value",
+    boolean: "boolean_value",
+    array: "array_value",
+    object: "object_value",
+    http_request: "http_request",
+    http_response: "http_response",
+  };
+  return mapped[kind] ?? null;
+}
+
 function port(id: string, label: string, type: PortType, options: Pick<FlowPort, "optional" | "stream"> = {}): FlowPort {
   return {
     id,
@@ -7088,38 +8429,48 @@ function isExecutableWorkflowInputType(type: PortType): boolean {
   return type === "youtube_url" || type === "youtube_collection_url" || type === "video_file" || type === "run_config";
 }
 
-function effectiveSourceMode(form: UseCaseForm, inputModel?: WorkflowRunInputModel): SourceMode {
+function effectiveSourceMode(form: WorkflowRunForm, inputModel?: WorkflowRunInputModel): SourceMode {
   const sourceModes = inputModel?.sourceModes.length ? inputModel.sourceModes : (["url", "file"] as SourceMode[]);
   return sourceModes.includes(form.sourceMode) ? form.sourceMode : sourceModes[0] ?? form.sourceMode;
 }
 
-function UseCaseControls({
+function WorkflowRunControls({
   form,
   inputModel,
-  selectedUseCase,
+  selectedWorkflowKind,
   onChange,
   onFocusWorkflowInput,
   onRun,
   isRunning,
   runDisabled,
   validationMessage,
+  activeRunId,
+  activeRunRecord,
+  onCancelRun,
+  onRetryRun,
+  onOpenReport,
 }: {
-  form: UseCaseForm;
+  form: WorkflowRunForm;
   inputModel: WorkflowRunInputModel;
-  selectedUseCase: UseCaseId;
-  onChange: (form: UseCaseForm) => void;
+  selectedWorkflowKind: WorkflowKindId;
+  onChange: (form: WorkflowRunForm) => void;
   onFocusWorkflowInput: (input: WorkflowRunInput) => void;
   onRun: () => void;
   isRunning: boolean;
   runDisabled: boolean;
   validationMessage: string | null;
+  activeRunId: string | null;
+  activeRunRecord: RunRecord | null;
+  onCancelRun: () => void;
+  onRetryRun: () => void;
+  onOpenReport: () => void;
 }) {
-  const set = <K extends keyof UseCaseForm>(key: K, value: UseCaseForm[K]) =>
+  const set = <K extends keyof WorkflowRunForm>(key: K, value: WorkflowRunForm[K]) =>
     onChange({ ...form, [key]: value });
   const setWorkflowInput = (key: string, value: string) =>
     onChange({ ...form, workflowInputs: { ...form.workflowInputs, [key]: value } });
   const sourceModes =
-    selectedUseCase === "song-analysis" || selectedUseCase === "subtitle-generation"
+    selectedWorkflowKind === "song-analysis" || selectedWorkflowKind === "subtitle-generation"
       ? (["url", "file"] as SourceMode[])
       : form.sourceMode === "collection"
       ? (["collection"] as SourceMode[])
@@ -7127,7 +8478,7 @@ function UseCaseControls({
         ? inputModel.sourceModes
         : (["url", "file"] as SourceMode[]);
   const selectedSourceMode =
-    selectedUseCase === "song-analysis" || selectedUseCase === "subtitle-generation"
+    selectedWorkflowKind === "song-analysis" || selectedWorkflowKind === "subtitle-generation"
       ? form.sourceMode === "file"
         ? "file"
         : "url"
@@ -7137,6 +8488,10 @@ function UseCaseControls({
   const collectionInput = workflowRunInputForType(inputModel, "youtube_collection_url");
   const fileInput = workflowRunInputForType(inputModel, "video_file");
   const runConfigInput = workflowRunInputForType(inputModel, "run_config");
+  const activeStatus = activeRunRecord?.status;
+  const canCancel = Boolean(activeRunId && (activeStatus === "pending" || activeStatus === "running" || isRunning));
+  const canRetry = Boolean(activeRunRecord && ["failed", "canceled", "succeeded"].includes(activeRunRecord.status));
+  const canOpenReport = activeRunRecord?.status === "succeeded";
 
   return (
     <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
@@ -7183,7 +8538,7 @@ function UseCaseControls({
                 <select
                   className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
                   value={form.alreadyDownloaded}
-                  onChange={(event) => set("alreadyDownloaded", event.target.value as UseCaseForm["alreadyDownloaded"])}
+                  onChange={(event) => set("alreadyDownloaded", event.target.value as WorkflowRunForm["alreadyDownloaded"])}
                 >
                   <option value="reuse">Reuse</option>
                   <option value="skip">Skip</option>
@@ -7289,7 +8644,7 @@ function UseCaseControls({
               />
             </Field>
 
-            {selectedUseCase === "subtitle-generation" ? (
+            {selectedWorkflowKind === "subtitle-generation" ? (
               <>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <Field label={workflowInputFieldLabel("Transcription engine", runConfigInput)}>
@@ -7317,7 +8672,7 @@ function UseCaseControls({
                   <span>Write SRT next to video file</span>
                 </label>
               </>
-            ) : selectedUseCase !== "song-analysis" ? (
+            ) : selectedWorkflowKind !== "song-analysis" ? (
               <>
             <div className="grid gap-3 sm:grid-cols-2">
               <Field
@@ -7597,43 +8952,113 @@ function UseCaseControls({
 
         <div className="rounded-lg bg-zinc-950 p-3">
           <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-zinc-100">
-            {buildCommand(form, inputModel, selectedUseCase).map(shellQuote).join(" ")}
+            {buildCommand(form, inputModel, selectedWorkflowKind).map(shellQuote).join(" ")}
           </pre>
         </div>
 
-        <button
-          className={classNames(
-            "inline-flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-white focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-2",
-            runDisabled ? "cursor-not-allowed bg-zinc-400" : "bg-zinc-950 hover:bg-zinc-800",
+        <div className="grid gap-2 sm:grid-cols-2">
+          {canCancel ? (
+            <button
+              type="button"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-rose-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-rose-600 focus:outline-none focus:ring-2 focus:ring-rose-700 focus:ring-offset-2"
+              onClick={onCancelRun}
+            >
+              <CloseIcon className="h-4 w-4" />
+              Cancel
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={classNames(
+                "inline-flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-white focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-2",
+                !canRetry && runDisabled ? "cursor-not-allowed bg-zinc-400" : "bg-zinc-950 hover:bg-zinc-800",
+              )}
+              onClick={canRetry ? onRetryRun : onRun}
+              disabled={canRetry ? isRunning : runDisabled}
+            >
+              {isRunning ? (
+                <SpinnerIcon className="h-4 w-4" />
+              ) : canRetry ? (
+                <RefreshIcon className="h-4 w-4" />
+              ) : (
+                <PlayIcon className="h-4 w-4" />
+              )}
+              {isRunning ? "Creating run" : canRetry ? "Retry" : "Create run"}
+            </button>
           )}
-          onClick={onRun}
-          disabled={runDisabled}
-        >
-          {isRunning ? <SpinnerIcon className="h-4 w-4" /> : <PlayIcon className="h-4 w-4" />}
-          {isRunning ? "Creating run" : "Create run"}
-        </button>
+          {canOpenReport ? (
+            <button
+              type="button"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm font-medium text-zinc-800 hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-2"
+              onClick={onOpenReport}
+            >
+              <OpenIcon className="h-4 w-4" />
+              Open result
+            </button>
+          ) : null}
+        </div>
         {validationMessage && <p className="text-sm text-amber-700">{validationMessage}</p>}
       </div>
     </section>
   );
 }
 
-function RunOutputPanel({ stdout, stderr }: { stdout?: string; stderr?: string }) {
-  if (!stdout && !stderr) {
+function RunEventTimeline({
+  events,
+  stdout,
+  stderr,
+}: {
+  events: RunEvent[];
+  stdout?: string;
+  stderr?: string;
+}) {
+  if (events.length === 0 && !stdout && !stderr) {
     return null;
   }
 
   return (
     <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
       <div className="border-b border-zinc-200 px-4 py-3">
-        <h2 className="text-sm font-semibold text-zinc-950">Run Output</h2>
+        <h2 className="text-sm font-semibold text-zinc-950">Run Event Log</h2>
       </div>
       <div className="space-y-3 p-4">
+        {events.length > 0 && (
+          <div className="space-y-2">
+            {events.map((event, index) => (
+              <div key={`${event.run_id}-${event.timestamp}-${index}`} className="rounded-lg border border-zinc-200 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={classNames("rounded-md px-2 py-0.5 text-xs font-medium", runStatusPillClass(event.status))}>
+                    {event.status}
+                  </span>
+                  <span className="text-xs tabular-nums text-zinc-500">{new Date(event.timestamp).toLocaleString()}</span>
+                </div>
+                <p className="mt-2 text-sm text-zinc-800">{event.message}</p>
+                {event.stderr && <OutputBlock label="stderr" value={event.stderr} tone="rose" />}
+                {event.stdout && <OutputBlock label="stdout" value={event.stdout} tone="zinc" />}
+              </div>
+            ))}
+          </div>
+        )}
         {stderr && <OutputBlock label="stderr" value={stderr} tone="rose" />}
         {stdout && <OutputBlock label="stdout" value={stdout} tone="zinc" />}
       </div>
     </section>
   );
+}
+
+function runStatusPillClass(status: RunStatus): string {
+  switch (status) {
+    case "succeeded":
+      return "bg-emerald-50 text-emerald-800";
+    case "failed":
+      return "bg-rose-50 text-rose-800";
+    case "canceled":
+      return "bg-amber-50 text-amber-800";
+    case "running":
+      return "bg-sky-50 text-sky-800";
+    case "pending":
+      return "bg-zinc-100 text-zinc-700";
+  }
 }
 
 function OutputBlock({ label, value, tone }: { label: string; value: string; tone: "rose" | "zinc" }) {
@@ -7784,8 +9209,12 @@ function scoreLabel(value?: number | null): string {
   return value == null || !Number.isFinite(value) ? "n/a" : `${Math.round(value * 100)}%`;
 }
 
-function buildCommand(form: UseCaseForm, inputModel?: WorkflowRunInputModel, useCase: UseCaseId = "youtube-video"): string[] {
-  if (useCase === "youtube-collection" || form.sourceMode === "collection") {
+function buildCommand(
+  form: WorkflowRunForm,
+  inputModel?: WorkflowRunInputModel,
+  workflowKind: WorkflowKindId = "youtube-video",
+): string[] {
+  if (workflowKind === "youtube-collection" || form.sourceMode === "collection") {
     const command = [
       "studio-api",
       "POST",
@@ -7815,7 +9244,7 @@ function buildCommand(form: UseCaseForm, inputModel?: WorkflowRunInputModel, use
     command.push("--already-downloaded", form.alreadyDownloaded);
     return command;
   }
-  if (useCase === "song-analysis") {
+  if (workflowKind === "song-analysis") {
     const sourceMode = form.sourceMode === "file" ? "file" : "url";
     const command = [
       "studio-api",
@@ -7843,7 +9272,7 @@ function buildCommand(form: UseCaseForm, inputModel?: WorkflowRunInputModel, use
     }
     return command;
   }
-  if (useCase === "subtitle-generation") {
+  if (workflowKind === "subtitle-generation") {
     const sourceMode = effectiveSourceMode(form, inputModel);
     const command = [
       "studio-api",
@@ -7903,7 +9332,7 @@ function buildCommand(form: UseCaseForm, inputModel?: WorkflowRunInputModel, use
   return command;
 }
 
-function buildYoutubeRunRequest(form: UseCaseForm, inputModel?: WorkflowRunInputModel): YoutubeRunRequest {
+function buildYoutubeRunRequest(form: WorkflowRunForm, inputModel?: WorkflowRunInputModel): YoutubeRunRequest {
   const sourceMode = effectiveSourceMode(form, inputModel);
   return {
     source:
@@ -7928,10 +9357,17 @@ function buildYoutubeRunRequest(form: UseCaseForm, inputModel?: WorkflowRunInput
   };
 }
 
-function buildYoutubeCollectionRunRequest(form: UseCaseForm): YoutubeCollectionRunRequest {
+function buildYoutubeCollectionRunRequest(
+  form: WorkflowRunForm,
+  manifestPreview?: CollectionManifestPreviewState,
+): YoutubeCollectionRunRequest {
+  const previewManifest =
+    manifestPreview?.status === "ready" && manifestPreview.manifest && !manifestPreview.stale
+      ? filterYoutubeCollectionManifest(manifestPreview.manifest, manifestPreview.selectedItemIds)
+      : null;
   return {
     source: { kind: youtubeCollectionSourceKind(form.url), url: form.url.trim() },
-    manifest: null,
+    manifest: previewManifest && previewManifest.items.length > 0 ? previewManifest : null,
     metadata_filter: {
       title_contains: form.collectionTitleContains.trim() || null,
       title_excludes: [],
@@ -7967,7 +9403,7 @@ function buildYoutubeCollectionRunRequest(form: UseCaseForm): YoutubeCollectionR
   };
 }
 
-function buildSongAnalysisRunRequest(form: UseCaseForm, inputModel?: WorkflowRunInputModel): SongAnalysisRunRequest {
+function buildSongAnalysisRunRequest(form: WorkflowRunForm, inputModel?: WorkflowRunInputModel): SongAnalysisRunRequest {
   const sourceMode = form.sourceMode === "file" ? "file" : effectiveSourceMode(form, inputModel) === "file" ? "file" : "url";
   return {
     source:
@@ -8000,7 +9436,7 @@ function buildSongAnalysisRunRequest(form: UseCaseForm, inputModel?: WorkflowRun
   };
 }
 
-function buildSubtitleGenerationRunRequest(form: UseCaseForm, inputModel?: WorkflowRunInputModel): SubtitleGenerationRunRequest {
+function buildSubtitleGenerationRunRequest(form: WorkflowRunForm, inputModel?: WorkflowRunInputModel): SubtitleGenerationRunRequest {
   const sourceMode = effectiveSourceMode(form, inputModel);
   return {
     source:
@@ -8017,7 +9453,7 @@ function buildSubtitleGenerationRunRequest(form: UseCaseForm, inputModel?: Workf
   };
 }
 
-function formFromYoutubeRunRequest(request: YoutubeRunRequest): UseCaseForm {
+function formFromYoutubeRunRequest(request: YoutubeRunRequest): WorkflowRunForm {
   return {
     ...initialForm,
     sourceMode: request.source.kind === "youtube_url" ? "url" : "file",
@@ -8037,12 +9473,12 @@ function formFromYoutubeRunRequest(request: YoutubeRunRequest): UseCaseForm {
   };
 }
 
-function formFromYoutubeCollectionRunRequest(request: YoutubeCollectionRunRequest): UseCaseForm {
+function formFromYoutubeCollectionRunRequest(request: YoutubeCollectionRunRequest): WorkflowRunForm {
   return {
     ...initialForm,
     sourceMode: "collection",
     url: request.source?.url ?? "",
-    workDir: request.work_dir ?? "use-case-output/youtube-collection",
+    workDir: request.work_dir ?? "workflow-output/youtube-collection",
     sceneThreshold: request.analysis.scene_threshold,
     minSceneLen: request.analysis.min_scene_len,
     maxFrames: request.analysis.max_frames ? String(request.analysis.max_frames) : "",
@@ -8064,14 +9500,14 @@ function formFromYoutubeCollectionRunRequest(request: YoutubeCollectionRunReques
   };
 }
 
-function formFromSongAnalysisRunRequest(request: SongAnalysisRunRequest): UseCaseForm {
+function formFromSongAnalysisRunRequest(request: SongAnalysisRunRequest): WorkflowRunForm {
   return {
     ...initialForm,
     sourceMode: request.source.kind === "youtube_url" ? "url" : "file",
     url: request.source.kind === "youtube_url" ? request.source.url : "",
     input: request.source.kind === "local_file" ? request.source.path : initialForm.input,
-    workDir: request.work_dir ?? "use-case-output/song-analysis",
-    output: request.work_dir ? `${request.work_dir.replace(/\/$/, "")}/song-analysis.json` : "use-case-output/song-analysis/song-analysis.json",
+    workDir: request.work_dir ?? "workflow-output/song-analysis",
+    output: request.work_dir ? `${request.work_dir.replace(/\/$/, "")}/song-analysis.json` : "workflow-output/song-analysis/song-analysis.json",
     songCatalogPath: request.catalog.db_path ?? "",
     songMinScore: request.identification.min_score,
     songAmbiguousMargin: request.identification.ambiguous_margin,
@@ -8087,23 +9523,23 @@ function formFromSongAnalysisRunRequest(request: SongAnalysisRunRequest): UseCas
   };
 }
 
-function formFromSubtitleGenerationRunRequest(request: SubtitleGenerationRunRequest): UseCaseForm {
+function formFromSubtitleGenerationRunRequest(request: SubtitleGenerationRunRequest): WorkflowRunForm {
   return {
     ...initialForm,
     sourceMode: request.source.kind === "youtube_url" ? "url" : "file",
     url: request.source.kind === "youtube_url" ? request.source.url : "",
     input: request.source.kind === "local_file" ? request.source.path : initialForm.input,
-    workDir: request.work_dir ?? "use-case-output/subtitle-generation",
+    workDir: request.work_dir ?? "workflow-output/subtitle-generation",
     output: request.work_dir
       ? `${request.work_dir.replace(/\/$/, "")}/subtitle-generation.json`
-      : "use-case-output/subtitle-generation/subtitle-generation.json",
+      : "workflow-output/subtitle-generation/subtitle-generation.json",
     skipTranscription: false,
     transcriptionEngine: normalizedTranscriptionEngine(request.transcription.engine),
     transcriptionCommand: commandConfigToInput(request.transcription.command),
   };
 }
 
-function workflowInputSummaryFromForm(form: UseCaseForm, inputModel?: WorkflowRunInputModel): string {
+function workflowInputSummaryFromForm(form: WorkflowRunForm, inputModel?: WorkflowRunInputModel): string {
   if (form.sourceMode === "collection") {
     return form.url.trim() || "YouTube collection";
   }
@@ -8172,6 +9608,17 @@ function parseCsv(value: string): string[] {
     .filter(Boolean);
 }
 
+function collectionManifestFormKey(form: WorkflowRunForm): string {
+  return JSON.stringify({
+    url: form.url.trim(),
+    collectionMaxItems: form.collectionMaxItems.trim(),
+    collectionTitleContains: form.collectionTitleContains.trim(),
+    collectionDurationMin: form.collectionDurationMin.trim(),
+    collectionDurationMax: form.collectionDurationMax.trim(),
+    alreadyDownloaded: form.alreadyDownloaded,
+  });
+}
+
 function runRecordToCliRun(run: RunRecord, clientLabel: string, workflowName: string): CliRun {
   return {
     command: clientLabel,
@@ -8217,10 +9664,14 @@ function downloadReport(report: StudioReport) {
   URL.revokeObjectURL(url);
 }
 
-function getRunValidation(form: UseCaseForm, inputModel?: WorkflowRunInputModel, useCase: UseCaseId = "youtube-video"): string | null {
-  const isSong = useCase === "song-analysis";
-  const isSubtitle = useCase === "subtitle-generation";
-  if (useCase === "youtube-collection" && form.sourceMode === "collection") {
+function getRunValidation(
+  form: WorkflowRunForm,
+  inputModel?: WorkflowRunInputModel,
+  workflowKind: WorkflowKindId = "youtube-video",
+): string | null {
+  const isSong = workflowKind === "song-analysis";
+  const isSubtitle = workflowKind === "subtitle-generation";
+  if (workflowKind === "youtube-collection" && form.sourceMode === "collection") {
     const url = form.url.trim();
     if (!url) {
       return "Enter a YouTube playlist or channel URL.";
@@ -8317,33 +9768,74 @@ function getRunValidation(form: UseCaseForm, inputModel?: WorkflowRunInputModel,
   return null;
 }
 
-function currentUseCase(id: UseCaseId) {
-  return useCases.find((useCase) => useCase.id === id) ?? useCases[0];
+function currentWorkflowKind(id: WorkflowKindId) {
+  return workflowKinds.find((workflowKind) => workflowKind.id === id) ?? workflowKinds[0];
 }
 
-function defaultWorkDirForUseCase(id: UseCaseId): string {
+function workflowKindName(id: WorkflowKindId): string {
+  return currentWorkflowKind(id).name;
+}
+
+function workflowKindId(value: unknown): WorkflowKindId | null {
+  return isWorkflowKindId(value) ? value : null;
+}
+
+function isWorkflowKindId(value: unknown): value is WorkflowKindId {
+  return typeof value === "string" && workflowKinds.some((workflowKind) => workflowKind.id === value);
+}
+
+function inferWorkflowKindFromName(name: string): WorkflowKindId {
+  const normalized = name.toLowerCase();
+  if (normalized.includes("collection") || normalized.includes("playlist") || normalized.includes("channel")) {
+    return "youtube-collection";
+  }
+  if (normalized.includes("song") || normalized.includes("music")) {
+    return "song-analysis";
+  }
+  if (normalized.includes("subtitle") || normalized.includes("srt")) {
+    return "subtitle-generation";
+  }
+  return "youtube-video";
+}
+
+function workflowKindFromRunRequest(
+  request: YoutubeRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest,
+): WorkflowKindId {
+  if (isYoutubeCollectionRunRequest(request)) {
+    return "youtube-collection";
+  }
+  if (isSubtitleGenerationRunRequest(request)) {
+    return "subtitle-generation";
+  }
+  if (isSongAnalysisRunRequest(request)) {
+    return "song-analysis";
+  }
+  return "youtube-video";
+}
+
+function defaultWorkDirForWorkflowKind(id: WorkflowKindId): string {
   switch (id) {
     case "youtube-collection":
-      return "use-case-output/youtube-collection";
+      return "workflow-output/youtube-collection";
     case "song-analysis":
-      return "use-case-output/song-analysis";
+      return "workflow-output/song-analysis";
     case "subtitle-generation":
-      return "use-case-output/subtitle-generation";
+      return "workflow-output/subtitle-generation";
     case "youtube-video":
-      return "use-case-output/youtube-video";
+      return "workflow-output/youtube-video";
   }
 }
 
-function defaultOutputForUseCase(id: UseCaseId): string {
+function defaultOutputForWorkflowKind(id: WorkflowKindId): string {
   switch (id) {
     case "youtube-collection":
-      return "use-case-output/youtube-collection/collection-analysis.json";
+      return "workflow-output/youtube-collection/collection-analysis.json";
     case "song-analysis":
-      return "use-case-output/song-analysis/song-analysis.json";
+      return "workflow-output/song-analysis/song-analysis.json";
     case "subtitle-generation":
-      return "use-case-output/subtitle-generation/subtitle-generation.json";
+      return "workflow-output/subtitle-generation/subtitle-generation.json";
     case "youtube-video":
-      return "use-case-output/youtube-video/analysis.json";
+      return "workflow-output/youtube-video/analysis.json";
   }
 }
 
@@ -8569,7 +10061,7 @@ function categoryForWorkflowNodeData(data: WorkflowNodeData): WorkflowComponentC
   if (packageName === "input" || title.includes("source picker") || title.includes("loader")) {
     return "Input";
   }
-  if (title.includes("use case") || title.includes("pipeline")) {
+  if (title.includes("workflow") || title.includes("pipeline")) {
     return "Pipeline";
   }
   if (title.includes("sink") || title.includes("save") || text.includes("webhook")) {
@@ -9119,12 +10611,35 @@ function DownloadIcon({ className }: { className?: string }) {
   );
 }
 
+function OpenIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className={className}>
+      <path d="M7.5 4.5H4.8c-.7 0-1.3.6-1.3 1.3v9.4c0 .7.6 1.3 1.3 1.3h9.4c.7 0 1.3-.6 1.3-1.3v-2.7" strokeLinecap="round" />
+      <path d="M11 3.5h5.5V9" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="m9 11 7-7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function UploadIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className={className}>
       <path d="M10 17V8" strokeLinecap="round" />
       <path d="m6.5 11.5 3.5-3.5 3.5 3.5" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M4 4.5h12" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ArrangeIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className={className}>
+      <rect x="3.5" y="4" width="5" height="4" rx="1" />
+      <rect x="11.5" y="3.5" width="5" height="4" rx="1" />
+      <rect x="7.5" y="12" width="5" height="4" rx="1" />
+      <path d="M8.5 6h3" strokeLinecap="round" />
+      <path d="m10 8v4" strokeLinecap="round" />
+      <path d="m13.5 7.5-2 4.5" strokeLinecap="round" />
     </svg>
   );
 }

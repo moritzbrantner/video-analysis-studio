@@ -2,8 +2,8 @@ use studio_core::{
     check_system_dependencies, discover_youtube_collection_manifest, RunEvent, RunId, RunManager,
     RunRecord, RunStatus, SongAnalysisRunRequest, SongCatalogImportRequest,
     SongCatalogImportResponse, StudioReport, SubtitleGenerationRunRequest, SystemDependencyReport,
-    YoutubeCollectionManifest, YoutubeCollectionManifestRequest, YoutubeCollectionRunRequest,
-    YoutubeRunRequest,
+    WorkflowCatalog, YoutubeCollectionManifest, YoutubeCollectionManifestRequest,
+    YoutubeCollectionRunRequest, YoutubeRunRequest,
 };
 use tauri::{AppHandle, Emitter, State};
 
@@ -14,6 +14,11 @@ pub struct StudioState {
 #[tauri::command]
 pub async fn check_dependencies() -> Result<SystemDependencyReport, String> {
     Ok(check_system_dependencies(&[]))
+}
+
+#[tauri::command]
+pub async fn get_workflow_catalog() -> Result<WorkflowCatalog, String> {
+    Ok(studio_core::default_workflow_catalog())
 }
 
 #[tauri::command]
@@ -111,6 +116,18 @@ pub async fn get_report(
     state
         .manager
         .get_report(parse_run_id(&run_id)?)
+        .await
+        .map_err(error_string)
+}
+
+#[tauri::command]
+pub async fn get_run_events(
+    state: State<'_, StudioState>,
+    run_id: String,
+) -> Result<Vec<RunEvent>, String> {
+    state
+        .manager
+        .list_events(parse_run_id(&run_id)?)
         .await
         .map_err(error_string)
 }
