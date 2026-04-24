@@ -4722,6 +4722,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "three-d-processing-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "video-analysis-core",
+]
+
+[[package]]
 name = "time"
 version = "0.3.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5380,6 +5388,17 @@ dependencies = [
  "hf-hub",
  "serde",
  "serde_json",
+ "three-d-processing-core",
+ "video-analysis-core",
+ "video-analysis-posture",
+]
+
+[[package]]
+name = "video-analysis-posture"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "three-d-processing-core",
  "video-analysis-core",
 ]
 

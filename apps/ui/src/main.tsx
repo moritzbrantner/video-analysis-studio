@@ -196,6 +196,13 @@ const workflowKinds: Array<{
   },
 ];
 
+const exampleWorkflowSeeds: Array<{ kind: WorkflowKindId; name: string }> = [
+  { kind: "youtube-video", name: "YouTube Video Quick Review" },
+  { kind: "youtube-collection", name: "YouTube Collection Spot Check" },
+  { kind: "song-analysis", name: "Song Analysis Quick Match" },
+  { kind: "subtitle-generation", name: "Subtitle SRT Starter" },
+];
+
 const dataSourceFormats: Array<{ id: DataSourceFormat; label: string }> = [
   { id: "sqlite", label: "SQLite DB" },
   { id: "json", label: "JSON" },
@@ -7465,9 +7472,14 @@ function persistSavedWorkflowLibrary(library: SavedWorkflowLibrary) {
 }
 
 function seedSavedWorkflowLibrary(): SavedWorkflowLibrary {
-  const workflows = workflowKinds.map((workflowKind) =>
-    createSavedWorkflow(workflowKind.defaultWorkflowName, initialWorkflowNodes, initialWorkflowEdges, workflowKind.id),
-  );
+  const workflows = [
+    ...workflowKinds.map((workflowKind) =>
+      createSavedWorkflow(workflowKind.defaultWorkflowName, initialWorkflowNodes, initialWorkflowEdges, workflowKind.id),
+    ),
+    ...exampleWorkflowSeeds.map((workflow) =>
+      createSavedWorkflow(workflow.name, initialWorkflowNodes, initialWorkflowEdges, workflow.kind),
+    ),
+  ];
   return {
     format: savedWorkflowsJsonFormat,
     version: savedWorkflowsJsonVersion,

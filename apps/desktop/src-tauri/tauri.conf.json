@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.moritzbrantner.video-analysis-studio",
   "build": {
-    "beforeDevCommand": "bun run --cwd ../ui dev",
-    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "bun run --cwd ../ui dev -- --port 1420 --strictPort",
+    "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": "bun run --cwd ../ui build",
     "frontendDist": "../../ui/dist"
   },
