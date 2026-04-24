@@ -5450,6 +5450,7 @@ dependencies = [
  "clap",
  "serde",
  "serde_json",
+ "shlex",
  "text-analysis-features",
  "text-analysis-transcription",
  "video-analysis-core",

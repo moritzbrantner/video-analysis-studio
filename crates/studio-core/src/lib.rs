@@ -1,3 +1,4 @@
+mod data_sources;
 mod error;
 mod media;
 mod report;
@@ -7,6 +8,12 @@ mod subtitles;
 mod system;
 mod youtube;
 
+pub use data_sources::{
+    data_source_catalog_path, editable_inline_body, migrate_legacy_data_sources,
+    validate_data_source_id, DataSourceCatalog, DataSourceDerivationInput,
+    DataSourceDerivationKind, DataSourceKind, DataSourceOrigin, DataSourceRecord,
+    DataSourceUpsert, DATA_SOURCE_CATALOG_FORMAT, DATA_SOURCE_CATALOG_VERSION,
+};
 pub use error::{Result, StudioError};
 pub use report::*;
 pub use run_manager::{RunEvent, RunId, RunManager, RunRecord, RunStatus, WorkflowKind};
@@ -20,7 +27,8 @@ pub use system::{check_system_dependencies, DependencyStatus, SystemDependencyRe
 pub use video_analysis_use_cases::workflow_catalog::{
     default_workflow_catalog, ports_compatible, workflow_types_assignable, NodeSpec,
     PortCompatibility, PortKind, PortSpec, WorkflowCatalog, WorkflowCategory,
-    WorkflowObjectProperty, WorkflowSemanticKind, WorkflowTypeSpec,
+    WorkflowInputSurface, WorkflowObjectProperty, WorkflowRuntimeValidation,
+    WorkflowSemanticKind, WorkflowTypeSpec,
 };
 pub use youtube::{
     discover_youtube_collection_manifest, run_youtube_collection_workflow,

@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import ts from "typescript";
+import type { WorkflowTypeSpec } from "../src/api/client";
+import { workflowTypesAssignable } from "../src/workflowTypeSpec";
 
 type PortType =
   | "run_request"
@@ -14,6 +16,10 @@ type PortType =
   | "youtube_url"
   | "youtube_collection_url"
   | "video_file"
+  | "audio_file"
+  | "media_file"
+  | "transcript"
+  | "subtitle_file"
   | "collection_manifest"
   | "collection_item"
   | "collection_report"
@@ -39,7 +45,8 @@ type PortType =
   | "data_record"
   | "data_bucket"
   | "json_report"
-  | "dashboard_view";
+  | "dashboard_view"
+  | "song_catalog";
 
 interface FlowPortFixture {
   id: string;
@@ -47,6 +54,7 @@ interface FlowPortFixture {
   type: PortType;
   optional?: boolean;
   stream?: boolean;
+  valueType?: WorkflowTypeSpec;
 }
 
 interface WorkflowNodeFixture {
@@ -70,6 +78,12 @@ interface WorkflowEdgeFixture {
   sourcePortId: string;
   target: string;
   targetPortId: string;
+}
+
+interface WorkflowSeedFixture {
+  key: string;
+  nodes: Array<{ id: string; x: number; y: number }>;
+  edges: WorkflowEdgeFixture[];
 }
 
 const workflowNodeArrayNames = [
@@ -122,8 +136,6 @@ const rustWorkflowCatalogSource = readFileSync(
 const sourceFile = ts.createSourceFile("main.tsx", workflowSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const topLevelConstants = collectTopLevelConstants(sourceFile);
 const portTypes = new Set(readStringArrayConstant("portTypes") as PortType[]);
-const dataValueCompatibleSourceTypes = new Set(readStringArrayConstant("dataValueCompatibleSourceTypes") as PortType[]);
-const streamablePortTypes = new Set(readStringArrayConstant("streamablePortTypes") as PortType[]);
 const streamBridgePortDescriptors = readStreamBridgePortDescriptors();
 
 const nodesByArrayName = new Map(
@@ -132,6 +144,9 @@ const nodesByArrayName = new Map(
 const workflowNodes = workflowNodeArrayNames.flatMap((arrayName) => nodesByArrayName.get(arrayName) ?? []);
 const initialWorkflowNodes = nodesByArrayName.get("initialWorkflowNodes") ?? [];
 const initialWorkflowEdges = readInitialWorkflowEdges();
+const workflowStarterTemplates = readWorkflowSeedTemplates("workflowStarterTemplates");
+const basicWorkflowTestTemplates = readWorkflowSeedTemplates("basicWorkflowTestTemplates");
+const exampleWorkflowStarterTemplates = readWorkflowSeedTemplates("exampleWorkflowStarterTemplates");
 
 describe("workflow node catalog", () => {
   test("workflowNodeTemplates includes every node category array", () => {
@@ -162,6 +177,15 @@ describe("workflow node catalog", () => {
     }
   });
 
+  test("workflow input surfaces are declared in both Rust and TS source nodes", () => {
+    expect(rustWorkflowCatalogSource).toContain("exposable_input");
+    expect(rustWorkflowCatalogSource).toContain("input_surface");
+    expect(workflowSource).toContain('inputSurface: "source_url"');
+    expect(workflowSource).toContain('inputSurface: "collection_url"');
+    expect(workflowSource).toContain('inputSurface: "file"');
+    expect(workflowSource).toContain('inputSurface: "config"');
+  });
+
   for (const node of workflowNodes) {
     test(`${node.arrayName}/${node.id} has valid node metadata and ports`, () => {
       expect(node.id).toMatch(/^[a-z0-9-]+$/);
@@ -188,9 +212,6 @@ describe("workflow node catalog", () => {
           expect(portTypes.has(port.type)).toBe(true);
           expect(port.optional === undefined || typeof port.optional === "boolean").toBe(true);
           expect(port.stream === undefined || typeof port.stream === "boolean").toBe(true);
-          if (port.stream) {
-            expect(streamablePortTypes.has(port.type)).toBe(true);
-          }
         }
       }
 
@@ -223,6 +244,146 @@ describe("default workflow graph", () => {
       expect(sourcePort && targetPort ? portsCompatible(sourcePort, targetPort) : false).toBe(true);
     });
   }
+});
+
+describe("starter workflow templates", () => {
+  test("default starters stay intentionally small", () => {
+    expect(Object.keys(workflowStarterTemplates).sort()).toEqual([
+      "song-analysis",
+      "subtitle-generation",
+      "youtube-collection",
+      "youtube-video",
+    ]);
+    for (const template of Object.values(workflowStarterTemplates)) {
+      expect(template.nodes.length).toBeGreaterThanOrEqual(2);
+      expect(template.nodes.length).toBeLessThanOrEqual(5);
+    }
+  });
+
+  test("example starters stay intentionally small", () => {
+    expect(Object.keys(exampleWorkflowStarterTemplates).sort()).toEqual([
+      "Song Analysis Quick Match",
+      "Subtitle SRT Starter",
+      "YouTube Collection Spot Check",
+      "YouTube Video Quick Review",
+    ]);
+    for (const template of Object.values(exampleWorkflowStarterTemplates)) {
+      expect(template.nodes.length).toBeGreaterThanOrEqual(2);
+      expect(template.nodes.length).toBeLessThanOrEqual(4);
+    }
+  });
+
+  for (const collection of [workflowStarterTemplates, exampleWorkflowStarterTemplates]) {
+    for (const template of Object.values(collection)) {
+      test(`${template.key} starter edges reference compatible catalog ports`, () => {
+        const templateNodeIds = new Set(template.nodes.map((node) => node.id));
+        expect(templateNodeIds.size).toBe(template.nodes.length);
+
+        for (const edge of template.edges) {
+          expect(templateNodeIds.has(edge.source)).toBe(true);
+          expect(templateNodeIds.has(edge.target)).toBe(true);
+
+          const sourceNode = workflowNodes.find((node) => node.id === edge.source);
+          const targetNode = workflowNodes.find((node) => node.id === edge.target);
+          expect(sourceNode).toBeDefined();
+          expect(targetNode).toBeDefined();
+
+          const sourcePort = sourceNode?.outputs.find((port) => port.id === edge.sourcePortId);
+          const targetPort = targetNode?.inputs.find((port) => port.id === edge.targetPortId);
+          expect(sourcePort).toBeDefined();
+          expect(targetPort).toBeDefined();
+          expect(sourcePort && targetPort ? portsCompatible(sourcePort, targetPort) : false).toBe(true);
+        }
+      });
+    }
+  }
+});
+
+describe("basic workflow test templates", () => {
+  test("internal smoke fixtures stay intentionally tiny", () => {
+    expect(Object.keys(basicWorkflowTestTemplates).sort()).toEqual([
+      "Linear Video Ingest Smoke",
+      "Song Match Fan-In Smoke",
+    ]);
+    for (const template of Object.values(basicWorkflowTestTemplates)) {
+      expect(template.nodes.length).toBeGreaterThanOrEqual(2);
+      expect(template.nodes.length).toBeLessThanOrEqual(3);
+    }
+  });
+
+  for (const template of Object.values(basicWorkflowTestTemplates)) {
+    test(`${template.key} fixture edges reference compatible catalog ports`, () => {
+      const templateNodeIds = new Set(template.nodes.map((node) => node.id));
+      expect(templateNodeIds.size).toBe(template.nodes.length);
+
+      for (const edge of template.edges) {
+        expect(templateNodeIds.has(edge.source)).toBe(true);
+        expect(templateNodeIds.has(edge.target)).toBe(true);
+
+        const sourceNode = workflowNodes.find((node) => node.id === edge.source);
+        const targetNode = workflowNodes.find((node) => node.id === edge.target);
+        expect(sourceNode).toBeDefined();
+        expect(targetNode).toBeDefined();
+
+        const sourcePort = sourceNode?.outputs.find((port) => port.id === edge.sourcePortId);
+        const targetPort = targetNode?.inputs.find((port) => port.id === edge.targetPortId);
+        expect(sourcePort).toBeDefined();
+        expect(targetPort).toBeDefined();
+        expect(sourcePort && targetPort ? portsCompatible(sourcePort, targetPort) : false).toBe(true);
+      }
+    });
+  }
+});
+
+describe("structural port compatibility", () => {
+  test("matching presentation kinds do not override structural mismatch", () => {
+    expect(
+      portsCompatible(
+        {
+          id: "source",
+          label: "Source",
+          type: "object_value",
+          valueType: {
+            type: "object",
+            properties: [{ name: "id", value: { type: "string" }, required: true }],
+            additional_properties: false,
+          },
+        },
+        {
+          id: "target",
+          label: "Target",
+          type: "object_value",
+          valueType: {
+            type: "object",
+            properties: [
+              { name: "id", value: { type: "string" }, required: true },
+              { name: "title", value: { type: "string" }, required: true },
+            ],
+            additional_properties: false,
+          },
+        },
+      ),
+    ).toBe(false);
+  });
+
+  test("structurally compatible ports can connect even when presentation differs", () => {
+    expect(
+      portsCompatible(
+        {
+          id: "source",
+          label: "YouTube URL",
+          type: "youtube_url",
+          valueType: { type: "string", semantic: "youtube_url" },
+        },
+        {
+          id: "target",
+          label: "Plain string",
+          type: "string_value",
+          valueType: { type: "string" },
+        },
+      ),
+    ).toBe(true);
+  });
 });
 
 function collectTopLevelConstants(file: ts.SourceFile): Map<string, ts.Expression> {
@@ -396,22 +557,146 @@ function readInitialWorkflowEdges(): WorkflowEdgeFixture[] {
   });
 }
 
+function readWorkflowSeedTemplates(name: string): Record<string, WorkflowSeedFixture> {
+  const expression = stripExpressionWrapper(requiredConstant(name));
+  const object = requireObjectLiteral(expression, `${name} object`);
+  const entries = object.properties
+    .filter((property): property is ts.PropertyAssignment => ts.isPropertyAssignment(property))
+    .map((property) => {
+      const key = propertyNameText(property.name);
+      if (!key) {
+        throw new Error(`Invalid key in ${name}`);
+      }
+      const value = requireObjectLiteral(property.initializer, `${name}.${key}`);
+      const nodesExpression = stripExpressionWrapper(requiredProperty(value, "nodes"));
+      const edgesExpression = stripExpressionWrapper(requiredProperty(value, "edges"));
+      if (!ts.isArrayLiteralExpression(nodesExpression) || !ts.isArrayLiteralExpression(edgesExpression)) {
+        throw new Error(`${name}.${key} must provide literal node and edge arrays`);
+      }
+      return [
+        key,
+        {
+          key,
+          nodes: nodesExpression.elements.map((element) => {
+            const node = requireObjectLiteral(element, `${name}.${key}.node`);
+            return {
+              id: readString(requiredProperty(node, "id")),
+              x: readNumber(requiredProperty(node, "x")),
+              y: readNumber(requiredProperty(node, "y")),
+            };
+          }),
+          edges: edgesExpression.elements.map((element) => {
+            const edge = requireObjectLiteral(element, `${name}.${key}.edge`);
+            return {
+              source: readString(requiredProperty(edge, "source")),
+              sourcePortId: readString(requiredProperty(edge, "sourcePortId")),
+              target: readString(requiredProperty(edge, "target")),
+              targetPortId: readString(requiredProperty(edge, "targetPortId")),
+            };
+          }),
+        } satisfies WorkflowSeedFixture,
+      ] as const;
+    });
+  return Object.fromEntries(entries);
+}
+
 function portsCompatible(sourcePort: FlowPortFixture, targetPort: FlowPortFixture): boolean {
   const streamConnection = sourcePort.stream === true || targetPort.stream === true;
   if (streamConnection) {
-    return (
-      sourcePort.stream === true &&
-      targetPort.stream === true &&
-      streamablePortTypes.has(sourcePort.type) &&
-      streamablePortTypes.has(targetPort.type) &&
-      portTypesCompatible(sourcePort.type, targetPort.type)
-    );
+    return sourcePort.stream === true && targetPort.stream === true && workflowTypesAssignable(portValueType(sourcePort), portValueType(targetPort));
   }
-  return portTypesCompatible(sourcePort.type, targetPort.type);
+  return workflowTypesAssignable(portValueType(sourcePort), portValueType(targetPort));
 }
 
-function portTypesCompatible(sourceType: PortType, targetType: PortType): boolean {
-  return sourceType === targetType || (targetType === "data_value" && dataValueCompatibleSourceTypes.has(sourceType));
+function portValueType(port: FlowPortFixture): WorkflowTypeSpec {
+  return port.valueType ?? workflowTypeForPortType(port.type);
+}
+
+function workflowTypeForPortType(type: PortType): WorkflowTypeSpec {
+  switch (type) {
+    case "run_request":
+      return { type: "object", properties: [], additional_properties: true, semantic: "run_request" };
+    case "run_config":
+      return { type: "object", properties: [], additional_properties: true, semantic: "run_config" };
+    case "template_string":
+      return { type: "string", semantic: "template_string" };
+    case "string_value":
+      return { type: "string" };
+    case "number_value":
+      return { type: "number" };
+    case "boolean_value":
+      return { type: "boolean" };
+    case "array_value":
+      return { type: "array", items: { type: "any" } };
+    case "youtube_url":
+      return { type: "string", semantic: "youtube_url" };
+    case "youtube_collection_url":
+      return { type: "string", semantic: "youtube_collection_url" };
+    case "video_file":
+      return { type: "binary", media_type: "video/*", semantic: "video_file" };
+    case "audio_file":
+      return { type: "binary", media_type: "audio/*", semantic: "audio_file" };
+    case "media_file":
+      return { type: "binary", semantic: "media_file" };
+    case "transcript":
+      return { type: "object", properties: [], additional_properties: true, semantic: "transcript" };
+    case "subtitle_file":
+      return { type: "string", semantic: "subtitle_file" };
+    case "collection_manifest":
+      return { type: "object", properties: [], additional_properties: true, semantic: "collection_manifest" };
+    case "collection_item":
+      return { type: "object", properties: [], additional_properties: true, semantic: "collection_item" };
+    case "collection_report":
+      return { type: "object", properties: [], additional_properties: true, semantic: "collection_report" };
+    case "collection_table":
+      return { type: "object", properties: [], additional_properties: true, semantic: "collection_table" };
+    case "video_metadata":
+      return { type: "object", properties: [], additional_properties: true, semantic: "video_metadata" };
+    case "video_frame":
+      return { type: "binary", media_type: "image/*" };
+    case "audio_frame":
+      return { type: "binary", media_type: "audio/*", semantic: "audio_file" };
+    case "audio_wav":
+      return { type: "binary", media_type: "audio/wav", semantic: "audio_wav" };
+    case "song_fingerprint":
+      return { type: "object", properties: [], additional_properties: true, semantic: "song_fingerprint" };
+    case "song_match":
+      return { type: "object", properties: [], additional_properties: true, semantic: "song_match" };
+    case "music_feature":
+      return { type: "object", properties: [], additional_properties: true, semantic: "music_feature" };
+    case "scene_result":
+      return { type: "object", properties: [], additional_properties: true, semantic: "scene_result" };
+    case "video_observation":
+      return { type: "object", properties: [], additional_properties: true, semantic: "video_observation" };
+    case "model_request":
+      return { type: "object", properties: [], additional_properties: true, semantic: "model_request" };
+    case "model_prediction":
+      return { type: "object", properties: [], additional_properties: true, semantic: "model_prediction" };
+    case "transcript_segment":
+      return { type: "object", properties: [], additional_properties: true, semantic: "transcript_segment" };
+    case "audio_event":
+      return { type: "object", properties: [], additional_properties: true, semantic: "audio_event" };
+    case "text_event":
+      return { type: "object", properties: [], additional_properties: true, semantic: "text_event" };
+    case "http_request":
+      return { type: "object", properties: [], additional_properties: true, semantic: "http_request" };
+    case "http_response":
+      return { type: "object", properties: [], additional_properties: true, semantic: "http_response" };
+    case "object_value":
+      return { type: "object", properties: [], additional_properties: true };
+    case "data_value":
+      return { type: "any" };
+    case "song_catalog":
+      return { type: "object", properties: [], additional_properties: true, semantic: "song_catalog" };
+    case "data_record":
+      return { type: "object", properties: [], additional_properties: true, semantic: "data_record" };
+    case "data_bucket":
+      return { type: "object", properties: [], additional_properties: true, semantic: "data_bucket" };
+    case "json_report":
+      return { type: "object", properties: [], additional_properties: true, semantic: "json_report" };
+    case "dashboard_view":
+      return { type: "object", properties: [], additional_properties: true, semantic: "dashboard_view" };
+  }
 }
 
 function requiredConstant(name: string): ts.Expression {

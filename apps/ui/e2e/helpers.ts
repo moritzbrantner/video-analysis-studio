@@ -26,7 +26,7 @@ export const exampleWorkflowNames: WorkflowExampleName[] = [
 
 export async function openWorkflowBuilder(page: Page) {
   await page.goto("/workflow");
-  await expect(page).toHaveURL(/\/workflow$/);
+  await expect(page).toHaveURL(/\/workflow(?:\/[^/]+)?$/);
   await expect(page.getByRole("heading", { name: "Workflow Builder" })).toBeVisible();
 }
 

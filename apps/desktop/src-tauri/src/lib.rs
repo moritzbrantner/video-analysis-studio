@@ -3,10 +3,11 @@ mod commands;
 use std::path::PathBuf;
 
 use commands::{
-    cancel_run, check_dependencies, discover_youtube_collection_manifest_command, get_report,
-    get_run, get_run_events, get_workflow_catalog, import_song_catalog_items,
+    cancel_run, check_dependencies, create_data_source, create_data_source_derivation,
+    delete_data_source, discover_youtube_collection_manifest_command, get_report, get_run,
+    get_run_events, get_workflow_catalog, import_song_catalog_items, list_data_sources,
     start_song_analysis_run, start_subtitle_generation_run, start_youtube_collection_run,
-    start_youtube_video_run, StudioState,
+    start_youtube_video_run, update_data_source, StudioState,
 };
 use studio_core::RunManager;
 use tauri::Manager;
@@ -28,6 +29,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             check_dependencies,
             get_workflow_catalog,
+            list_data_sources,
+            create_data_source,
+            update_data_source,
+            delete_data_source,
+            create_data_source_derivation,
             discover_youtube_collection_manifest_command,
             start_youtube_video_run,
             start_youtube_collection_run,

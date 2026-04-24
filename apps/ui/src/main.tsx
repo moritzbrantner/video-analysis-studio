@@ -48,6 +48,17 @@ import {
 } from "./ResultPageEditor";
 import { ReportDashboard, type ReportDashboardMode } from "./dashboard";
 import {
+  clearLegacyLocalDataSources,
+  dataSourceKindLabel,
+  loadLegacyLocalDataSources,
+} from "./data-sources/types";
+import { DataSourcesPage as WorkspaceDataSourcesPage } from "./data-sources/page";
+import { collectDataSourceReferences } from "./data-sources/references";
+import {
+  DataSourceDerivationInput,
+  DataSourceOrigin,
+  DataSourceRecord,
+  DataSourceUpsert,
   getWorkflowClient,
   isSongAnalysisReport,
   isSubtitleGenerationReport,
@@ -59,14 +70,20 @@ import {
   type RunStatus,
   type SystemDependencyReport,
   type WorkflowCatalog as RustWorkflowCatalog,
+  type WorkflowInputSurface,
+  type WorkflowRuntimeValidation,
+  type WorkflowSemanticKind,
+  type PortKind as RustPortKind,
   type PortSpec as RustPortSpec,
   type WorkflowTypeSpec,
   type YoutubeRunRequest,
 } from "./api/client";
 import {
+  describeWorkflowRuntimeValue,
   formatWorkflowTypeSpec,
   formatWorkflowTypeSpecJson,
   isWorkflowTypeSpec,
+  validateWorkflowValue,
   workflowTypeSignature,
   workflowTypesAssignable,
 } from "./workflowTypeSpec";
@@ -74,15 +91,20 @@ import {
 type WorkflowKindId = "youtube-video" | "youtube-collection" | "song-analysis" | "subtitle-generation";
 type SourceMode = "url" | "file" | "collection";
 type AppPage = "analysis" | "workflow" | "data-sources" | "settings";
-type ViewMode = "run" | ReportDashboardMode;
-type DataSourceFormat = "sqlite" | "json" | "csv" | "txt" | "folder" | "api" | "other";
-type JsonSchemaScalar = "string" | "number" | "boolean" | "null" | "any";
+interface AppLocation {
+  page: AppPage;
+  workflowId: string | null;
+}
+type ViewMode = "home" | "run" | ReportDashboardMode;
+type JsonSchemaScalar = "number" | "boolean" | "null" | "any";
 
 type DataSourceSchema =
   | { type: "port"; portType: DataSourceType }
-  | { type: "binary"; mediaType: string; portType: DataSourceType }
-  | { type: "array"; items: DataSourceSchema }
-  | { type: "object"; properties: DataSourceSchemaProperty[] }
+  | { type: "string"; semantic?: WorkflowSemanticKind }
+  | { type: "binary"; mediaType: string; portType: DataSourceType; semantic?: WorkflowSemanticKind }
+  | { type: "array"; items: DataSourceSchema; minItems?: number; maxItems?: number }
+  | { type: "object"; properties: DataSourceSchemaProperty[]; additionalProperties?: boolean; semantic?: WorkflowSemanticKind }
+  | { type: "union"; variants: DataSourceSchema[] }
   | { type: JsonSchemaScalar };
 
 interface DataSourceSchemaProperty {
@@ -136,28 +158,7 @@ interface CollectionManifestPreviewState {
   error: string | null;
 }
 
-interface DataSourceEntry {
-  id: string;
-  name: string;
-  format: DataSourceFormat;
-  type: DataSourceSchema;
-  location: string;
-  description: string;
-  tags: string[];
-  body: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-interface DataSourceDraft {
-  name: string;
-  format: DataSourceFormat;
-  type: DataSourceSchema;
-  location: string;
-  description: string;
-  tags: string;
-  body: string;
-}
+type DataSourceEntry = DataSourceRecord;
 
 const workflowKinds: Array<{
   id: WorkflowKindId;
@@ -201,16 +202,6 @@ const exampleWorkflowSeeds: Array<{ kind: WorkflowKindId; name: string }> = [
   { kind: "youtube-collection", name: "YouTube Collection Spot Check" },
   { kind: "song-analysis", name: "Song Analysis Quick Match" },
   { kind: "subtitle-generation", name: "Subtitle SRT Starter" },
-];
-
-const dataSourceFormats: Array<{ id: DataSourceFormat; label: string }> = [
-  { id: "sqlite", label: "SQLite DB" },
-  { id: "json", label: "JSON" },
-  { id: "csv", label: "CSV" },
-  { id: "txt", label: "Text" },
-  { id: "folder", label: "Folder" },
-  { id: "api", label: "API" },
-  { id: "other", label: "Other" },
 ];
 
 const initialForm: WorkflowRunForm = {
@@ -258,23 +249,14 @@ const initialCollectionManifestPreview: CollectionManifestPreviewState = {
 };
 
 const mainSidebarCollapsedStorageKey = "video-analysis.mainSidebarCollapsed.v1";
-const initialDataSourceDraft: DataSourceDraft = {
-  name: "",
-  format: "json",
-  type: { type: "any" },
-  location: "",
-  description: "",
-  tags: "",
-  body: "",
-};
-
 function App() {
   const [form, setForm] = useState<WorkflowRunForm>(initialForm);
   const [report, setReport] = useState<StudioReport>(sampleReport);
+  const [hasLoadedReport, setHasLoadedReport] = useState(false);
   const [page, setPage] = useState<AppPage>(() =>
-    typeof window === "undefined" ? "analysis" : appPageFromPath(window.location.pathname),
+    typeof window === "undefined" ? "analysis" : appLocationFromPath(window.location.pathname).page,
   );
-  const [viewMode, setViewMode] = useState<ViewMode>("overview");
+  const [viewMode, setViewMode] = useState<ViewMode>("home");
   const [runStatus, setRunStatus] = useState<CliRun["status"]>("pending");
   const [lastRun, setLastRun] = useState<CliRun | null>(null);
   const [runOutput, setRunOutput] = useState<{ stdout?: string; stderr?: string }>({});
@@ -288,7 +270,9 @@ function App() {
   const [dashboardLayout, setDashboardLayout] = useState<DashboardLayout>(defaultDashboardLayout);
   const [workflowLibrary, setWorkflowLibrary] = useState<SavedWorkflowLibrary>(loadSavedWorkflowLibrary);
   const [workflowRuns, setWorkflowRuns] = useState<SavedWorkflowRun[]>(loadSavedWorkflowRuns);
-  const [dataSources, setDataSources] = useState<DataSourceEntry[]>(loadSavedDataSources);
+  const [dataSources, setDataSources] = useState<DataSourceEntry[]>([]);
+  const [dataSourcesLoading, setDataSourcesLoading] = useState(true);
+  const [legacyLocalDataSources, setLegacyLocalDataSources] = useState(() => loadLegacyLocalDataSources());
   const [workflowCatalog, setWorkflowCatalog] = useState<RustWorkflowCatalog | null>(null);
   const [portTypeColors, setPortTypeColors] = useState<PortTypeColors>(loadPortTypeColors);
   const [hotkeyBindings, setHotkeyBindings] = useState<HotkeyBindings>(loadHotkeyBindings);
@@ -298,37 +282,39 @@ function App() {
   );
 
   const activeWorkflow = useMemo(() => activeSavedWorkflow(workflowLibrary), [workflowLibrary]);
+  const dataSourceReferences = useMemo(() => collectDataSourceReferences(workflowLibrary), [workflowLibrary]);
   const selectedWorkflowKind = activeWorkflow.kind;
   const activeWorkflowInputModel = useMemo(() => deriveWorkflowRunInputModel(activeWorkflow), [activeWorkflow]);
-  const command = useMemo(() => buildCommand(form, activeWorkflowInputModel, selectedWorkflowKind), [form, activeWorkflowInputModel, selectedWorkflowKind]);
   const validationMessage = getRunValidation(form, activeWorkflowInputModel, selectedWorkflowKind);
-  const songReport = isSongAnalysisReport(report) ? report : null;
-  const subtitleReport = isSubtitleGenerationReport(report) ? report : null;
-  const collectionReport = isYoutubeCollectionReport(report) ? report : null;
-  const videoReport = isYoutubeVideoReport(report)
-    ? report
-    : collectionReport?.items.find((item) => item.report)?.report ?? sampleReport;
+  const activeReport = hasLoadedReport ? report : null;
+  const songReport = activeReport && isSongAnalysisReport(activeReport) ? activeReport : null;
+  const subtitleReport = activeReport && isSubtitleGenerationReport(activeReport) ? activeReport : null;
+  const collectionReport = activeReport && isYoutubeCollectionReport(activeReport) ? activeReport : null;
+  const videoReport = activeReport && isYoutubeVideoReport(activeReport)
+    ? activeReport
+    : collectionReport?.items.find((item) => item.report)?.report ?? null;
   const reportTitle = collectionReport
     ? collectionReport.collection.title ?? collectionReport.collection.source_url
     : songReport
       ? songReport.identification.top_match?.title ?? songReport.source.local_media
     : subtitleReport
       ? subtitleReport.subtitle.path
-    : videoReport.source.local_video;
-  const cliRun: CliRun =
-    lastRun ?? {
-      command: "studio-api",
-      args: [activeWorkflow.name, "youtube-video"],
-      status: runStatus,
-      exit_code: runStatus === "succeeded" ? 0 : null,
-      output_files: [form.output],
-      message:
-        runStatus === "running"
-          ? `Running ${activeWorkflow.name}`
-          : selectedWorkflowKind === "youtube-video"
-            ? activeWorkflow.name
-            : null,
-    };
+      : videoReport?.source.local_video ?? "No report loaded";
+  const cliRun = lastRun;
+  const analysisViewOptions: Array<[ViewMode, string]> = hasLoadedReport
+    ? [
+        ["home", "Home"],
+        ["run", "New Run"],
+        ["overview", "Overview"],
+        ["result", "Result"],
+        ["scenes", "Scenes"],
+        ["signals", "Signals"],
+        ["data", "Data"],
+      ]
+    : [
+        ["home", "Home"],
+        ["run", "New Run"],
+      ];
 
   useEffect(() => {
     persistStoredBoolean(mainSidebarCollapsedStorageKey, mainSidebarCollapsed);
@@ -362,33 +348,213 @@ function App() {
   }, [hotkeyBindings]);
 
   useEffect(() => {
-    persistSavedDataSources(dataSources);
-  }, [dataSources]);
+    let canceled = false;
+    setDataSourcesLoading(true);
+    getWorkflowClient()
+      .listDataSources()
+      .then((records) => {
+        if (!canceled) {
+          setDataSources(records);
+          setDataSourcesLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!canceled) {
+          setDataSources([]);
+          setDataSourcesLoading(false);
+        }
+      });
+    return () => {
+      canceled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
-    const onPopState = () => setPage(appPageFromPath(window.location.pathname));
+    const onPopState = () => {
+      const nextLocation = appLocationFromPath(window.location.pathname);
+      setPage(nextLocation.page);
+      const nextWorkflowId = nextLocation.workflowId;
+      if (!nextWorkflowId) {
+        return;
+      }
+      setWorkflowLibrary((currentLibrary) => {
+        if (!currentLibrary.workflows.some((workflow) => workflow.id === nextWorkflowId)) {
+          return currentLibrary;
+        }
+        if (currentLibrary.activeWorkflowId === nextWorkflowId) {
+          return currentLibrary;
+        }
+        const nextLibrary = {
+          ...currentLibrary,
+          activeWorkflowId: nextWorkflowId,
+        };
+        persistSavedWorkflowLibrary(nextLibrary);
+        return nextLibrary;
+      });
+    };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  const navigateToPage = useCallback((nextPage: AppPage) => {
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const expectedPath = pathForAppPage(page, activeWorkflow.id);
+    if (window.location.pathname !== expectedPath) {
+      window.history.replaceState({}, "", expectedPath);
+    }
+  }, [activeWorkflow.id, page]);
+
+  const navigateToPage = useCallback((nextPage: AppPage, options?: { workflowId?: string | null; history?: "push" | "replace" }) => {
     setPage(nextPage);
     if (typeof window === "undefined") {
       return;
     }
-    const nextPath = pathForAppPage(nextPage);
+    const nextPath = pathForAppPage(nextPage, options?.workflowId ?? activeWorkflow.id);
     if (window.location.pathname !== nextPath) {
-      window.history.pushState({}, "", nextPath);
+      const method = options?.history === "replace" ? "replaceState" : "pushState";
+      window.history[method]({}, "", nextPath);
     }
+  }, [activeWorkflow.id]);
+
+  const loadSampleReport = useCallback(() => {
+    setReport(sampleReport);
+    setHasLoadedReport(true);
+    setActiveReportRunId(null);
+    setRunStatus("pending");
+    setLastRun(null);
+    setRunOutput({});
+    setActiveBackendRunId(null);
+    setActiveRunRecord(null);
+    setRunEvents([]);
+    setViewMode("overview");
+  }, []);
+
+  const loadReport = useCallback((nextReport: StudioReport) => {
+    setReport(nextReport);
+    setHasLoadedReport(true);
+    setActiveReportRunId(null);
+    setRunStatus("pending");
+    setLastRun(null);
+    setRunOutput({});
+    setActiveBackendRunId(null);
+    setActiveRunRecord(null);
+    setRunEvents([]);
+    setViewMode("overview");
   }, []);
 
   const commitWorkflowLibrary = useCallback((library: SavedWorkflowLibrary) => {
     persistSavedWorkflowLibrary(library);
     setWorkflowLibrary(library);
   }, []);
+
+  const reloadDataSources = useCallback(async () => {
+    const records = await getWorkflowClient().listDataSources();
+    setDataSources(records);
+    setDataSourcesLoading(false);
+    return records;
+  }, []);
+
+  const createWorkspaceDataSource = useCallback(async (request: DataSourceUpsert) => {
+    const created = await getWorkflowClient().createDataSource(request);
+    await reloadDataSources();
+    return created;
+  }, [reloadDataSources]);
+
+  const updateWorkspaceDataSource = useCallback(async (currentId: string, request: DataSourceUpsert) => {
+    const updated = await getWorkflowClient().updateDataSource(currentId, request);
+    if (currentId !== updated.id) {
+      setWorkflowLibrary((currentLibrary) => renameWorkflowLibraryDataSourceId(currentLibrary, currentId, updated.id));
+    }
+    await reloadDataSources();
+    return updated;
+  }, [reloadDataSources]);
+
+  const deleteWorkspaceDataSource = useCallback(async (id: string) => {
+    await getWorkflowClient().deleteDataSource(id);
+    await reloadDataSources();
+  }, [reloadDataSources]);
+
+  const createWorkspaceDataSourceDerivation = useCallback(
+    async (parentId: string, request: DataSourceDerivationInput) => {
+      const created = await getWorkflowClient().createDataSourceDerivation(parentId, request);
+      await reloadDataSources();
+      return created;
+    },
+    [reloadDataSources],
+  );
+
+  const importLegacyLocalDataSourcesToWorkspace = useCallback(async () => {
+    if (legacyLocalDataSources.length === 0) {
+      return;
+    }
+    const client = getWorkflowClient();
+    const existingIds = new Set((await client.listDataSources()).map((record) => record.id));
+    const importedIdMap = new Map<string, string>();
+    const roots = legacyLocalDataSources.filter((record) => record.origin.mode === "root");
+    const derived = legacyLocalDataSources.filter(isDerivedOriginRecord);
+    for (const record of roots) {
+      let nextId = record.id;
+      let duplicateIndex = 2;
+      while (existingIds.has(nextId)) {
+        nextId = `${record.id}-${duplicateIndex}`;
+        duplicateIndex += 1;
+      }
+      const created = await client.createDataSource({
+        id: nextId,
+        name: record.name,
+        kind: record.kind,
+        type: record.type,
+        location: record.location,
+        description: record.description,
+        tags: record.tags,
+        body: record.body,
+      });
+      existingIds.add(created.id);
+      importedIdMap.set(record.id, created.id);
+    }
+    const pending = [...derived];
+    while (pending.length > 0) {
+      let progressed = false;
+      for (let index = 0; index < pending.length; index += 1) {
+        const record = pending[index];
+        const parentId = importedIdMap.get(record.origin.parent_id) ?? record.origin.parent_id;
+        if (!existingIds.has(parentId)) {
+          continue;
+        }
+        let nextId = record.id;
+        let duplicateIndex = 2;
+        while (existingIds.has(nextId)) {
+          nextId = `${record.id}-${duplicateIndex}`;
+          duplicateIndex += 1;
+        }
+        const created = await client.createDataSourceDerivation(parentId, {
+          id: nextId,
+          name: record.name,
+          type: record.type,
+          description: record.description,
+          tags: record.tags,
+          derivation_kind: record.origin.derivation_kind,
+          summary: record.origin.summary,
+        });
+        existingIds.add(created.id);
+        importedIdMap.set(record.id, created.id);
+        pending.splice(index, 1);
+        index -= 1;
+        progressed = true;
+      }
+      if (!progressed) {
+        throw new Error("Legacy data sources include derivations with missing parents.");
+      }
+    }
+    clearLegacyLocalDataSources();
+    setLegacyLocalDataSources([]);
+    await reloadDataSources();
+  }, [legacyLocalDataSources, reloadDataSources]);
 
   const activateWorkflowDefinition = useCallback(
     (workflowId: string) => {
@@ -411,7 +577,7 @@ function App() {
   const selectWorkflowDefinition = useCallback(
     (workflowId: string) => {
       activateWorkflowDefinition(workflowId);
-      navigateToPage("workflow");
+      navigateToPage("workflow", { workflowId });
     },
     [activateWorkflowDefinition, navigateToPage],
   );
@@ -423,7 +589,7 @@ function App() {
       activeWorkflowId: workflow.id,
       workflows: [workflow, ...workflowLibrary.workflows],
     });
-    navigateToPage("workflow");
+    navigateToPage("workflow", { workflowId: workflow.id });
   }, [activeWorkflow.kind, commitWorkflowLibrary, navigateToPage, workflowLibrary]);
 
   const startNewWorkflowRun = useCallback(() => {
@@ -453,7 +619,7 @@ function App() {
         portId: input.port.id,
         portType: input.port.type,
       });
-      navigateToPage("workflow");
+      navigateToPage("workflow", { workflowId: activeWorkflow.id });
     },
     [activeWorkflow.id, navigateToPage],
   );
@@ -479,7 +645,7 @@ function App() {
         activeWorkflowId: nextActiveWorkflow.id,
         workflows: nextWorkflows,
       });
-      navigateToPage("workflow");
+      navigateToPage("workflow", { workflowId: nextActiveWorkflow.id, history: "replace" });
     },
     [activeWorkflow, commitWorkflowLibrary, navigateToPage, workflowLibrary],
   );
@@ -671,6 +837,7 @@ function App() {
           ? await client.getSongAnalysisReport(record.run_id)
         : await client.getYoutubeVideoReport(record.run_id),
     );
+    setHasLoadedReport(true);
     setActiveReportRunId(record.run_id);
     setViewMode("overview");
   }, [activeBackendRunId, activeRunRecord, activeWorkflowInputModel, form, workflowRuns]);
@@ -762,6 +929,7 @@ function App() {
             ? await client.getSongAnalysisReport(finalRun.run_id)
           : await client.getYoutubeVideoReport(finalRun.run_id),
       );
+      setHasLoadedReport(true);
       setActiveReportRunId(finalRun.run_id);
       setRunStatus("succeeded");
       setActiveRunRecord(finalRun);
@@ -1029,25 +1197,33 @@ function App() {
                 )}
               </div>
             </div>
-            {!mainSidebarCollapsed && (
-              <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
-                <img
-                  src="/goldeneye-stats.png"
-                  alt="Scene metrics preview"
-                  className="aspect-[16/9] w-full rounded-md object-cover"
-                />
-                <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-zinc-600">
-                  <Metric
-                    label={songReport ? "Segments" : collectionReport ? "Items" : "Scenes"}
-                    value={String(songReport ? songReport.music.segments.length : collectionReport?.items.length ?? videoReport.video.scenes.length)}
+            {!mainSidebarCollapsed &&
+              (hasLoadedReport && (songReport || collectionReport || videoReport) ? (
+                <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+                  <img
+                    src="/goldeneye-stats.png"
+                    alt="Scene metrics preview"
+                    className="aspect-[16/9] w-full rounded-md object-cover"
                   />
-                  <Metric
-                    label={songReport ? "Matches" : collectionReport ? "Analyzed" : "Frames"}
-                    value={String(songReport ? songReport.identification.candidates.length : collectionReport?.collection.analyzed_items ?? videoReport.video.frames_processed)}
-                  />
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-zinc-600">
+                    <Metric
+                      label={songReport ? "Segments" : collectionReport ? "Items" : "Scenes"}
+                      value={String(songReport ? songReport.music.segments.length : collectionReport?.items.length ?? videoReport?.video.scenes.length ?? 0)}
+                    />
+                    <Metric
+                      label={songReport ? "Matches" : collectionReport ? "Analyzed" : "Frames"}
+                      value={String(songReport ? songReport.identification.candidates.length : collectionReport?.collection.analyzed_items ?? videoReport?.video.frames_processed ?? 0)}
+                    />
+                  </div>
                 </div>
-              </div>
-            )}
+              ) : (
+                <div className="rounded-lg border border-dashed border-zinc-200 bg-zinc-50 p-3">
+                  <div className="text-sm font-medium text-zinc-900">No active report</div>
+                  <p className="mt-1 text-xs leading-5 text-zinc-500">
+                    Start a run, load a report JSON, or open a saved run from the sidebar.
+                  </p>
+                </div>
+              ))}
           </div>
         </aside>
 
@@ -1063,7 +1239,9 @@ function App() {
                         ? "Data Sources"
                       : page === "settings"
                         ? "Settings"
-                        : activeWorkflow.name}
+                        : viewMode === "home"
+                          ? "Video Analysis Studio"
+                          : activeWorkflow.name}
                   </h1>
                   <p className="mt-1 text-sm text-zinc-500">
                     {page === "workflow"
@@ -1072,7 +1250,11 @@ function App() {
                         ? "Catalogs, indices, references, and datasets for workflow nodes"
                       : page === "settings"
                         ? "Hotkeys and workflow type colors"
-                        : `${workflowKindName(activeWorkflow.kind)} · ${reportTitle}`}
+                        : viewMode === "home"
+                          ? "Start a workflow run, load a report JSON, or open a saved run."
+                          : hasLoadedReport
+                            ? `${workflowKindName(activeWorkflow.kind)} · ${reportTitle}`
+                            : workflowKindName(activeWorkflow.kind)}
                   </p>
                 </div>
                 {page === "analysis" && (
@@ -1080,40 +1262,22 @@ function App() {
                     <IconButton
                       icon={<RefreshIcon className="h-4 w-4" />}
                       label="Sample"
-                      onClick={() => {
-                        setReport(sampleReport);
-                        setActiveReportRunId(null);
-                        setRunStatus("succeeded");
-                        setLastRun({
-                          command: "cargo",
-                          args: command.slice(1),
-                          status: "succeeded",
-                          exit_code: 0,
-                          output_files: [form.output],
-                          message: "sample report loaded",
-                        });
-                        setRunOutput({});
-                      }}
+                      onClick={loadSampleReport}
                     />
-                    <IconButton
-                      icon={<DownloadIcon className="h-4 w-4" />}
-                      label="JSON"
-                      onClick={() => downloadReport(report)}
-                    />
+                    {hasLoadedReport && (
+                      <IconButton
+                        icon={<DownloadIcon className="h-4 w-4" />}
+                        label="JSON"
+                        onClick={() => downloadReport(report)}
+                      />
+                    )}
                   </div>
                 )}
               </div>
               {page === "analysis" && (
                 <SegmentedControl<ViewMode>
                   value={viewMode}
-                  options={[
-                    ["overview", "Overview"],
-                    ["run", "New Run"],
-                    ["result", "Result"],
-                    ["scenes", "Scenes"],
-                    ["signals", "Signals"],
-                    ["data", "Data"],
-                  ]}
+                  options={analysisViewOptions}
                   onChange={setViewMode}
                 />
               )}
@@ -1132,7 +1296,21 @@ function App() {
                 focusTarget={workflowFocusTarget?.workflowId === activeWorkflow.id ? workflowFocusTarget : null}
               />
             ) : page === "data-sources" ? (
-              <DataSourcesPage dataSources={dataSources} onDataSourcesChange={setDataSources} />
+              <WorkspaceDataSourcesPage
+                dataSources={dataSources}
+                references={dataSourceReferences}
+                loading={dataSourcesLoading}
+                legacyMigrationAvailable={legacyLocalDataSources.length > 0}
+                onImportLegacy={importLegacyLocalDataSourcesToWorkspace}
+                onCreateDataSource={createWorkspaceDataSource}
+                onUpdateDataSource={updateWorkspaceDataSource}
+                onDeleteDataSource={deleteWorkspaceDataSource}
+                onCreateDataSourceDerivation={createWorkspaceDataSourceDerivation}
+                onOpenWorkflow={(workflowId) => {
+                  activateWorkflowDefinition(workflowId);
+                  navigateToPage("workflow", { workflowId });
+                }}
+              />
             ) : page === "settings" ? (
               <SettingsPage
                 portTypeColors={portTypeColors}
@@ -1151,6 +1329,14 @@ function App() {
                   }))
                 }
                 onResetHotkeys={() => setHotkeyBindings(defaultHotkeyBindings)}
+              />
+            ) : viewMode === "home" ? (
+              <AnalysisHomePage
+                activeWorkflow={activeWorkflow}
+                onStartRun={() => setViewMode("run")}
+                onEditWorkflow={() => navigateToPage("workflow")}
+                onLoadSample={loadSampleReport}
+                onLoadReport={loadReport}
               />
             ) : viewMode === "run" ? (
               <RunWorkspace
@@ -1183,20 +1369,7 @@ function App() {
                 onCollectionManifestSelectionChange={(selectedItemIds) =>
                   setCollectionManifestPreview((current) => ({ ...current, selectedItemIds }))
                 }
-                onLoadReport={(nextReport) => {
-                  setReport(nextReport);
-                  setActiveReportRunId(null);
-                  setRunStatus("succeeded");
-                  setLastRun({
-                    command: "cargo",
-                    args: command.slice(1),
-                    status: "succeeded",
-                    exit_code: 0,
-                    output_files: [form.output],
-                    message: "report JSON loaded",
-                  });
-                  setRunOutput({});
-                }}
+                onLoadReport={loadReport}
               />
             ) : (
               <ReportDashboard
@@ -1212,6 +1385,12 @@ function App() {
       </div>
     </main>
   );
+}
+
+function isDerivedOriginRecord<T extends { origin: DataSourceOrigin }>(
+  record: T,
+): record is T & { origin: Extract<DataSourceOrigin, { mode: "derived_view" }> } {
+  return record.origin.mode === "derived_view";
 }
 
 function RunWorkspace({
@@ -1248,7 +1427,7 @@ function RunWorkspace({
   isRunning: boolean;
   runDisabled: boolean;
   validationMessage: string | null;
-  cliRun: CliRun;
+  cliRun: CliRun | null;
   runOutput: { stdout?: string; stderr?: string };
   activeRunId: string | null;
   activeRunRecord: RunRecord | null;
@@ -1321,6 +1500,84 @@ function RunWorkspace({
       <section className="min-w-0 space-y-4">
         <CliRunPanel run={cliRun} />
         <RunEventTimeline events={runEvents} stdout={runOutput.stdout} stderr={runOutput.stderr} />
+      </section>
+    </div>
+  );
+}
+
+function AnalysisHomePage({
+  activeWorkflow,
+  onStartRun,
+  onEditWorkflow,
+  onLoadSample,
+  onLoadReport,
+}: {
+  activeWorkflow: SavedWorkflow;
+  onStartRun: () => void;
+  onEditWorkflow: () => void;
+  onLoadSample: () => void;
+  onLoadReport: (report: StudioReport) => void;
+}) {
+  return (
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_380px]">
+      <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+        <span className="inline-flex rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-medium uppercase tracking-[0.16em] text-zinc-600">
+          Home
+        </span>
+        <h2 className="mt-4 text-3xl font-semibold tracking-tight text-zinc-950">Start from a real run or a real report.</h2>
+        <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-600">
+          The analysis workspace stays empty until you start a workflow, load report JSON, or open a saved run. Nothing on this page represents an executed command yet.
+        </p>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <button
+            type="button"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-zinc-950 px-4 text-sm font-medium text-white shadow-sm hover:bg-zinc-800"
+            onClick={onStartRun}
+          >
+            <RunIcon className="h-4 w-4" />
+            New Run
+          </button>
+          <button
+            type="button"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-4 text-sm font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+            onClick={onEditWorkflow}
+          >
+            <WorkflowIcon className="h-4 w-4" />
+            Edit Workflow
+          </button>
+          <button
+            type="button"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-4 text-sm font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+            onClick={onLoadSample}
+          >
+            <RefreshIcon className="h-4 w-4" />
+            Load Sample
+          </button>
+        </div>
+        <div className="mt-6 grid gap-3 sm:grid-cols-2">
+          <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Selected Workflow</div>
+            <div className="mt-2 text-lg font-semibold text-zinc-950">{activeWorkflow.name}</div>
+            <div className="mt-1 text-sm text-zinc-500">
+              {workflowKindName(activeWorkflow.kind)} · v{activeWorkflow.version}
+            </div>
+          </div>
+          <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Saved Runs</div>
+            <div className="mt-2 text-sm leading-6 text-zinc-600">
+              Open any run from the left sidebar to restore its inputs, status, and backend events.
+            </div>
+          </div>
+        </div>
+      </section>
+      <section className="space-y-4">
+        <JsonReportLoader<StudioReport> label="Load report JSON" onLoad={onLoadReport} />
+        <section className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
+          <h2 className="text-sm font-semibold text-zinc-950">What appears here</h2>
+          <p className="mt-2 text-sm leading-6 text-zinc-600">
+            CLI output only appears after you run a workflow. Report dashboards only appear after a report is loaded or generated.
+          </p>
+        </section>
       </section>
     </div>
   );
@@ -1563,7 +1820,7 @@ type WorkflowComponentCategory =
   | "Control Flow"
   | "Reusable";
 type WorkflowBlockCategoryDraft = WorkflowComponentCategory | "Auto";
-type PortType =
+type PortPresentationKind =
   | "run_request"
   | "run_config"
   | "template_string"
@@ -1574,6 +1831,10 @@ type PortType =
   | "youtube_url"
   | "youtube_collection_url"
   | "video_file"
+  | "audio_file"
+  | "media_file"
+  | "transcript"
+  | "subtitle_file"
   | "collection_manifest"
   | "collection_item"
   | "collection_report"
@@ -1599,19 +1860,29 @@ type PortType =
   | "data_record"
   | "data_bucket"
   | "json_report"
-  | "dashboard_view";
-type DataSourceType = PortType;
+  | "dashboard_view"
+  | "song_catalog";
+type PortType = PortPresentationKind;
+type DataSourceType = PortPresentationKind;
 
 interface FlowPort {
   id: string;
   label: string;
   type: PortType;
+  kind?: RustPortKind;
   valueType: WorkflowTypeSpec;
   optional?: boolean;
   stream?: boolean;
+  exposableInput?: boolean;
+  inputSurface?: WorkflowInputSurface;
+  suggestedAdapters?: string[];
+  runtimeValidation?: WorkflowRuntimeValidation;
 }
 
-type FlowPortOptions = Pick<FlowPort, "optional" | "stream"> & { valueType?: WorkflowTypeSpec };
+type FlowPortOptions = Pick<
+  FlowPort,
+  "optional" | "stream" | "kind" | "exposableInput" | "inputSurface" | "suggestedAdapters" | "runtimeValidation"
+> & { valueType?: WorkflowTypeSpec };
 
 interface WorkflowNodeSize {
   width: number;
@@ -1629,7 +1900,7 @@ interface WorkflowRunInput {
 interface WorkflowRunInputModel {
   inputs: WorkflowRunInput[];
   sourceModes: SourceMode[];
-  showRunConfig: boolean;
+  configInputs: WorkflowRunInput[];
   openInputs: WorkflowRunInput[];
   genericInputs: WorkflowRunInput[];
 }
@@ -1829,6 +2100,24 @@ interface WorkflowLayoutEdge {
   target: string;
 }
 
+interface WorkflowSeedNodeLayout {
+  id: string;
+  x: number;
+  y: number;
+}
+
+interface WorkflowSeedEdgeLayout {
+  source: string;
+  sourcePortId: string;
+  target: string;
+  targetPortId: string;
+}
+
+interface WorkflowSeedTemplate {
+  nodes: WorkflowSeedNodeLayout[];
+  edges: WorkflowSeedEdgeLayout[];
+}
+
 interface WorkflowLayoutSize {
   width: number;
   height: number;
@@ -1849,16 +2138,12 @@ const savedWorkflowsStorageKey = "video-analysis.workflows.v1";
 const savedWorkflowRunsStorageKey = "video-analysis.workflowRuns.v1";
 const savedWorkflowBlocksStorageKey = "video-analysis.workflowBlocks.v1";
 const savedWorkflowBlocksJsonFormat = "video-analysis.workflowBlocks";
-const savedDataSourcesStorageKey = "video-analysis.dataSources.v1";
-const savedDataSourcesJsonFormat = "video-analysis.dataSources";
-const savedDataSourcesJsonVersion = 1;
 const portTypeColorsStorageKey = "video-analysis.portTypeColors.v1";
 const hotkeyBindingsStorageKey = "video-analysis.hotkeys.v1";
 const defaultSeedWorkflowName = "YouTube Video Workflow";
 const legacySeedWorkflowName = "YouTube Analysis Workflow";
 const legacySeedWorkflowNames = new Set([legacySeedWorkflowName, "Default Analysis Pipeline"]);
 const maxSavedWorkflowVersions = 25;
-const maxSavedDataSources = 200;
 const defaultWorkflowNodeWidth = 310;
 const defaultWorkflowGroupHeight = 190;
 const inlineWorkflowNodeWidth = 240;
@@ -1884,6 +2169,10 @@ const portTypes: PortType[] = [
   "youtube_url",
   "youtube_collection_url",
   "video_file",
+  "audio_file",
+  "media_file",
+  "transcript",
+  "subtitle_file",
   "collection_manifest",
   "collection_item",
   "collection_report",
@@ -1910,6 +2199,7 @@ const portTypes: PortType[] = [
   "data_bucket",
   "json_report",
   "dashboard_view",
+  "song_catalog",
 ];
 
 const defaultPortTypeColors: PortTypeColors = {
@@ -1923,6 +2213,10 @@ const defaultPortTypeColors: PortTypeColors = {
   youtube_url: "#0ea5e9",
   youtube_collection_url: "#0284c7",
   video_file: "#f59e0b",
+  audio_file: "#06b6d4",
+  media_file: "#0f766e",
+  transcript: "#4f46e5",
+  subtitle_file: "#7c3aed",
   collection_manifest: "#0f766e",
   collection_item: "#059669",
   collection_report: "#2563eb",
@@ -1949,59 +2243,12 @@ const defaultPortTypeColors: PortTypeColors = {
   data_bucket: "#475569",
   json_report: "#0284c7",
   dashboard_view: "#2563eb",
+  song_catalog: "#ea580c",
 };
 
-const dataValueCompatibleSourceTypes: PortType[] = [
-  "string_value",
-  "number_value",
-  "boolean_value",
-  "array_value",
-  "object_value",
-  "collection_manifest",
-  "collection_item",
-  "collection_report",
-  "collection_table",
-  "data_value",
-  "data_record",
-  "data_bucket",
-  "json_report",
-  "video_metadata",
-  "scene_result",
-  "song_fingerprint",
-  "song_match",
-  "music_feature",
-  "video_observation",
-  "model_prediction",
-  "transcript_segment",
-  "audio_event",
-  "text_event",
-  "http_request",
-  "http_response",
-];
-
-const dataSourceOutputTypes: DataSourceType[] = dataValueCompatibleSourceTypes;
-
-const streamablePortTypes: PortType[] = [
-  "collection_item",
-  "video_file",
-  "video_frame",
-  "audio_frame",
-  "song_fingerprint",
-  "song_match",
-  "music_feature",
-  "scene_result",
-  "video_observation",
-  "model_request",
-  "model_prediction",
-  "transcript_segment",
-  "audio_event",
-  "text_event",
-  "http_request",
-  "http_response",
-  "data_value",
-  "data_record",
-  "data_bucket",
-];
+const dataSourceOutputTypes: DataSourceType[] = portTypes.filter(
+  (type) => type !== "run_request" && type !== "dashboard_view",
+);
 
 const streamBridgePortDescriptors: Array<{ id: string; label: string; type: PortType }> = [
   { id: "collection_item", label: "collection items", type: "collection_item" },
@@ -2062,7 +2309,11 @@ const initialWorkflowNodes: WorkflowNodeModel[] = [
     inputs: [port("report", "report", "json_report")],
     outputs: [
       port("run", "run", "run_request"),
-      port("config", "config", "run_config"),
+      port("config", "config", "run_config", {
+        exposableInput: true,
+        inputSurface: "config",
+        runtimeValidation: "external_input",
+      }),
       port("dashboard", "dashboard", "dashboard_view"),
     ],
   }),
@@ -2073,9 +2324,21 @@ const initialWorkflowNodes: WorkflowNodeModel[] = [
     tone: "sky",
     inputs: [],
     outputs: [
-      port("url", "youtube url", "youtube_url"),
-      port("collection", "playlist/channel", "youtube_collection_url"),
-      port("file", "local file", "video_file"),
+      port("url", "youtube url", "youtube_url", {
+        exposableInput: true,
+        inputSurface: "source_url",
+        runtimeValidation: "external_input",
+      }),
+      port("collection", "playlist/channel", "youtube_collection_url", {
+        exposableInput: true,
+        inputSurface: "collection_url",
+        runtimeValidation: "external_input",
+      }),
+      port("file", "local file", "video_file", {
+        exposableInput: true,
+        inputSurface: "file",
+        runtimeValidation: "external_input",
+      }),
     ],
   }),
   workflowNode("vite-api", 360, 190, {
@@ -3012,6 +3275,140 @@ const initialWorkflowEdges: Edge[] = [
   workflowEdge("subtitle-writer", "report", "http-result-sink", "report"),
 ];
 
+const workflowStarterTemplates = {
+  "youtube-video": {
+    nodes: [
+      { id: "youtube-workflow", x: 80, y: 180 },
+      { id: "download", x: 470, y: 180 },
+      { id: "ffmpeg", x: 860, y: 180 },
+      { id: "content-detector", x: 1250, y: 180 },
+    ],
+    edges: [
+      { source: "youtube-workflow", sourcePortId: "url", target: "download", targetPortId: "url" },
+      { source: "youtube-workflow", sourcePortId: "file", target: "ffmpeg", targetPortId: "file" },
+      { source: "download", sourcePortId: "file", target: "ffmpeg", targetPortId: "file" },
+      { source: "youtube-workflow", sourcePortId: "config", target: "content-detector", targetPortId: "config" },
+      { source: "ffmpeg", sourcePortId: "frames", target: "content-detector", targetPortId: "frames" },
+    ],
+  },
+  "youtube-collection": {
+    nodes: [
+      { id: "youtube-workflow", x: 80, y: 180 },
+      { id: "collection-manifest", x: 470, y: 180 },
+      { id: "collection-download-loop", x: 860, y: 180 },
+      { id: "ffmpeg", x: 1250, y: 180 },
+    ],
+    edges: [
+      { source: "youtube-workflow", sourcePortId: "collection", target: "collection-manifest", targetPortId: "url" },
+      { source: "collection-manifest", sourcePortId: "manifest", target: "collection-download-loop", targetPortId: "manifest" },
+      { source: "youtube-workflow", sourcePortId: "config", target: "collection-download-loop", targetPortId: "config" },
+      { source: "collection-download-loop", sourcePortId: "files", target: "ffmpeg", targetPortId: "file" },
+    ],
+  },
+  "song-analysis": {
+    nodes: [
+      { id: "song-workflow", x: 80, y: 180 },
+      { id: "song-fingerprinter", x: 470, y: 120 },
+      { id: "song-catalog-matcher", x: 860, y: 120 },
+      { id: "song-music-analyzer", x: 860, y: 320 },
+    ],
+    edges: [
+      { source: "song-workflow", sourcePortId: "file", target: "song-fingerprinter", targetPortId: "file" },
+      { source: "song-workflow", sourcePortId: "file", target: "song-music-analyzer", targetPortId: "file" },
+      { source: "song-workflow", sourcePortId: "config", target: "song-catalog-matcher", targetPortId: "config" },
+      { source: "song-workflow", sourcePortId: "config", target: "song-music-analyzer", targetPortId: "config" },
+      { source: "song-fingerprinter", sourcePortId: "fingerprint", target: "song-catalog-matcher", targetPortId: "fingerprint" },
+    ],
+  },
+  "subtitle-generation": {
+    nodes: [
+      { id: "subtitle-workflow", x: 80, y: 180 },
+      { id: "download", x: 470, y: 180 },
+      { id: "ffmpeg", x: 860, y: 180 },
+      { id: "transcriber", x: 1250, y: 180 },
+      { id: "subtitle-writer", x: 1640, y: 180 },
+    ],
+    edges: [
+      { source: "subtitle-workflow", sourcePortId: "url", target: "download", targetPortId: "url" },
+      { source: "subtitle-workflow", sourcePortId: "file", target: "ffmpeg", targetPortId: "file" },
+      { source: "download", sourcePortId: "file", target: "ffmpeg", targetPortId: "file" },
+      { source: "ffmpeg", sourcePortId: "wav", target: "transcriber", targetPortId: "wav" },
+      { source: "subtitle-workflow", sourcePortId: "file", target: "subtitle-writer", targetPortId: "file" },
+      { source: "subtitle-workflow", sourcePortId: "config", target: "subtitle-writer", targetPortId: "config" },
+      { source: "transcriber", sourcePortId: "segments", target: "subtitle-writer", targetPortId: "segments" },
+    ],
+  },
+} satisfies Record<WorkflowKindId, WorkflowSeedTemplate>;
+
+// Internal smoke-test fixtures for structural workflow graph coverage only.
+const basicWorkflowTestTemplates: Record<string, WorkflowSeedTemplate> = {
+  "Linear Video Ingest Smoke": {
+    nodes: [
+      { id: "download", x: 80, y: 180 },
+      { id: "ffmpeg", x: 470, y: 180 },
+    ],
+    edges: [{ source: "download", sourcePortId: "file", target: "ffmpeg", targetPortId: "file" }],
+  },
+  "Song Match Fan-In Smoke": {
+    nodes: [
+      { id: "song-workflow", x: 80, y: 180 },
+      { id: "song-fingerprinter", x: 470, y: 120 },
+      { id: "song-catalog-matcher", x: 860, y: 180 },
+    ],
+    edges: [
+      { source: "song-workflow", sourcePortId: "file", target: "song-fingerprinter", targetPortId: "file" },
+      { source: "song-workflow", sourcePortId: "config", target: "song-catalog-matcher", targetPortId: "config" },
+      { source: "song-fingerprinter", sourcePortId: "fingerprint", target: "song-catalog-matcher", targetPortId: "fingerprint" },
+    ],
+  },
+};
+
+const exampleWorkflowStarterTemplates: Record<string, WorkflowSeedTemplate> = {
+  "YouTube Video Quick Review": {
+    nodes: [
+      { id: "download", x: 80, y: 180 },
+      { id: "ffmpeg", x: 470, y: 180 },
+    ],
+    edges: [{ source: "download", sourcePortId: "file", target: "ffmpeg", targetPortId: "file" }],
+  },
+  "YouTube Collection Spot Check": {
+    nodes: [
+      { id: "collection-manifest", x: 80, y: 180 },
+      { id: "collection-download-loop", x: 470, y: 180 },
+    ],
+    edges: [
+      { source: "collection-manifest", sourcePortId: "manifest", target: "collection-download-loop", targetPortId: "manifest" },
+    ],
+  },
+  "Song Analysis Quick Match": {
+    nodes: [
+      { id: "song-workflow", x: 80, y: 180 },
+      { id: "song-fingerprinter", x: 470, y: 180 },
+      { id: "song-catalog-matcher", x: 860, y: 180 },
+    ],
+    edges: [
+      { source: "song-workflow", sourcePortId: "file", target: "song-fingerprinter", targetPortId: "file" },
+      { source: "song-workflow", sourcePortId: "config", target: "song-catalog-matcher", targetPortId: "config" },
+      { source: "song-fingerprinter", sourcePortId: "fingerprint", target: "song-catalog-matcher", targetPortId: "fingerprint" },
+    ],
+  },
+  "Subtitle SRT Starter": {
+    nodes: [
+      { id: "subtitle-workflow", x: 80, y: 180 },
+      { id: "ffmpeg", x: 470, y: 180 },
+      { id: "transcriber", x: 860, y: 180 },
+      { id: "subtitle-writer", x: 1250, y: 180 },
+    ],
+    edges: [
+      { source: "subtitle-workflow", sourcePortId: "file", target: "ffmpeg", targetPortId: "file" },
+      { source: "ffmpeg", sourcePortId: "wav", target: "transcriber", targetPortId: "wav" },
+      { source: "subtitle-workflow", sourcePortId: "file", target: "subtitle-writer", targetPortId: "file" },
+      { source: "subtitle-workflow", sourcePortId: "config", target: "subtitle-writer", targetPortId: "config" },
+      { source: "transcriber", sourcePortId: "segments", target: "subtitle-writer", targetPortId: "segments" },
+    ],
+  },
+};
+
 function WorkflowBuilder({
   workflowLibrary,
   onWorkflowLibraryChange,
@@ -3042,6 +3439,7 @@ function WorkflowBuilder({
   const [blockCategory, setBlockCategory] = useState<WorkflowBlockCategoryDraft>("Auto");
   const [blockTags, setBlockTags] = useState("");
   const [blockLibraryMessage, setBlockLibraryMessage] = useState<string | null>(null);
+  const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<WorkflowContextMenuState | null>(null);
   const [outputConnectorMenu, setOutputConnectorMenu] = useState<WorkflowOutputConnectorMenuState | null>(null);
   const [componentSearch, setComponentSearch] = useState("");
@@ -3177,8 +3575,10 @@ function WorkflowBuilder({
       const sourcePort = findPort(nodes, connection.source, connection.sourceHandle, "out");
       const targetPort = findPort(nodes, connection.target, connection.targetHandle, "in");
       if (!sourcePort || !targetPort || !portsCompatible(sourcePort, targetPort)) {
+        setConnectionMessage(connectionMismatchMessage(sourcePort, targetPort));
         return;
       }
+      setConnectionMessage(null);
       setEdges((currentEdges) =>
         addEdge(
           workflowEdgeFromConnection(connection, sourcePort),
@@ -3194,8 +3594,10 @@ function WorkflowBuilder({
       const sourcePort = findPort(nodes, connection.source, connection.sourceHandle, "out");
       const targetPort = findPort(nodes, connection.target, connection.targetHandle, "in");
       if (!sourcePort || !targetPort || !portsCompatible(sourcePort, targetPort)) {
+        setConnectionMessage(connectionMismatchMessage(sourcePort, targetPort));
         return;
       }
+      setConnectionMessage(null);
       const nextEdge = workflowEdgeFromConnection(connection, sourcePort);
       setEdges((currentEdges) => {
         const withoutOldEdge = currentEdges.filter((edge) => edge.id !== oldEdge.id);
@@ -4195,8 +4597,9 @@ function WorkflowBuilder({
               <button
                 className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
                 onClick={() => {
-                  setNodes(initialWorkflowNodes);
-                  setEdges(initialWorkflowEdges);
+                  const seedState = workflowSeedState(activeWorkflow.kind, activeWorkflow.name);
+                  setNodes(seedState.nodes);
+                  setEdges(seedState.edges);
                   setSelectedNodeIds([]);
                   setContextMenu(null);
                   setOutputConnectorMenu(null);
@@ -4208,6 +4611,11 @@ function WorkflowBuilder({
               </button>
             </div>
           </div>
+          {connectionMessage && (
+            <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+              {connectionMessage}
+            </div>
+          )}
           <div className="h-[720px] min-h-[560px] w-full">
             <ReactFlow<WorkflowNodeModel, Edge>
               nodes={nodes}
@@ -4225,6 +4633,7 @@ function WorkflowBuilder({
               onPaneClick={() => {
                 setContextMenu(null);
                 setOutputConnectorMenu(null);
+                setConnectionMessage(null);
               }}
               onNodeContextMenu={(event, node) => {
                 event.preventDefault();
@@ -4721,6 +5130,8 @@ function WorkflowDetailsPanel({
             {selectedNode.data.dataSourceNode && (
               <DataSourceNodeSettings
                 node={selectedNode}
+                nodes={nodes}
+                edges={edges}
                 dataSources={dataSources}
                 onSelectDataSource={onUpdateSelectedDataSource}
               />
@@ -5109,10 +5520,14 @@ function WorkflowTypeDetails({ spec }: { spec: WorkflowTypeSpec }) {
 
 function DataSourceNodeSettings({
   node,
+  nodes,
+  edges,
   dataSources,
   onSelectDataSource,
 }: {
   node: WorkflowNodeModel;
+  nodes: WorkflowNodeModel[];
+  edges: Edge[];
   dataSources: DataSourceEntry[];
   onSelectDataSource: (nodeId: string, dataSourceId: string | null) => void;
 }) {
@@ -5120,8 +5535,15 @@ function DataSourceNodeSettings({
     typeof node.data.dataSourceId === "string"
       ? dataSources.find((entry) => entry.id === node.data.dataSourceId) ?? null
       : null;
-  const selectedSchema = selectedDataSource?.type ?? portTypeToDataSourceSchema(node.data.dataSourceType ?? "data_value");
-  const selectedType = dataSourcePortType(selectedSchema);
+  const selectedTypeSpec = selectedDataSource?.type ?? workflowTypeForPortType(node.data.dataSourceType ?? "data_value");
+  const selectedType = workflowTypeToPortType(selectedTypeSpec, node.data.dataSourceType ?? "data_value");
+  const sortedDataSources = [...dataSources].sort((left, right) => left.id.localeCompare(right.id));
+  const previewOutput = dataSourceOutputPort(selectedDataSource, selectedType);
+  const downstreamPorts = edges
+    .filter((edge) => edge.source === node.id)
+    .map((edge) => findPort(nodes, edge.target, edge.targetHandle, "in"))
+    .filter((portValue): portValue is FlowPort => Boolean(portValue));
+  const downstreamCompatible = downstreamPorts.every((targetPort) => portsCompatible(previewOutput, targetPort));
 
   return (
     <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
@@ -5132,7 +5554,7 @@ function DataSourceNodeSettings({
           onChange={(event) => onSelectDataSource(node.id, event.target.value || null)}
         >
           <option value="">Unselected</option>
-          {dataSources.map((entry) => (
+          {sortedDataSources.map((entry) => (
             <option key={entry.id} value={entry.id}>
               {entry.id}
             </option>
@@ -5140,12 +5562,24 @@ function DataSourceNodeSettings({
         </select>
       </Field>
       <div className="mt-3 grid grid-cols-2 gap-2">
-        <Metric label="Schema" value={formatDataSourceSchema(selectedSchema)} />
+        <Metric label="Type" value={formatWorkflowTypeSpec(selectedTypeSpec)} />
         <Metric label="Output" value={formatPortType(selectedType)} />
       </div>
       <div className="mt-2 grid grid-cols-1 gap-2">
-        <Metric label="Format" value={selectedDataSource ? dataSourceFormatLabel(selectedDataSource.format) : "none"} />
+        <Metric label="Kind" value={selectedDataSource ? dataSourceKindLabel(selectedDataSource.kind) : "none"} />
       </div>
+      {downstreamPorts.length > 0 && (
+        <div
+          className={classNames(
+            "mt-3 rounded-md border px-3 py-2 text-xs font-medium",
+            downstreamCompatible
+              ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+              : "border-amber-200 bg-amber-50 text-amber-900",
+          )}
+        >
+          Downstream compatibility: {downstreamCompatible ? "compatible" : "incompatible"}
+        </div>
+      )}
       {selectedDataSource && (
         <div className="mt-3 space-y-1 text-xs text-zinc-600">
           <div className="truncate font-medium text-zinc-900" title={selectedDataSource.name}>
@@ -5157,6 +5591,9 @@ function DataSourceNodeSettings({
           <div>
             {selectedDataSource.body.length} body chars · {selectedDataSource.tags.length} tags
           </div>
+          <a className="inline-flex text-xs font-medium text-zinc-900 underline" href="/data-sources">
+            Open in data sources
+          </a>
         </div>
       )}
     </div>
@@ -5235,6 +5672,7 @@ function DataSourceSchemaEditor({
             <option value="binary">Binary</option>
             <option value="array">Array of</option>
             <option value="object">Object</option>
+            <option value="union">Union</option>
             <option value="port">Workflow port type</option>
           </select>
         </Field>
@@ -5293,8 +5731,62 @@ function DataSourceSchemaEditor({
         </div>
       )}
 
+      {schema.type === "union" && (
+        <div className="mt-3 space-y-3">
+          {schema.variants.map((variant, index) => (
+            <div key={`variant-${index}`} className="rounded-lg border border-zinc-200 bg-white p-3">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <div className="text-xs font-semibold uppercase text-zinc-500">Variant {index + 1}</div>
+                <button
+                  type="button"
+                  className="inline-flex h-8 items-center justify-center rounded-lg border border-zinc-300 bg-white px-3 text-zinc-600 hover:bg-zinc-50"
+                  onClick={() =>
+                    onChange({
+                      ...schema,
+                      variants: schema.variants.filter((_, variantIndex) => variantIndex !== index),
+                    })
+                  }
+                  disabled={schema.variants.length <= 1}
+                >
+                  <CloseIcon className="h-4 w-4" />
+                </button>
+              </div>
+              <DataSourceSchemaEditor
+                schema={variant}
+                onChange={(nextVariant) =>
+                  onChange({
+                    ...schema,
+                    variants: schema.variants.map((candidate, candidateIndex) =>
+                      candidateIndex === index ? nextVariant : candidate,
+                    ),
+                  })
+                }
+                depth={depth + 1}
+              />
+            </div>
+          ))}
+          <button
+            type="button"
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+            onClick={() => onChange({ ...schema, variants: [...schema.variants, { type: "any" }] })}
+          >
+            <PlusIcon className="h-4 w-4" />
+            Add Variant
+          </button>
+        </div>
+      )}
+
       {schema.type === "object" && (
         <div className="mt-3 space-y-3">
+          <label className="inline-flex h-10 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-700">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-zinc-300"
+              checked={schema.additionalProperties !== false}
+              onChange={(event) => onChange({ ...schema, additionalProperties: event.target.checked })}
+            />
+            Allow additional properties
+          </label>
           {schema.properties.length === 0 ? (
             <div className="rounded-lg border border-dashed border-zinc-300 bg-white px-3 py-4 text-sm text-zinc-500">
               No properties defined.
@@ -5354,432 +5846,6 @@ function DataSourceSchemaEditor({
           </button>
         </div>
       )}
-    </section>
-  );
-}
-
-function DataSourcesPage({
-  dataSources,
-  onDataSourcesChange,
-}: {
-  dataSources: DataSourceEntry[];
-  onDataSourcesChange: (dataSources: DataSourceEntry[]) => void;
-}) {
-  const [query, setQuery] = useState("");
-  const [activeDataSourceId, setActiveDataSourceId] = useState<string | null>(dataSources[0]?.id ?? null);
-  const [draft, setDraft] = useState<DataSourceDraft>(initialDataSourceDraft);
-  const [schemaText, setSchemaText] = useState(() => formatDataSourceSchemaJson(initialDataSourceDraft.type));
-  const [schemaTextError, setSchemaTextError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const importInputRef = useRef<HTMLInputElement | null>(null);
-
-  const activeDataSource = useMemo(
-    () => dataSources.find((entry) => entry.id === activeDataSourceId) ?? null,
-    [dataSources, activeDataSourceId],
-  );
-  const filteredDataSources = useMemo(
-    () => filterDataSources(dataSources, query),
-    [dataSources, query],
-  );
-  const draftTagCount = useMemo(() => parseDataSourceTags(draft.tags).length, [draft.tags]);
-  const usedSchemaLabels = useMemo(
-    () => Array.from(new Set(dataSources.map((entry) => formatDataSourceSchema(entry.type)))),
-    [dataSources],
-  );
-
-  useEffect(() => {
-    if (dataSources.length === 0) {
-      if (activeDataSourceId !== null) {
-        setActiveDataSourceId(null);
-      }
-      return;
-    }
-    if (!activeDataSourceId || !dataSources.some((entry) => entry.id === activeDataSourceId)) {
-      setActiveDataSourceId(dataSources[0].id);
-    }
-  }, [dataSources, activeDataSourceId]);
-
-  useEffect(() => {
-    const nextDraft = activeDataSource ? dataSourceDraftFromEntry(activeDataSource) : initialDataSourceDraft;
-    setDraft(nextDraft);
-    setSchemaText(formatDataSourceSchemaJson(nextDraft.type));
-    setSchemaTextError(null);
-    setMessage(null);
-  }, [activeDataSource]);
-
-  const updateDraftSchema = useCallback((type: DataSourceSchema) => {
-    setDraft((current) => ({ ...current, type }));
-    setSchemaText(formatDataSourceSchemaJson(type));
-    setSchemaTextError(null);
-  }, []);
-
-  const updateSchemaText = useCallback((value: string) => {
-    setSchemaText(value);
-    try {
-      const type = parseDataSourceSchemaJson(value);
-      setDraft((current) => ({ ...current, type }));
-      setSchemaTextError(null);
-    } catch (error) {
-      setSchemaTextError(error instanceof Error ? error.message : String(error));
-    }
-  }, []);
-
-  const createDataSource = useCallback(() => {
-    const created = createDataSourceEntry({
-      ...initialDataSourceDraft,
-      name: nextDataSourceName(dataSources),
-    });
-    onDataSourcesChange([created, ...dataSources].slice(0, maxSavedDataSources));
-    setActiveDataSourceId(created.id);
-    setMessage(`Created ${created.name}.`);
-  }, [dataSources, onDataSourcesChange]);
-
-  const saveDataSource = useCallback(() => {
-    if (!draft.name.trim()) {
-      setMessage("Name is required.");
-      return;
-    }
-    if (schemaTextError) {
-      setMessage("Schema JSON must be valid before saving.");
-      return;
-    }
-    const now = new Date().toISOString();
-    if (!activeDataSource) {
-      const created = createDataSourceEntry(draft);
-      onDataSourcesChange([created, ...dataSources].slice(0, maxSavedDataSources));
-      setActiveDataSourceId(created.id);
-      setMessage(`Saved ${created.name}.`);
-      return;
-    }
-    const updated: DataSourceEntry = {
-      ...activeDataSource,
-      name: draft.name.trim(),
-      format: draft.format,
-      type: draft.type,
-      location: draft.location.trim(),
-      description: draft.description.trim(),
-      tags: parseDataSourceTags(draft.tags),
-      body: draft.body,
-      updatedAt: now,
-    };
-    onDataSourcesChange(dataSources.map((entry) => (entry.id === updated.id ? updated : entry)));
-    setMessage(`Saved ${updated.name}.`);
-  }, [activeDataSource, dataSources, draft, onDataSourcesChange, schemaTextError]);
-
-  const duplicateDataSource = useCallback(() => {
-    if (!activeDataSource) {
-      return;
-    }
-    const duplicated = createDataSourceEntry({
-      name: `${activeDataSource.name} Copy`,
-      format: activeDataSource.format,
-      type: activeDataSource.type,
-      location: activeDataSource.location,
-      description: activeDataSource.description,
-      tags: activeDataSource.tags.join(", "),
-      body: activeDataSource.body,
-    });
-    onDataSourcesChange([duplicated, ...dataSources].slice(0, maxSavedDataSources));
-    setActiveDataSourceId(duplicated.id);
-    setMessage(`Duplicated ${activeDataSource.name}.`);
-  }, [activeDataSource, dataSources, onDataSourcesChange]);
-
-  const deleteDataSource = useCallback(() => {
-    if (!activeDataSource) {
-      return;
-    }
-    if (typeof window !== "undefined" && !window.confirm(`Delete data source "${activeDataSource.name}"?`)) {
-      return;
-    }
-    const next = dataSources.filter((entry) => entry.id !== activeDataSource.id);
-    onDataSourcesChange(next);
-    setActiveDataSourceId(next[0]?.id ?? null);
-    setMessage(`Deleted ${activeDataSource.name}.`);
-  }, [activeDataSource, dataSources, onDataSourcesChange]);
-
-  const exportDataSources = useCallback(() => {
-    if (dataSources.length === 0) {
-      setMessage("No data sources to export.");
-      return;
-    }
-    downloadSavedDataSourcesJson(dataSources);
-    setMessage(`Exported ${dataSources.length} data source${dataSources.length === 1 ? "" : "s"}.`);
-  }, [dataSources]);
-
-  return (
-    <section className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
-      <aside className="space-y-4">
-        <section className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
-          <Field label="Search">
-            <input
-              className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Find by name, schema, tags, path"
-            />
-          </Field>
-          <div className="mt-3 grid grid-cols-3 gap-2">
-            <button
-              type="button"
-              className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-zinc-300 bg-white px-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
-              onClick={createDataSource}
-              title="Create data source"
-            >
-              <PlusIcon className="h-3.5 w-3.5" />
-              New
-            </button>
-            <button
-              type="button"
-              className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-zinc-300 bg-white px-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
-              onClick={() => importInputRef.current?.click()}
-              title="Import data sources"
-            >
-              <UploadIcon className="h-3.5 w-3.5" />
-              Import
-            </button>
-            <button
-              type="button"
-              className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-zinc-300 bg-white px-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
-              onClick={exportDataSources}
-              title="Export data sources"
-            >
-              <DownloadIcon className="h-3.5 w-3.5" />
-              Export
-            </button>
-          </div>
-          <input
-            ref={importInputRef}
-            type="file"
-            accept=".json,application/json"
-            className="hidden"
-            onChange={async (event) => {
-              const file = event.target.files?.[0];
-              event.target.value = "";
-              if (!file) {
-                return;
-              }
-              try {
-                const imported = parseSavedDataSourcesJson(await file.text());
-                const merged = mergeSavedDataSources(imported, dataSources);
-                onDataSourcesChange(merged);
-                setActiveDataSourceId(imported[0]?.id ?? merged[0]?.id ?? null);
-                setMessage(`Imported ${imported.length} data source${imported.length === 1 ? "" : "s"}.`);
-              } catch (error) {
-                setMessage(error instanceof Error ? error.message : String(error));
-              }
-            }}
-          />
-          <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-zinc-600">
-            <Metric label="Sources" value={String(dataSources.length)} />
-            <Metric label="Schemas" value={String(usedSchemaLabels.length)} />
-          </div>
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            {usedSchemaLabels.length === 0 ? (
-              <span className="text-xs text-zinc-500">No schemas yet.</span>
-            ) : (
-              usedSchemaLabels.slice(0, 8).map((label) => (
-                <span
-                  key={label}
-                  className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-[11px] text-zinc-700"
-                  title={label}
-                >
-                  {label}
-                </span>
-              ))
-            )}
-          </div>
-        </section>
-        <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
-          <div className="border-b border-zinc-200 px-4 py-3">
-            <h2 className="text-sm font-semibold text-zinc-950">Saved Sources</h2>
-          </div>
-          <div className="max-h-[60vh] space-y-2 overflow-auto p-3">
-            {filteredDataSources.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-zinc-200 px-3 py-6 text-center text-sm text-zinc-500">
-                {dataSources.length === 0 ? "No data sources yet." : "No sources match this search."}
-              </div>
-            ) : (
-              filteredDataSources.map((entry) => (
-                <button
-                  key={entry.id}
-                  type="button"
-                  className={classNames(
-                    "w-full rounded-lg border px-3 py-2 text-left transition",
-                    entry.id === activeDataSourceId
-                      ? "border-zinc-950 bg-zinc-950 text-white"
-                      : "border-zinc-200 bg-white text-zinc-800 hover:border-zinc-300 hover:bg-zinc-50",
-                  )}
-                  onClick={() => setActiveDataSourceId(entry.id)}
-                  title={entry.name}
-                >
-                  <div className="truncate text-sm font-semibold">{entry.name}</div>
-                  <div className="mt-1 truncate text-[11px] opacity-75">
-                    {entry.id}
-                  </div>
-                  <div className="mt-1 truncate text-[11px] opacity-70">
-                    {formatDataSourceSchema(entry.type)} · emits {formatWorkflowTypeSpec(dataSourceSchemaToWorkflowType(entry.type))}
-                  </div>
-                </button>
-              ))
-            )}
-          </div>
-        </section>
-      </aside>
-
-      <section className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
-        {activeDataSource ? (
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-200 pb-3">
-              <div>
-                <h2 className="text-sm font-semibold text-zinc-950">Edit Source</h2>
-                <p className="mt-1 text-xs text-zinc-500">
-                  Created {formatWorkflowTimestamp(activeDataSource.createdAt)} · Updated {formatWorkflowTimestamp(activeDataSource.updatedAt)}
-                </p>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  className="inline-flex h-8 items-center justify-center gap-1 rounded-md border border-zinc-300 bg-white px-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
-                  onClick={duplicateDataSource}
-                  title="Duplicate data source"
-                >
-                  <CloneIcon className="h-3.5 w-3.5" />
-                  Duplicate
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex h-8 items-center justify-center gap-1 rounded-md border border-rose-300 bg-rose-50 px-2 text-xs font-medium text-rose-800 hover:bg-rose-100"
-                  onClick={deleteDataSource}
-                  title="Delete data source"
-                >
-                  <CloseIcon className="h-3.5 w-3.5" />
-                  Delete
-                </button>
-              </div>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="ID">
-                <input
-                  className="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 font-mono text-xs text-zinc-700 outline-none"
-                  value={activeDataSource.id}
-                  readOnly
-                  title={activeDataSource.id}
-                />
-              </Field>
-              <Field label="Name">
-                <input
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-                  value={draft.name}
-                  onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
-                  placeholder="e.g. Song fingerprint catalog"
-                />
-              </Field>
-              <Field label="Format">
-                <select
-                  className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-                  value={draft.format}
-                  onChange={(event) =>
-                    setDraft((current) => ({ ...current, format: event.target.value as DataSourceFormat }))
-                  }
-                >
-                  {dataSourceFormats.map((format) => (
-                    <option key={format.id} value={format.id}>
-                      {format.label}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Location / Path / URL">
-                <input
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-                  value={draft.location}
-                  onChange={(event) => setDraft((current) => ({ ...current, location: event.target.value }))}
-                  placeholder="workflow-data/songs/catalog.sqlite"
-                />
-              </Field>
-            </div>
-            <DataSourceSchemaEditor
-              schema={draft.type}
-              onChange={updateDraftSchema}
-            />
-            <Field
-              label="Schema JSON"
-              action={schemaTextError ? <span className="text-[11px] text-rose-700">{schemaTextError}</span> : null}
-            >
-              <textarea
-                className={classNames(
-                  "min-h-[240px] w-full rounded-lg border px-3 py-2 font-mono text-xs leading-5 outline-none focus:ring-2",
-                  schemaTextError
-                    ? "border-rose-300 bg-rose-50 text-rose-950 focus:border-rose-500 focus:ring-rose-500/10"
-                    : "border-zinc-300 bg-white text-zinc-700 focus:border-zinc-950 focus:ring-zinc-950/10",
-                )}
-                value={schemaText}
-                onChange={(event) => updateSchemaText(event.target.value)}
-                spellCheck={false}
-              />
-            </Field>
-            <Field label="Tags (comma or space separated)">
-              <input
-                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-                value={draft.tags}
-                onChange={(event) => setDraft((current) => ({ ...current, tags: event.target.value }))}
-                placeholder="songs, matching, catalog"
-              />
-            </Field>
-            <Field label="Description">
-              <textarea
-                className="min-h-[84px] w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-                value={draft.description}
-                onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
-                placeholder="What this source is used for in your workflows."
-              />
-            </Field>
-            <Field
-              label="Data Body / Notes"
-              action={<span className="text-[11px] text-zinc-500">Use this for large reference context if needed.</span>}
-            >
-              <textarea
-                className="min-h-[300px] w-full rounded-lg border border-zinc-300 px-3 py-2 font-mono text-xs leading-5 outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-                value={draft.body}
-                onChange={(event) => setDraft((current) => ({ ...current, body: event.target.value }))}
-                placeholder="Paste JSON, references, indices, or node context payload."
-              />
-            </Field>
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 pt-3">
-              <div className="text-xs text-zinc-500">
-                {draftTagCount} tag{draftTagCount === 1 ? "" : "s"} ·{" "}
-                {draft.body.length} body chars
-              </div>
-              <button
-                type="button"
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-zinc-950 px-3 text-sm font-medium text-white shadow-sm hover:bg-zinc-800"
-                onClick={saveDataSource}
-              >
-                <SaveIcon className="h-4 w-4" />
-                Save Source
-              </button>
-            </div>
-            {message && <p className="text-sm text-zinc-600">{message}</p>}
-          </div>
-        ) : (
-          <div className="flex min-h-[420px] flex-col items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-4 text-center">
-            <DataSourceIcon className="h-10 w-10 text-zinc-400" />
-            <h2 className="mt-3 text-base font-semibold text-zinc-900">No Data Source Selected</h2>
-            <p className="mt-2 max-w-xl text-sm text-zinc-600">
-              Create a source to manage catalogs, references, and large context payloads for workflow nodes.
-            </p>
-            <button
-              type="button"
-              className="mt-4 inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-zinc-950 px-3 text-sm font-medium text-white shadow-sm hover:bg-zinc-800"
-              onClick={createDataSource}
-            >
-              <PlusIcon className="h-4 w-4" />
-              Create Data Source
-            </button>
-            {message && <p className="mt-3 text-sm text-zinc-600">{message}</p>}
-          </div>
-        )}
-      </section>
     </section>
   );
 }
@@ -6434,9 +6500,14 @@ function normalizeFlowPort(portValue: Pick<FlowPort, "id" | "label" | "type"> & 
     id: portValue.id,
     label: portValue.label,
     type: portValue.type,
+    ...(portValue.kind ? { kind: portValue.kind } : {}),
     valueType: isWorkflowTypeSpec(portValue.valueType) ? structuredClone(portValue.valueType) : workflowTypeForPortType(portValue.type),
     ...(portValue.optional ? { optional: true } : {}),
     ...(portValue.stream ? { stream: true } : {}),
+    ...(portValue.exposableInput ? { exposableInput: true } : {}),
+    ...(portValue.inputSurface ? { inputSurface: portValue.inputSurface } : {}),
+    ...(portValue.suggestedAdapters ? { suggestedAdapters: [...portValue.suggestedAdapters] } : {}),
+    ...(portValue.runtimeValidation ? { runtimeValidation: portValue.runtimeValidation } : {}),
   };
 }
 
@@ -6455,14 +6526,19 @@ function cloneWorkflowGroupMetadata(group: WorkflowGroupMetadata): WorkflowGroup
 }
 
 function groupBoundaryPort(direction: PortDirection, node: WorkflowNodeModel, portValue: FlowPort): FlowPort {
-  return {
+  return normalizeFlowPort({
     id: `${direction}-${safeFlowId(node.id)}-${safeFlowId(portValue.id)}`,
     label: `${node.data.title}: ${portValue.label}`,
     type: portValue.type,
+    kind: portValue.kind,
     valueType: structuredClone(portValue.valueType),
     optional: portValue.optional,
     stream: portValue.stream,
-  };
+    exposableInput: portValue.exposableInput,
+    inputSurface: portValue.inputSurface,
+    suggestedAdapters: portValue.suggestedAdapters,
+    runtimeValidation: portValue.runtimeValidation,
+  });
 }
 
 function boundaryKey(nodeId: string, handle: string | null | undefined): string {
@@ -7423,7 +7499,9 @@ function formatWorkflowTimestamp(value: string): string {
 }
 
 function loadSavedWorkflowLibrary(): SavedWorkflowLibrary {
-  const fallback = seedSavedWorkflowLibrary();
+  const workflowIdFromUrl =
+    typeof window === "undefined" ? null : appLocationFromPath(window.location.pathname).workflowId;
+  const fallback = workflowLibraryWithRequestedActiveId(seedSavedWorkflowLibrary(), workflowIdFromUrl);
   if (typeof window === "undefined") {
     return fallback;
   }
@@ -7447,17 +7525,17 @@ function loadSavedWorkflowLibrary(): SavedWorkflowLibrary {
       return fallback;
     }
 
-    const activeWorkflowId = workflows.some((workflow) => workflow.id === parsed.activeWorkflowId)
-      ? parsed.activeWorkflowId
-      : workflows[0].id;
-    const library: SavedWorkflowLibrary = {
+    const library = workflowLibraryWithRequestedActiveId({
       format: savedWorkflowsJsonFormat,
       version: savedWorkflowsJsonVersion,
-      activeWorkflowId,
+      activeWorkflowId: workflows.some((workflow) => workflow.id === parsed.activeWorkflowId)
+        ? parsed.activeWorkflowId
+        : workflows[0].id,
       workflows,
-    };
-    persistSavedWorkflowLibrary(library);
-    return library;
+    }, workflowIdFromUrl);
+    const migratedLibrary = migrateLegacySeedWorkflows(library);
+    persistSavedWorkflowLibrary(migratedLibrary);
+    return migratedLibrary;
   } catch {
     persistSavedWorkflowLibrary(fallback);
     return fallback;
@@ -7471,13 +7549,161 @@ function persistSavedWorkflowLibrary(library: SavedWorkflowLibrary) {
   window.localStorage.setItem(savedWorkflowsStorageKey, JSON.stringify(library));
 }
 
+function renameWorkflowLibraryDataSourceId(
+  library: SavedWorkflowLibrary,
+  previousId: string,
+  nextId: string,
+): SavedWorkflowLibrary {
+  if (previousId === nextId) {
+    return library;
+  }
+  const workflows = library.workflows.map((workflow) => ({
+    ...workflow,
+    nodes: workflow.nodes.map((node) => ({
+      ...node,
+      data:
+        node.data.dataSourceNode && node.data.dataSourceId === previousId
+          ? { ...node.data, dataSourceId: nextId }
+          : node.data,
+    })),
+    versions: workflow.versions.map((version) => ({
+      ...version,
+      nodes: version.nodes.map((node) => ({
+        ...node,
+        data:
+          node.data.dataSourceNode && node.data.dataSourceId === previousId
+            ? { ...node.data, dataSourceId: nextId }
+            : node.data,
+      })),
+    })),
+  }));
+  const nextLibrary = { ...library, workflows };
+  persistSavedWorkflowLibrary(nextLibrary);
+  return nextLibrary;
+}
+
+function workflowLibraryWithRequestedActiveId(
+  library: SavedWorkflowLibrary,
+  requestedWorkflowId: string | null,
+): SavedWorkflowLibrary {
+  if (!requestedWorkflowId || !library.workflows.some((workflow) => workflow.id === requestedWorkflowId)) {
+    return library;
+  }
+  return {
+    ...library,
+    activeWorkflowId: requestedWorkflowId,
+  };
+}
+
+function workflowSeedTemplateFor(kind: WorkflowKindId, name?: string): WorkflowSeedTemplate {
+  return (name ? exampleWorkflowStarterTemplates[name] : null) ?? workflowStarterTemplates[kind];
+}
+
+function instantiateWorkflowSeedTemplate(template: WorkflowSeedTemplate): { nodes: WorkflowNodeModel[]; edges: Edge[] } {
+  const nodes = template.nodes.map((layout) => instantiateWorkflowSeedNode(layout));
+  const edges = template.edges.map((edge) =>
+    workflowEdge(edge.source, edge.sourcePortId, edge.target, edge.targetPortId),
+  );
+  return { nodes, edges };
+}
+
+function instantiateWorkflowSeedNode(layout: WorkflowSeedNodeLayout): WorkflowNodeModel {
+  const template = workflowNodeTemplates.find((candidate) => candidate.id === layout.id);
+  if (!template) {
+    throw new Error(`Missing workflow node template ${layout.id}`);
+  }
+  return {
+    ...template,
+    position: { x: layout.x, y: layout.y },
+    data: cloneWorkflowNodeData(template.data),
+  };
+}
+
+function workflowSeedState(kind: WorkflowKindId, name?: string): { nodes: WorkflowNodeModel[]; edges: Edge[] } {
+  return instantiateWorkflowSeedTemplate(workflowSeedTemplateFor(kind, name));
+}
+
+function createSeedSavedWorkflow(
+  name: string,
+  kind: WorkflowKindId,
+  id = createWorkflowId(),
+): SavedWorkflow {
+  const { nodes, edges } = workflowSeedState(kind, name);
+  return createSavedWorkflow(name, nodes, edges, kind, id);
+}
+
+function migrateLegacySeedWorkflows(library: SavedWorkflowLibrary): SavedWorkflowLibrary {
+  const legacySeedSnapshot = savedWorkflowGraphSnapshot(
+    initialWorkflowNodes.map(serializeWorkflowNode),
+    initialWorkflowEdges.map(serializeWorkflowEdge),
+  );
+  let changed = false;
+  const workflows = library.workflows.map((workflow) => {
+    if (!isBuiltInSeedWorkflow(workflow) || savedWorkflowGraphSnapshot(workflow.nodes, workflow.edges) !== legacySeedSnapshot) {
+      return workflow;
+    }
+    changed = true;
+    return recreateSeedWorkflow(workflow);
+  });
+  return changed ? { ...library, workflows } : library;
+}
+
+function recreateSeedWorkflow(workflow: SavedWorkflow): SavedWorkflow {
+  const seeded = createSeedSavedWorkflow(workflow.name, workflow.kind, workflow.id);
+  const createdAt = workflow.createdAt;
+  const updatedAt = new Date().toISOString();
+  return {
+    ...seeded,
+    createdAt,
+    updatedAt,
+    versions: seeded.versions.map((version, index) => ({
+      ...version,
+      version: index + 1,
+      createdAt,
+      name: workflow.name,
+    })),
+  };
+}
+
+function isBuiltInSeedWorkflow(workflow: SavedWorkflow): boolean {
+  return builtInWorkflowSeedIds().has(workflow.id);
+}
+
+function builtInWorkflowSeedIds(): Set<string> {
+  return new Set([
+    ...workflowKinds.map((workflowKind) => workflowSeedId(workflowKind.id, workflowKind.defaultWorkflowName)),
+    ...exampleWorkflowSeeds.map((workflow) => workflowSeedId(workflow.kind, workflow.name)),
+  ]);
+}
+
+function savedWorkflowGraphSnapshot(nodes: SavedWorkflowBlockNode[], edges: SavedWorkflowBlockEdge[]): string {
+  return JSON.stringify({
+    nodes: nodes.map(comparableWorkflowNode).sort((a, b) => a.id.localeCompare(b.id)),
+    edges: edges
+      .map(comparableWorkflowEdge)
+      .sort((a, b) =>
+        `${a.source}|${a.sourceHandle ?? ""}|${a.target}|${a.targetHandle ?? ""}`.localeCompare(
+          `${b.source}|${b.sourceHandle ?? ""}|${b.target}|${b.targetHandle ?? ""}`,
+        ),
+      ),
+  });
+}
+
 function seedSavedWorkflowLibrary(): SavedWorkflowLibrary {
   const workflows = [
     ...workflowKinds.map((workflowKind) =>
-      createSavedWorkflow(workflowKind.defaultWorkflowName, initialWorkflowNodes, initialWorkflowEdges, workflowKind.id),
+      createSeedSavedWorkflow(
+        workflowKind.defaultWorkflowName,
+        workflowKind.id,
+        workflowSeedId(workflowKind.id, workflowKind.defaultWorkflowName),
+      ),
     ),
     ...exampleWorkflowSeeds.map((workflow) =>
-      createSavedWorkflow(workflow.name, initialWorkflowNodes, initialWorkflowEdges, workflow.kind),
+      createSeedSavedWorkflow(
+        workflow.name,
+        workflow.kind,
+        workflowSeedId(workflow.kind, workflow.name),
+      ),
     ),
   ];
   return {
@@ -7534,7 +7760,11 @@ function ensureWorkflowKindCoverage(workflows: SavedWorkflow[]): SavedWorkflow[]
   const missingWorkflows = workflowKinds
     .filter((workflowKind) => !presentKinds.has(workflowKind.id))
     .map((workflowKind) =>
-      createSavedWorkflow(workflowKind.defaultWorkflowName, initialWorkflowNodes, initialWorkflowEdges, workflowKind.id),
+      createSeedSavedWorkflow(
+        workflowKind.defaultWorkflowName,
+        workflowKind.id,
+        workflowSeedId(workflowKind.id, workflowKind.defaultWorkflowName),
+      ),
     );
   return workflows.concat(missingWorkflows);
 }
@@ -7544,10 +7774,11 @@ function createSavedWorkflow(
   nodes: WorkflowNodeModel[],
   edges: Edge[],
   kind: WorkflowKindId = "youtube-video",
+  id = createWorkflowId(),
 ): SavedWorkflow {
   const createdAt = new Date().toISOString();
   const workflow: SavedWorkflow = {
-    id: createWorkflowId(),
+    id,
     kind,
     name,
     createdAt,
@@ -7716,243 +7947,16 @@ function persistSavedWorkflowBlocks(blocks: SavedWorkflowBlock[]) {
   window.localStorage.setItem(savedWorkflowBlocksStorageKey, JSON.stringify(blocks));
 }
 
-function loadSavedDataSources(): DataSourceEntry[] {
-  if (typeof window === "undefined") {
-    return [];
-  }
-  try {
-    const raw = window.localStorage.getItem(savedDataSourcesStorageKey);
-    if (!raw) {
-      return [];
-    }
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed.filter(isDataSourceEntry).map(normalizeDataSourceEntry).slice(0, maxSavedDataSources);
-  } catch {
-    return [];
-  }
-}
-
-function persistSavedDataSources(dataSources: DataSourceEntry[]) {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.localStorage.setItem(
-    savedDataSourcesStorageKey,
-    JSON.stringify(dataSources.map(normalizeDataSourceEntry).slice(0, maxSavedDataSources)),
-  );
-}
-
-function createDataSourceEntry(draft: DataSourceDraft): DataSourceEntry {
-  const now = new Date().toISOString();
-  return normalizeDataSourceEntry({
-    id: createDataSourceId(),
-    name: draft.name,
-    format: draft.format,
-    type: draft.type,
-    location: draft.location,
-    description: draft.description,
-    tags: parseDataSourceTags(draft.tags),
-    body: draft.body,
-    createdAt: now,
-    updatedAt: now,
-  });
-}
-
-function dataSourceDraftFromEntry(entry: DataSourceEntry): DataSourceDraft {
-  return {
-    name: entry.name,
-    format: entry.format,
-    type: entry.type,
-    location: entry.location,
-    description: entry.description,
-    tags: entry.tags.join(", "),
-    body: entry.body,
-  };
-}
-
-function parseSavedDataSourcesJson(text: string): DataSourceEntry[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error("Invalid JSON file");
-  }
-
-  const candidates = savedDataSourcesJsonCandidates(parsed);
-  if (!candidates || candidates.length === 0) {
-    throw new Error("No data sources found in JSON");
-  }
-  if (!candidates.every(isDataSourceEntry)) {
-    throw new Error("JSON does not match the data source format");
-  }
-  return candidates.map(cloneImportedDataSourceEntry);
-}
-
-function savedDataSourcesJsonCandidates(value: unknown): unknown[] | null {
-  if (Array.isArray(value)) {
-    return value;
-  }
-  if (!isRecord(value)) {
-    return null;
-  }
-  if (Array.isArray(value.dataSources)) {
-    return value.dataSources;
-  }
-  if (Array.isArray(value.entries)) {
-    return value.entries;
-  }
-  if (isDataSourceEntry(value)) {
-    return [value];
-  }
-  return null;
-}
-
-function cloneImportedDataSourceEntry(entry: DataSourceEntry): DataSourceEntry {
-  const now = new Date().toISOString();
-  return normalizeDataSourceEntry({
-    ...entry,
-    id: createDataSourceId(),
-    createdAt: now,
-    updatedAt: now,
-  });
-}
-
-function normalizeDataSourceEntry(entry: DataSourceEntry): DataSourceEntry {
-  const rawEntry = entry as DataSourceEntry & { type?: unknown; format?: unknown };
-  const name = entry.name.trim();
-  const format = isDataSourceFormat(rawEntry.format) ? rawEntry.format : "json";
-  return {
-    id: entry.id,
-    name: name || "Untitled Data Source",
-    format,
-    type: normalizeDataSourceSchema(rawEntry.type, defaultDataSourceSchemaForFormat(format)),
-    location: entry.location.trim(),
-    description: entry.description.trim(),
-    tags: normalizeDataSourceTags(entry.tags),
-    body: typeof entry.body === "string" ? entry.body : "",
-    createdAt: entry.createdAt,
-    updatedAt: entry.updatedAt,
-  };
-}
-
-function mergeSavedDataSources(importedDataSources: DataSourceEntry[], currentDataSources: DataSourceEntry[]): DataSourceEntry[] {
-  return importedDataSources.concat(currentDataSources).slice(0, maxSavedDataSources);
-}
-
-function downloadSavedDataSourcesJson(dataSources: DataSourceEntry[]) {
-  if (typeof document === "undefined") {
-    return;
-  }
-
-  const exportedAt = new Date().toISOString();
-  const payload = {
-    format: savedDataSourcesJsonFormat,
-    version: savedDataSourcesJsonVersion,
-    exportedAt,
-    dataSources: dataSources.map(normalizeDataSourceEntry),
-  };
-  const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `video-analysis-data-sources-${fileDateStamp(exportedAt)}.json`;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
-function nextDataSourceName(dataSources: DataSourceEntry[]): string {
-  const names = new Set(dataSources.map((entry) => entry.name.toLowerCase()));
-  for (let index = 1; index < 10_000; index += 1) {
-    const candidate = `Data Source ${index}`;
-    if (!names.has(candidate.toLowerCase())) {
-      return candidate;
-    }
-  }
-  return `Data Source ${Date.now()}`;
-}
-
-function parseDataSourceTags(value: string): string[] {
-  return normalizeDataSourceTags(value.split(/[\s,]+/));
-}
-
-function normalizeDataSourceTags(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const tags: string[] = [];
-  for (const token of value) {
-    if (typeof token !== "string") {
-      continue;
-    }
-    const normalized = token.trim().toLowerCase();
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    tags.push(normalized);
-  }
-  return tags;
-}
-
-function filterDataSources(dataSources: DataSourceEntry[], query: string): DataSourceEntry[] {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) {
-    return dataSources;
-  }
-  return dataSources.filter((entry) =>
-    [
-      entry.id,
-      entry.name,
-      formatDataSourceSchema(entry.type),
-      dataSourceFormatLabel(entry.format),
-      formatWorkflowTypeSpec(dataSourceSchemaToWorkflowType(entry.type)),
-      entry.location,
-      entry.description,
-      ...entry.tags,
-      entry.body,
-    ]
-      .join("\n")
-      .toLowerCase()
-      .includes(normalized),
-  );
-}
-
-function dataSourceFormatLabel(format: DataSourceFormat): string {
-  return dataSourceFormats.find((candidate) => candidate.id === format)?.label ?? "Other";
-}
-
-function defaultDataSourceSchemaForFormat(format: DataSourceFormat): DataSourceSchema {
-  switch (format) {
-    case "json":
-      return { type: "any" };
-    case "csv":
-    case "sqlite":
-      return portTypeToDataSourceSchema("data_record");
-    case "txt":
-      return { type: "string" };
-    case "folder":
-      return portTypeToDataSourceSchema("data_bucket");
-    case "api":
-      return portTypeToDataSourceSchema("http_response");
-    case "other":
-      return { type: "any" };
-  }
-}
-
 function defaultDataSourceSchemaForKind(kind: DataSourceSchema["type"]): DataSourceSchema {
   switch (kind) {
     case "port":
       return portTypeToDataSourceSchema("data_value");
+    case "union":
+      return { type: "union", variants: [{ type: "string" }, { type: "number" }] };
     case "array":
       return { type: "array", items: { type: "any" } };
     case "object":
-      return { type: "object", properties: [] };
+      return { type: "object", properties: [], additionalProperties: true };
     case "binary":
       return { type: "binary", mediaType: "audio/mpeg", portType: "data_value" };
     case "string":
@@ -7967,14 +7971,23 @@ function defaultDataSourceSchemaForKind(kind: DataSourceSchema["type"]): DataSou
 function portTypeToDataSourceSchema(portType: DataSourceType): DataSourceSchema {
   switch (portType) {
     case "string_value":
-    case "template_string":
-    case "youtube_url":
-    case "youtube_collection_url":
       return { type: "string" };
+    case "template_string":
+      return { type: "string", semantic: "template_string" };
+    case "youtube_url":
+      return { type: "string", semantic: "youtube_url" };
+    case "youtube_collection_url":
+      return { type: "string", semantic: "youtube_collection_url" };
+    case "subtitle_file":
+      return { type: "string", semantic: "subtitle_file" };
+    case "audio_file":
+      return { type: "binary", mediaType: "audio/*", portType, semantic: "audio_file" };
     case "audio_wav":
-      return { type: "binary", mediaType: "audio/wav", portType };
+      return { type: "binary", mediaType: "audio/wav", portType, semantic: "audio_wav" };
     case "video_file":
-      return { type: "binary", mediaType: "video/mp4", portType };
+      return { type: "binary", mediaType: "video/*", portType, semantic: "video_file" };
+    case "media_file":
+      return { type: "binary", mediaType: "application/octet-stream", portType, semantic: "media_file" };
     case "number_value":
       return { type: "number" };
     case "boolean_value":
@@ -7982,7 +7995,11 @@ function portTypeToDataSourceSchema(portType: DataSourceType): DataSourceSchema 
     case "array_value":
       return { type: "array", items: { type: "any" } };
     case "object_value":
-      return { type: "object", properties: [] };
+      return { type: "object", properties: [], additionalProperties: true };
+    case "transcript":
+      return { type: "object", properties: [], additionalProperties: true, semantic: "transcript" };
+    case "song_catalog":
+      return { type: "object", properties: [], additionalProperties: true, semantic: "song_catalog" };
     case "data_value":
       return { type: "any" };
     default:
@@ -8012,6 +8029,14 @@ function workflowTypeForPortType(type: PortType): WorkflowTypeSpec {
       return { type: "string", semantic: "youtube_collection_url" };
     case "video_file":
       return { type: "binary", media_type: "video/*", semantic: "video_file" };
+    case "audio_file":
+      return { type: "binary", media_type: "audio/*", semantic: "audio_file" };
+    case "media_file":
+      return { type: "binary", semantic: "media_file" };
+    case "transcript":
+      return { type: "object", properties: [], additional_properties: true, semantic: "transcript" };
+    case "subtitle_file":
+      return { type: "string", semantic: "subtitle_file" };
     case "collection_manifest":
       return { type: "object", properties: [], additional_properties: true, semantic: "collection_manifest" };
     case "collection_item":
@@ -8056,6 +8081,8 @@ function workflowTypeForPortType(type: PortType): WorkflowTypeSpec {
       return { type: "object", properties: [], additional_properties: true };
     case "data_value":
       return { type: "any" };
+    case "song_catalog":
+      return { type: "object", properties: [], additional_properties: true, semantic: "song_catalog" };
     case "data_record":
       return { type: "object", properties: [], additional_properties: true, semantic: "data_record" };
     case "data_bucket":
@@ -8067,20 +8094,136 @@ function workflowTypeForPortType(type: PortType): WorkflowTypeSpec {
   }
 }
 
+function workflowSemanticKindToPortType(semantic: WorkflowSemanticKind | undefined): PortType | null {
+  switch (semantic) {
+    case "run_request":
+      return "run_request";
+    case "run_config":
+      return "run_config";
+    case "template_string":
+      return "template_string";
+    case "youtube_url":
+      return "youtube_url";
+    case "youtube_collection_url":
+      return "youtube_collection_url";
+    case "video_file":
+      return "video_file";
+    case "audio_file":
+      return "audio_file";
+    case "audio_wav":
+      return "audio_wav";
+    case "media_file":
+      return "media_file";
+    case "transcript":
+      return "transcript";
+    case "subtitle_file":
+      return "subtitle_file";
+    case "video_metadata":
+      return "video_metadata";
+    case "scene_result":
+      return "scene_result";
+    case "video_observation":
+      return "video_observation";
+    case "model_request":
+      return "model_request";
+    case "model_prediction":
+      return "model_prediction";
+    case "transcript_segment":
+      return "transcript_segment";
+    case "audio_event":
+      return "audio_event";
+    case "text_event":
+      return "text_event";
+    case "collection_manifest":
+      return "collection_manifest";
+    case "collection_item":
+      return "collection_item";
+    case "collection_report":
+      return "collection_report";
+    case "collection_table":
+      return "collection_table";
+    case "song_fingerprint":
+      return "song_fingerprint";
+    case "song_catalog":
+      return "song_catalog";
+    case "song_match":
+      return "song_match";
+    case "music_feature":
+      return "music_feature";
+    case "http_request":
+      return "http_request";
+    case "http_response":
+      return "http_response";
+    case "json_report":
+      return "json_report";
+    case "dashboard_view":
+      return "dashboard_view";
+    case "data_record":
+      return "data_record";
+    case "data_bucket":
+      return "data_bucket";
+    default:
+      return null;
+  }
+}
+
+function workflowTypeToPortType(spec: WorkflowTypeSpec, fallbackType: PortType = "data_value"): PortType {
+  switch (spec.type) {
+    case "string":
+      return workflowSemanticKindToPortType(spec.semantic) ?? "string_value";
+    case "number":
+      return "number_value";
+    case "boolean":
+      return "boolean_value";
+    case "array":
+      return "array_value";
+    case "object":
+      return workflowSemanticKindToPortType(spec.semantic) ?? "object_value";
+    case "binary":
+      return (
+        workflowSemanticKindToPortType(spec.semantic) ??
+        (spec.media_type === "audio/wav"
+          ? "audio_wav"
+          : spec.media_type?.startsWith("audio/")
+            ? "audio_file"
+            : spec.media_type?.startsWith("video/")
+              ? "video_file"
+              : spec.media_type?.startsWith("image/")
+                ? "video_frame"
+                : fallbackType)
+      );
+    case "null":
+    case "any":
+    case "union":
+      return fallbackType;
+  }
+}
+
 function dataSourceSchemaToWorkflowType(schema: DataSourceSchema): WorkflowTypeSpec {
   switch (schema.type) {
     case "port":
       return workflowTypeForPortType(schema.portType);
+    case "string":
+      return { type: "string", ...(schema.semantic ? { semantic: schema.semantic } : {}) };
     case "binary": {
       const portType = workflowTypeForPortType(schema.portType);
       return {
         type: "binary",
         media_type: schema.mediaType || (portType.type === "binary" ? portType.media_type : undefined),
-        ...(portType.type === "binary" && portType.semantic ? { semantic: portType.semantic } : {}),
+        ...(schema.semantic
+          ? { semantic: schema.semantic }
+          : portType.type === "binary" && portType.semantic
+            ? { semantic: portType.semantic }
+            : {}),
       };
     }
     case "array":
-      return { type: "array", items: dataSourceSchemaToWorkflowType(schema.items) };
+      return {
+        type: "array",
+        items: dataSourceSchemaToWorkflowType(schema.items),
+        ...(typeof schema.minItems === "number" ? { min_items: schema.minItems } : {}),
+        ...(typeof schema.maxItems === "number" ? { max_items: schema.maxItems } : {}),
+      };
     case "object":
       return {
         type: "object",
@@ -8091,10 +8234,11 @@ function dataSourceSchemaToWorkflowType(schema: DataSourceSchema): WorkflowTypeS
             value: dataSourceSchemaToWorkflowType(property.schema),
             required: property.required,
           })),
-        additional_properties: schema.properties.length === 0,
+        additional_properties: schema.additionalProperties ?? schema.properties.length === 0,
+        ...(schema.semantic ? { semantic: schema.semantic } : {}),
       };
-    case "string":
-      return { type: "string" };
+    case "union":
+      return { type: "union", variants: schema.variants.map(dataSourceSchemaToWorkflowType) };
     case "number":
       return { type: "number" };
     case "boolean":
@@ -8107,25 +8251,8 @@ function dataSourceSchemaToWorkflowType(schema: DataSourceSchema): WorkflowTypeS
 }
 
 function dataSourcePortType(schema: DataSourceSchema): DataSourceType {
-  switch (schema.type) {
-    case "port":
-      return schema.portType;
-    case "binary":
-      return schema.portType;
-    case "array":
-      return "array_value";
-    case "object":
-      return "object_value";
-    case "string":
-      return "string_value";
-    case "number":
-      return "number_value";
-    case "boolean":
-      return "boolean_value";
-    case "null":
-    case "any":
-      return "data_value";
-  }
+  const fallbackType = schema.type === "port" || schema.type === "binary" ? schema.portType : "data_value";
+  return workflowTypeToPortType(dataSourceSchemaToWorkflowType(schema), fallbackType);
 }
 
 function formatDataSourceSchema(schema: DataSourceSchema): string {
@@ -8134,12 +8261,14 @@ function formatDataSourceSchema(schema: DataSourceSchema): string {
       return formatWorkflowTypeSpec(workflowTypeForPortType(schema.portType));
     case "binary":
       return `Binary ${schema.mediaType || "application/octet-stream"}`;
+    case "union":
+      return schema.variants.map((variant) => formatDataSourceSchema(variant)).join(" | ");
     case "array":
-      return `Array of ${formatDataSourceSchema(schema.items)}`;
+      return `Array${formatArrayBounds(schema.minItems, schema.maxItems)} of ${formatDataSourceSchema(schema.items)}`;
     case "object": {
       const namedProperties = schema.properties.filter((property) => property.name.trim()).slice(0, 3);
       if (namedProperties.length === 0) {
-        return "Object";
+        return schema.semantic ? formatWorkflowTypeSpec(dataSourceSchemaToWorkflowType(schema)) : "Object";
       }
       const suffix = schema.properties.length > namedProperties.length ? ", ..." : "";
       return `Object { ${namedProperties.map((property) => property.name.trim()).join(", ")}${suffix} }`;
@@ -8147,6 +8276,7 @@ function formatDataSourceSchema(schema: DataSourceSchema): string {
     case "any":
       return "Any JSON";
     case "string":
+      return schema.semantic ? formatWorkflowTypeSpec(dataSourceSchemaToWorkflowType(schema)) : "String";
     case "number":
     case "boolean":
     case "null":
@@ -8154,19 +8284,39 @@ function formatDataSourceSchema(schema: DataSourceSchema): string {
   }
 }
 
+function formatArrayBounds(minItems?: number, maxItems?: number): string {
+  if (minItems === undefined && maxItems === undefined) {
+    return "";
+  }
+  const min = minItems ?? 0;
+  const max = maxItems ?? "*";
+  return `[${min}..${max}]`;
+}
+
 function dataSourceSchemaToJsonSchema(schema: DataSourceSchema): unknown {
   switch (schema.type) {
     case "port":
       return { "x-portType": schema.portType };
+    case "string":
+      return {
+        type: "string",
+        ...(schema.semantic ? { "x-semantic": schema.semantic } : {}),
+      };
     case "binary":
       return {
         type: "string",
         contentEncoding: "base64",
         contentMediaType: schema.mediaType || "application/octet-stream",
         "x-portType": schema.portType,
+        ...(schema.semantic ? { "x-semantic": schema.semantic } : {}),
       };
     case "array":
-      return { type: "array", items: dataSourceSchemaToJsonSchema(schema.items) };
+      return {
+        type: "array",
+        items: dataSourceSchemaToJsonSchema(schema.items),
+        ...(typeof schema.minItems === "number" ? { minItems: schema.minItems } : {}),
+        ...(typeof schema.maxItems === "number" ? { maxItems: schema.maxItems } : {}),
+      };
     case "object": {
       const properties = schema.properties.reduce<Record<string, unknown>>((current, property) => {
         const name = property.name.trim();
@@ -8179,11 +8329,14 @@ function dataSourceSchemaToJsonSchema(schema: DataSourceSchema): unknown {
         type: "object",
         properties,
         required: schema.properties.filter((property) => property.required && property.name.trim()).map((property) => property.name.trim()),
+        ...(schema.additionalProperties === false ? { additionalProperties: false } : {}),
+        ...(schema.semantic ? { "x-semantic": schema.semantic } : {}),
       };
     }
+    case "union":
+      return { anyOf: schema.variants.map(dataSourceSchemaToJsonSchema) };
     case "any":
       return {};
-    case "string":
     case "number":
     case "boolean":
     case "null":
@@ -8215,7 +8368,12 @@ function dataSourceSchemaFromJsonSchema(value: unknown): DataSourceSchema | null
   }
 
   const portType = dataSourceSchemaPortTypeExtension(value);
+  const semantic = dataSourceSchemaSemanticExtension(value);
   const type = typeof value.type === "string" ? value.type : undefined;
+  if (Array.isArray(value.anyOf)) {
+    const variants = value.anyOf.map((variant) => dataSourceSchemaFromJsonSchema(variant)).filter(Boolean) as DataSourceSchema[];
+    return variants.length > 0 ? { type: "union", variants } : null;
+  }
   if (portType && !type) {
     return { type: "port", portType };
   }
@@ -8224,7 +8382,12 @@ function dataSourceSchemaFromJsonSchema(value: unknown): DataSourceSchema | null
   }
 
   if (type === "array") {
-    return { type: "array", items: dataSourceSchemaFromJsonSchema(value.items) ?? { type: "any" } };
+    return {
+      type: "array",
+      items: dataSourceSchemaFromJsonSchema(value.items) ?? { type: "any" },
+      ...(typeof value.minItems === "number" ? { minItems: value.minItems } : {}),
+      ...(typeof value.maxItems === "number" ? { maxItems: value.maxItems } : {}),
+    };
   }
 
   if (type === "object" || isRecord(value.properties)) {
@@ -8247,7 +8410,12 @@ function dataSourceSchemaFromJsonSchema(value: unknown): DataSourceSchema | null
           ];
         })
       : [];
-    return { type: "object", properties };
+    return {
+      type: "object",
+      properties,
+      additionalProperties: value.additionalProperties !== false,
+      ...(semantic ? { semantic } : {}),
+    };
   }
 
   if (type === "binary" || (type === "string" && (value.contentEncoding === "base64" || typeof value.contentMediaType === "string"))) {
@@ -8255,10 +8423,14 @@ function dataSourceSchemaFromJsonSchema(value: unknown): DataSourceSchema | null
       type: "binary",
       mediaType: typeof value.contentMediaType === "string" && value.contentMediaType.trim() ? value.contentMediaType.trim() : "application/octet-stream",
       portType: portType ?? "data_value",
+      ...(semantic ? { semantic } : {}),
     };
   }
 
-  if (type === "string" || type === "number" || type === "boolean" || type === "null") {
+  if (type === "string") {
+    return { type: "string", ...(semantic ? { semantic } : {}) };
+  }
+  if (type === "number" || type === "boolean" || type === "null") {
     return { type };
   }
   if (type === "any") {
@@ -8270,6 +8442,11 @@ function dataSourceSchemaFromJsonSchema(value: unknown): DataSourceSchema | null
 function dataSourceSchemaPortTypeExtension(value: Record<string, unknown>): DataSourceType | null {
   const portType = value["x-portType"] ?? value.xPortType ?? value.portType;
   return isDataSourceType(portType) ? portType : null;
+}
+
+function dataSourceSchemaSemanticExtension(value: Record<string, unknown>): WorkflowSemanticKind | null {
+  const semantic = value["x-semantic"] ?? value.xSemantic ?? value.semantic;
+  return isWorkflowSemanticKind(semantic) ? semantic : null;
 }
 
 function addDataSourceSchemaProperty(schema: Extract<DataSourceSchema, { type: "object" }>): DataSourceSchema {
@@ -8497,47 +8674,12 @@ function isSavedWorkflowRun(value: unknown): value is SavedWorkflowRun {
   );
 }
 
-function isDataSourceEntry(value: unknown): value is DataSourceEntry {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    typeof value.id === "string" &&
-    typeof value.name === "string" &&
-    (value.kind === undefined || isLegacyDataSourceKind(value.kind)) &&
-    isDataSourceFormat(value.format) &&
-    (value.type === undefined || isDataSourceType(value.type) || isDataSourceSchemaInput(value.type)) &&
-    typeof value.location === "string" &&
-    typeof value.description === "string" &&
-    Array.isArray(value.tags) &&
-    value.tags.every((tag) => typeof tag === "string") &&
-    typeof value.body === "string" &&
-    typeof value.createdAt === "string" &&
-    typeof value.updatedAt === "string"
-  );
-}
-
-function isLegacyDataSourceKind(value: unknown): boolean {
-  return (
-    value === "song-catalog" ||
-    value === "reference-library" ||
-    value === "index" ||
-    value === "dataset" ||
-    value === "knowledge-base" ||
-    value === "custom"
-  );
-}
-
-function isDataSourceFormat(value: unknown): value is DataSourceFormat {
-  return value === "sqlite" || value === "json" || value === "csv" || value === "txt" || value === "folder" || value === "api" || value === "other";
-}
-
 function isDataSourceType(value: unknown): value is DataSourceType {
   return typeof value === "string" && dataSourceOutputTypes.includes(value as DataSourceType);
 }
 
-function isDataSourceSchemaInput(value: unknown): boolean {
-  return isDataSourceSchema(value) || dataSourceSchemaFromJsonSchema(value) !== null;
+function isWorkflowSemanticKind(value: unknown): value is WorkflowSemanticKind {
+  return typeof value === "string";
 }
 
 function isDataSourceSchema(value: unknown): value is DataSourceSchema {
@@ -8548,12 +8690,22 @@ function isDataSourceSchema(value: unknown): value is DataSourceSchema {
     case "port":
       return isDataSourceType(value.portType);
     case "binary":
-      return typeof value.mediaType === "string" && isDataSourceType(value.portType);
+      return (
+        typeof value.mediaType === "string" &&
+        isDataSourceType(value.portType) &&
+        (value.semantic === undefined || isWorkflowSemanticKind(value.semantic))
+      );
     case "array":
-      return isDataSourceSchema(value.items);
+      return (
+        isDataSourceSchema(value.items) &&
+        (value.minItems === undefined || typeof value.minItems === "number") &&
+        (value.maxItems === undefined || typeof value.maxItems === "number")
+      );
     case "object":
       return (
         Array.isArray(value.properties) &&
+        (value.additionalProperties === undefined || typeof value.additionalProperties === "boolean") &&
+        (value.semantic === undefined || isWorkflowSemanticKind(value.semantic)) &&
         value.properties.every(
           (property) =>
             isRecord(property) &&
@@ -8563,7 +8715,10 @@ function isDataSourceSchema(value: unknown): value is DataSourceSchema {
             typeof property.required === "boolean",
         )
       );
+    case "union":
+      return Array.isArray(value.variants) && value.variants.length > 0 && value.variants.every(isDataSourceSchema);
     case "string":
+      return value.semantic === undefined || isWorkflowSemanticKind(value.semantic);
     case "number":
     case "boolean":
     case "null":
@@ -8589,9 +8744,22 @@ function normalizeDataSourceSchema(value: unknown, fallback: DataSourceSchema): 
         type: "binary",
         mediaType: typeof value.mediaType === "string" && value.mediaType.trim() ? value.mediaType.trim() : "application/octet-stream",
         portType: isDataSourceType(value.portType) ? value.portType : "data_value",
+        ...(isWorkflowSemanticKind(value.semantic) ? { semantic: value.semantic } : {}),
+      };
+    case "union":
+      return {
+        type: "union",
+        variants: Array.isArray(value.variants) && value.variants.length > 0
+          ? value.variants.map((variant) => normalizeDataSourceSchema(variant, { type: "any" }))
+          : [{ type: "any" }],
       };
     case "array":
-      return { type: "array", items: normalizeDataSourceSchema(value.items, { type: "any" }) };
+      return {
+        type: "array",
+        items: normalizeDataSourceSchema(value.items, { type: "any" }),
+        ...(typeof value.minItems === "number" ? { minItems: value.minItems } : {}),
+        ...(typeof value.maxItems === "number" ? { maxItems: value.maxItems } : {}),
+      };
     case "object":
       if (isRecord(value.properties)) {
         return dataSourceSchemaFromJsonSchema(value) ?? fallback;
@@ -8613,12 +8781,14 @@ function normalizeDataSourceSchema(value: unknown, fallback: DataSourceSchema): 
               ];
             })
           : [],
+        additionalProperties: typeof value.additionalProperties === "boolean" ? value.additionalProperties : true,
+        ...(isWorkflowSemanticKind(value.semantic) ? { semantic: value.semantic } : {}),
       };
     case "string": {
       if (value.contentEncoding === "base64" || typeof value.contentMediaType === "string") {
         return dataSourceSchemaFromJsonSchema(value) ?? fallback;
       }
-      return { type: "string" };
+      return { type: "string", ...(isWorkflowSemanticKind(value.semantic) ? { semantic: value.semantic } : {}) };
     }
     case "number":
     case "boolean":
@@ -8747,9 +8917,7 @@ function isWorkflowGroupBoundary(value: unknown): value is WorkflowGroupBoundary
     return false;
   }
   const handleValid = value.handle === null || value.handle === undefined || typeof value.handle === "string";
-  const streamValid =
-    value.stream === undefined ||
-    (typeof value.stream === "boolean" && (!value.stream || isStreamablePortType(value.type as PortType)));
+  const streamValid = value.stream === undefined || typeof value.stream === "boolean";
   return (
     typeof value.wrapperPortId === "string" &&
     typeof value.nodeId === "string" &&
@@ -8761,18 +8929,21 @@ function isWorkflowGroupBoundary(value: unknown): value is WorkflowGroupBoundary
 }
 
 function isFlowPort(value: unknown): value is FlowPort {
-  const streamValid =
-    isRecord(value) &&
-    (value.stream === undefined ||
-      (typeof value.stream === "boolean" && (!value.stream || isStreamablePortType(value.type as PortType))));
+  const streamValid = isRecord(value) && (value.stream === undefined || typeof value.stream === "boolean");
   return (
     isRecord(value) &&
     typeof value.id === "string" &&
     typeof value.label === "string" &&
     typeof value.type === "string" &&
     isPortType(value.type) &&
+    (value.kind === undefined || typeof value.kind === "string") &&
     (value.valueType === undefined || isWorkflowTypeSpec(value.valueType)) &&
     (value.optional === undefined || typeof value.optional === "boolean") &&
+    (value.exposableInput === undefined || typeof value.exposableInput === "boolean") &&
+    (value.inputSurface === undefined || typeof value.inputSurface === "string") &&
+    (value.suggestedAdapters === undefined ||
+      (Array.isArray(value.suggestedAdapters) && value.suggestedAdapters.every((adapter) => typeof adapter === "string"))) &&
+    (value.runtimeValidation === undefined || typeof value.runtimeValidation === "string") &&
     streamValid
   );
 }
@@ -8935,6 +9106,10 @@ function createWorkflowId(): string {
   return `workflow-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function workflowSeedId(kind: WorkflowKindId, name: string): string {
+  return `workflow-seed-${safeFlowId(kind)}-${safeFlowId(name.trim().toLowerCase().replace(/\s+/g, "-"))}`;
+}
+
 function createWorkflowVersionId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return `workflow-version-${crypto.randomUUID()}`;
@@ -8947,13 +9122,6 @@ function createWorkflowRunId(): string {
     return `workflow-run-${crypto.randomUUID()}`;
   }
   return `workflow-run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
-}
-
-function createDataSourceId(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return `data-source-${crypto.randomUUID()}`;
-  }
-  return `data-source-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
 function createWorkflowNodeInstanceId(baseId: string): string {
@@ -9761,7 +9929,7 @@ function workflowCatalogNodeTemplates(
 }
 
 function workflowNodeDataWithDataSource(data: WorkflowNodeData, dataSource: DataSourceEntry | null): WorkflowNodeData {
-  const type = dataSource ? dataSourcePortType(dataSource.type) : "data_value";
+  const type = dataSource ? workflowTypeToPortType(dataSource.type, "data_value") : "data_value";
   const nextData: WorkflowNodeData = {
     ...data,
     title: dataSource ? `Data Source: ${dataSource.name}` : "Data Source",
@@ -9844,9 +10012,9 @@ function workflowNodeDataSourceSynced(current: WorkflowNodeData, expected: Workf
 }
 
 function dataSourceOutputPort(dataSource: DataSourceEntry | null, fallbackType: DataSourceType): FlowPort {
-  const outputType = dataSource ? dataSourcePortType(dataSource.type) : fallbackType;
+  const outputType = dataSource ? workflowTypeToPortType(dataSource.type, fallbackType) : fallbackType;
   return port("data", dataSource ? "source data" : "data", outputType, {
-    valueType: dataSource ? dataSourceSchemaToWorkflowType(dataSource.type) : workflowTypeForPortType(outputType),
+    valueType: dataSource ? structuredClone(dataSource.type) : workflowTypeForPortType(outputType),
   });
 }
 
@@ -9863,23 +10031,26 @@ function workflowTypeSpecToDataSourceSchema(spec: WorkflowTypeSpec, fallbackPort
     case "number":
       return { type: spec.type };
     case "string":
-      return spec.semantic && isDataSourceType(spec.semantic) ? { type: "port", portType: spec.semantic } : { type: "string" };
+      return { type: "string", ...(spec.semantic ? { semantic: spec.semantic } : {}) };
     case "binary": {
-      const portType = spec.semantic && isDataSourceType(spec.semantic) ? spec.semantic : fallbackPortType;
+      const portType = workflowTypeToPortType(spec, fallbackPortType);
       const fallbackType = workflowTypeForPortType(portType);
       const fallbackMediaType = fallbackType.type === "binary" ? fallbackType.media_type : undefined;
       return {
         type: "binary",
         mediaType: spec.media_type || fallbackMediaType || "application/octet-stream",
         portType,
+        ...(spec.semantic ? { semantic: spec.semantic } : {}),
       };
     }
     case "array":
-      return { type: "array", items: workflowTypeSpecToDataSourceSchema(spec.items) };
+      return {
+        type: "array",
+        items: workflowTypeSpecToDataSourceSchema(spec.items),
+        ...(typeof spec.min_items === "number" ? { minItems: spec.min_items } : {}),
+        ...(typeof spec.max_items === "number" ? { maxItems: spec.max_items } : {}),
+      };
     case "object":
-      if ((spec.properties?.length ?? 0) === 0 && spec.semantic && isDataSourceType(spec.semantic)) {
-        return { type: "port", portType: spec.semantic };
-      }
       return {
         type: "object",
         properties: (spec.properties ?? []).map((property) => ({
@@ -9888,21 +10059,49 @@ function workflowTypeSpecToDataSourceSchema(spec: WorkflowTypeSpec, fallbackPort
           schema: workflowTypeSpecToDataSourceSchema(property.value),
           required: Boolean(property.required),
         })),
+        additionalProperties: spec.additional_properties ?? false,
+        ...(spec.semantic ? { semantic: spec.semantic } : {}),
       };
     case "union":
-      return { type: "any" };
+      return {
+        type: "union",
+        variants: spec.variants.map((variant) => workflowTypeSpecToDataSourceSchema(variant, fallbackPortType)),
+      };
+  }
+}
+
+function defaultSuggestedAdaptersForType(spec: WorkflowTypeSpec): string[] {
+  switch (spec.type) {
+    case "object":
+      return ["object-adapter", "data-adapter"];
+    case "array":
+    case "union":
+    case "any":
+      return ["data-adapter"];
+    default:
+      return [];
   }
 }
 
 function rustPortSpecToFlowPort(spec: RustPortSpec): FlowPort | null {
-  const type = rustPortKindToPortType(spec.kind);
-  if (!type) {
+  const fallbackType = rustPortKindToPortType(spec.kind);
+  if (!fallbackType) {
     return null;
   }
+  const valueType = isWorkflowTypeSpec(spec.value_type) ? spec.value_type : workflowTypeForPortType(fallbackType);
+  const type = workflowTypeToPortType(valueType, fallbackType);
   return port(spec.id, spec.label, type, {
+    kind: spec.kind,
     optional: Boolean(spec.optional),
     stream: Boolean(spec.stream),
-    valueType: isWorkflowTypeSpec(spec.value_type) ? spec.value_type : workflowTypeForPortType(type),
+    valueType,
+    exposableInput: Boolean(spec.exposable_input),
+    inputSurface: spec.input_surface,
+    suggestedAdapters:
+      Array.isArray(spec.suggested_adapters) && spec.suggested_adapters.length > 0
+        ? spec.suggested_adapters
+        : defaultSuggestedAdaptersForType(valueType),
+    runtimeValidation: spec.runtime_validation,
   });
 }
 
@@ -9913,10 +10112,10 @@ function rustPortKindToPortType(kind: RustPortSpec["kind"]): PortType | null {
     youtube_url: "youtube_url",
     youtube_collection_url: "youtube_collection_url",
     video_file: "video_file",
-    audio_file: "audio_wav",
-    media_file: "video_file",
-    transcript: "transcript_segment",
-    subtitle_file: "template_string",
+    audio_file: "audio_file",
+    media_file: "media_file",
+    transcript: "transcript",
+    subtitle_file: "subtitle_file",
     scene_list: "scene_result",
     observation_list: "video_observation",
     audio_events: "audio_event",
@@ -9926,7 +10125,7 @@ function rustPortKindToPortType(kind: RustPortSpec["kind"]): PortType | null {
     collection_manifest: "collection_manifest",
     collection_items: "collection_item",
     song_fingerprint: "song_fingerprint",
-    song_catalog: "data_value",
+    song_catalog: "song_catalog",
     song_matches: "song_match",
     music_features: "music_feature",
     template_string: "template_string",
@@ -9942,13 +10141,19 @@ function rustPortKindToPortType(kind: RustPortSpec["kind"]): PortType | null {
 }
 
 function port(id: string, label: string, type: PortType, options: FlowPortOptions = {}): FlowPort {
+  const valueType = options.valueType ?? workflowTypeForPortType(type);
   return {
     id,
     label,
     type,
-    valueType: options.valueType ?? workflowTypeForPortType(type),
+    ...(options.kind ? { kind: options.kind } : {}),
+    valueType,
     ...(options.optional ? { optional: true } : {}),
     ...(options.stream ? { stream: true } : {}),
+    ...(options.exposableInput ? { exposableInput: true } : {}),
+    ...(options.inputSurface ? { inputSurface: options.inputSurface } : {}),
+    suggestedAdapters: [...(options.suggestedAdapters ?? defaultSuggestedAdaptersForType(valueType))],
+    ...(options.runtimeValidation ? { runtimeValidation: options.runtimeValidation } : {}),
   };
 }
 
@@ -10000,19 +10205,17 @@ function compatibleConnection(nodes: WorkflowNodeModel[], connection: Connection
 function portsCompatible(sourcePort: FlowPort, targetPort: FlowPort): boolean {
   const streamConnection = portIsStream(sourcePort) || portIsStream(targetPort);
   if (streamConnection) {
-    return (
-      portIsStream(sourcePort) &&
-      portIsStream(targetPort) &&
-      isStreamablePortType(sourcePort.type) &&
-      isStreamablePortType(targetPort.type) &&
-      workflowTypesAssignable(sourcePort.valueType, targetPort.valueType)
-    );
+    return portIsStream(sourcePort) && portIsStream(targetPort) && workflowTypesAssignable(sourcePort.valueType, targetPort.valueType);
   }
   return workflowTypesAssignable(sourcePort.valueType, targetPort.valueType);
 }
 
-function isStreamablePortType(type: PortType): boolean {
-  return streamablePortTypes.includes(type);
+function connectionMismatchMessage(sourcePort: FlowPort | null, targetPort: FlowPort | null): string {
+  if (!sourcePort || !targetPort) {
+    return "Connection is invalid for the selected handles.";
+  }
+  const suggestions = [...(targetPort.suggestedAdapters ?? []), ...(sourcePort.suggestedAdapters ?? [])];
+  return `${sourcePort.label} emits ${formatFlowPortType(sourcePort)}, but ${targetPort.label} expects ${formatFlowPortType(targetPort)}.${suggestions.length > 0 ? ` Try ${[...new Set(suggestions)].join(", ")}.` : ""}`;
 }
 
 function portIsStream(portValue: FlowPort): boolean {
@@ -10197,36 +10400,37 @@ function deriveWorkflowRunInputModel(workflow: SavedWorkflow): WorkflowRunInputM
       continue;
     }
     for (const output of node.data.outputs) {
-      if (isExecutableWorkflowInputType(output.type)) {
+      if (output.exposableInput) {
         addInput(node, output, "provider");
       }
     }
   }
 
-  const sourceModes: SourceMode[] = [];
-  if (inputs.some((input) => input.port.type === "youtube_url")) {
-    sourceModes.push("url");
-  }
-  if (inputs.some((input) => input.port.type === "youtube_collection_url")) {
-    sourceModes.push("collection");
-  }
-  if (inputs.some((input) => input.port.type === "video_file")) {
-    sourceModes.push("file");
-  }
+  const sourceModes = inputs.reduce<SourceMode[]>((modes, input) => {
+    const mode = sourceModeForWorkflowInput(input.port);
+    if (mode && !modes.includes(mode)) {
+      modes.push(mode);
+    }
+    return modes;
+  }, []);
+
+  const configInputs = inputs.filter((input) => workflowInputSurface(input.port) === "config");
 
   return {
     inputs,
     sourceModes,
-    showRunConfig: inputs.some((input) => input.port.type === "run_config"),
+    configInputs,
     openInputs: inputs.filter((input) => input.source === "open"),
-    genericInputs: inputs.filter((input) => input.source === "open" && !isExecutableWorkflowInputType(input.port.type)),
+    genericInputs: inputs.filter(
+      (input) => input.source === "open" && workflowInputSurface(input.port) === "generic",
+    ),
   };
 }
 
-function workflowRunInputForType(inputModel: WorkflowRunInputModel, type: PortType): WorkflowRunInput | null {
+function workflowRunInputForSurface(inputModel: WorkflowRunInputModel, surface: WorkflowInputSurface): WorkflowRunInput | null {
   return (
-    inputModel.inputs.find((input) => input.source === "open" && input.port.type === type) ??
-    inputModel.inputs.find((input) => input.port.type === type) ??
+    inputModel.inputs.find((input) => input.source === "open" && workflowInputSurface(input.port) === surface) ??
+    inputModel.inputs.find((input) => workflowInputSurface(input.port) === surface) ??
     null
   );
 }
@@ -10243,22 +10447,47 @@ function workflowFocusTargetKey(target: WorkflowFocusTarget): string {
 }
 
 function isWorkflowInputProviderNode(node: SavedWorkflowBlockNode, incomingNodes: Set<string>): boolean {
-  const title = node.data.title.toLowerCase();
-  const packageName = node.data.packageName.toLowerCase();
-  if (
-    packageName === "input" ||
-    packageName.includes("@video-analysis/web") ||
-    title.includes("source picker") ||
-    title.includes("run input") ||
-    title.includes("user story page")
-  ) {
-    return true;
-  }
-  return !incomingNodes.has(node.id) && node.data.outputs.some((output) => isExecutableWorkflowInputType(output.type));
+  return !incomingNodes.has(node.id) && node.data.outputs.some((output) => output.exposableInput);
 }
 
-function isExecutableWorkflowInputType(type: PortType): boolean {
-  return type === "youtube_url" || type === "youtube_collection_url" || type === "video_file" || type === "run_config";
+function sourceModeForWorkflowInput(portValue: FlowPort): SourceMode | null {
+  switch (workflowInputSurface(portValue)) {
+    case "source_url":
+      return "url";
+    case "collection_url":
+      return "collection";
+    case "file":
+      return "file";
+    default:
+      return null;
+  }
+}
+
+function workflowInputSurface(portValue: FlowPort): WorkflowInputSurface {
+  if (portValue.inputSurface) {
+    return portValue.inputSurface;
+  }
+  switch (portValue.valueType.type) {
+    case "string":
+      if (portValue.valueType.semantic === "youtube_url") {
+        return "source_url";
+      }
+      if (portValue.valueType.semantic === "youtube_collection_url") {
+        return "collection_url";
+      }
+      return "generic";
+    case "binary":
+      if (portValue.valueType.semantic === "video_file" || portValue.valueType.semantic === "media_file") {
+        return "file";
+      }
+      return "generic";
+    case "object":
+      return portValue.valueType.semantic === "run_config" || portValue.kind === "run_config" || portValue.type === "run_config"
+        ? "config"
+        : "generic";
+    default:
+      return "generic";
+  }
 }
 
 function effectiveSourceMode(form: WorkflowRunForm, inputModel?: WorkflowRunInputModel): SourceMode {
@@ -10316,10 +10545,10 @@ function WorkflowRunControls({
         : "url"
       : form.sourceMode === "collection" ? "collection" : effectiveSourceMode(form, inputModel);
   const showSourceSelector = sourceModes.length > 1;
-  const urlInput = workflowRunInputForType(inputModel, "youtube_url");
-  const collectionInput = workflowRunInputForType(inputModel, "youtube_collection_url");
-  const fileInput = workflowRunInputForType(inputModel, "video_file");
-  const runConfigInput = workflowRunInputForType(inputModel, "run_config");
+  const urlInput = workflowRunInputForSurface(inputModel, "source_url");
+  const collectionInput = workflowRunInputForSurface(inputModel, "collection_url");
+  const fileInput = workflowRunInputForSurface(inputModel, "file");
+  const runConfigInput = workflowRunInputForSurface(inputModel, "config");
   const activeStatus = activeRunRecord?.status;
   const canCancel = Boolean(activeRunId && (activeStatus === "pending" || activeStatus === "running" || isRunning));
   const canRetry = Boolean(activeRunRecord && ["failed", "canceled", "succeeded"].includes(activeRunRecord.status));
@@ -10463,7 +10692,7 @@ function WorkflowRunControls({
           </Field>
         )}
 
-        {inputModel.showRunConfig && (
+        {inputModel.configInputs.length > 0 && (
           <>
             <Field
               label={workflowInputFieldLabel("Work directory", runConfigInput)}
@@ -10775,8 +11004,12 @@ function WorkflowRunControls({
             <input
               className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
               value={form.workflowInputs[input.key] ?? ""}
-              placeholder={input.port.type === "template_string" ? "output/{{id}}.json" : formatPortType(input.port.type)}
-              title={formatPortType(input.port.type)}
+              placeholder={
+                input.port.valueType.type === "string" && input.port.valueType.semantic === "template_string"
+                  ? "output/{{id}}.json"
+                  : formatFlowPortType(input.port)
+              }
+              title={formatFlowPortType(input.port)}
               onChange={(event) => setWorkflowInput(input.key, event.target.value)}
             />
           </Field>
@@ -11427,6 +11660,61 @@ function parseCsv(value: string): string[] {
     .filter(Boolean);
 }
 
+function parseWorkflowInputValue(raw: string, spec: WorkflowTypeSpec): unknown {
+  const trimmed = raw.trim();
+  switch (spec.type) {
+    case "string":
+    case "binary":
+      return raw;
+    case "number": {
+      const parsed = Number(trimmed);
+      if (!trimmed || !Number.isFinite(parsed)) {
+        throw new Error("Expected a number.");
+      }
+      return parsed;
+    }
+    case "boolean":
+      if (trimmed === "true") {
+        return true;
+      }
+      if (trimmed === "false") {
+        return false;
+      }
+      throw new Error("Expected true or false.");
+    case "null":
+      if (trimmed === "null") {
+        return null;
+      }
+      throw new Error("Expected null.");
+    case "any":
+      return trimmed ? JSON.parse(trimmed) : null;
+    case "array":
+    case "object":
+    case "union":
+      if (!trimmed) {
+        throw new Error("Expected JSON.");
+      }
+      return JSON.parse(trimmed);
+  }
+}
+
+function validateWorkflowInputValue(portValue: FlowPort, raw: string): string | null {
+  if (!raw.trim()) {
+    return portValue.optional ? null : `${portValue.label} is required.`;
+  }
+  let parsed: unknown;
+  try {
+    parsed = parseWorkflowInputValue(raw, portValue.valueType);
+  } catch (error) {
+    return `${portValue.label}: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  const issue = validateWorkflowValue(portValue.valueType, parsed);
+  if (!issue) {
+    return null;
+  }
+  return `${portValue.label}: expected ${issue.expected} at ${issue.path}, got ${issue.actual}.`;
+}
+
 function collectionManifestFormKey(form: WorkflowRunForm): string {
   return JSON.stringify({
     url: form.url.trim(),
@@ -11584,6 +11872,14 @@ function getRunValidation(
   if (form.maxFrames.trim() && !/^[1-9]\d*$/.test(form.maxFrames.trim())) {
     return "Max frames must be a positive integer.";
   }
+  if (inputModel) {
+    for (const input of inputModel.genericInputs) {
+      const message = validateWorkflowInputValue(input.port, form.workflowInputs[input.key] ?? "");
+      if (message) {
+        return message;
+      }
+    }
+  }
   return null;
 }
 
@@ -11658,29 +11954,45 @@ function defaultOutputForWorkflowKind(id: WorkflowKindId): string {
   }
 }
 
-function appPageFromPath(pathname: string): AppPage {
-  if (pathname === "/workflow" || pathname === "/workflows") {
-    return "workflow";
+function appLocationFromPath(pathname: string): AppLocation {
+  const segments = pathname.split("/").filter(Boolean);
+  const [pageSegment, workflowSegment] = segments;
+  if (pageSegment === "workflow" || pageSegment === "workflows") {
+    return {
+      page: "workflow",
+      workflowId: decodePathSegment(workflowSegment),
+    };
   }
-  if (pathname === "/data-sources" || pathname === "/datasources") {
-    return "data-sources";
+  if (pageSegment === "data-sources" || pageSegment === "datasources") {
+    return { page: "data-sources", workflowId: null };
   }
-  if (pathname === "/settings") {
-    return "settings";
+  if (pageSegment === "settings") {
+    return { page: "settings", workflowId: null };
   }
-  return "analysis";
+  return { page: "analysis", workflowId: null };
 }
 
-function pathForAppPage(page: AppPage): string {
+function pathForAppPage(page: AppPage, workflowId?: string | null): string {
   switch (page) {
     case "workflow":
-      return "/workflow";
+      return workflowId ? `/workflow/${encodeURIComponent(workflowId)}` : "/workflow";
     case "data-sources":
       return "/data-sources";
     case "settings":
       return "/settings";
     case "analysis":
       return "/";
+  }
+}
+
+function decodePathSegment(value: string | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
   }
 }
 

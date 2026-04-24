@@ -1,9 +1,10 @@
 use studio_core::{
-    check_system_dependencies, discover_youtube_collection_manifest, RunEvent, RunId, RunManager,
-    RunRecord, RunStatus, SongAnalysisRunRequest, SongCatalogImportRequest,
-    SongCatalogImportResponse, StudioReport, SubtitleGenerationRunRequest, SystemDependencyReport,
-    WorkflowCatalog, YoutubeCollectionManifest, YoutubeCollectionManifestRequest,
-    YoutubeCollectionRunRequest, YoutubeRunRequest,
+    check_system_dependencies, discover_youtube_collection_manifest, DataSourceDerivationInput,
+    DataSourceRecord, DataSourceUpsert, RunEvent, RunId, RunManager, RunRecord, RunStatus,
+    SongAnalysisRunRequest, SongCatalogImportRequest, SongCatalogImportResponse, StudioReport,
+    SubtitleGenerationRunRequest, SystemDependencyReport, WorkflowCatalog,
+    YoutubeCollectionManifest, YoutubeCollectionManifestRequest, YoutubeCollectionRunRequest,
+    YoutubeRunRequest,
 };
 use tauri::{AppHandle, Emitter, State};
 
@@ -19,6 +20,61 @@ pub async fn check_dependencies() -> Result<SystemDependencyReport, String> {
 #[tauri::command]
 pub async fn get_workflow_catalog() -> Result<WorkflowCatalog, String> {
     Ok(studio_core::default_workflow_catalog())
+}
+
+#[tauri::command]
+pub async fn list_data_sources(state: State<'_, StudioState>) -> Result<Vec<DataSourceRecord>, String> {
+    state.manager.list_data_sources().await.map_err(error_string)
+}
+
+#[tauri::command]
+pub async fn create_data_source(
+    state: State<'_, StudioState>,
+    request: DataSourceUpsert,
+) -> Result<DataSourceRecord, String> {
+    state
+        .manager
+        .create_data_source(request)
+        .await
+        .map_err(error_string)
+}
+
+#[tauri::command]
+pub async fn update_data_source(
+    state: State<'_, StudioState>,
+    id: String,
+    request: DataSourceUpsert,
+) -> Result<DataSourceRecord, String> {
+    state
+        .manager
+        .update_data_source(&id, request)
+        .await
+        .map_err(error_string)
+}
+
+#[tauri::command]
+pub async fn delete_data_source(
+    state: State<'_, StudioState>,
+    id: String,
+) -> Result<(), String> {
+    state
+        .manager
+        .delete_data_source(&id)
+        .await
+        .map_err(error_string)
+}
+
+#[tauri::command]
+pub async fn create_data_source_derivation(
+    state: State<'_, StudioState>,
+    parent_id: String,
+    request: DataSourceDerivationInput,
+) -> Result<DataSourceRecord, String> {
+    state
+        .manager
+        .create_data_source_derivation(&parent_id, request)
+        .await
+        .map_err(error_string)
 }
 
 #[tauri::command]

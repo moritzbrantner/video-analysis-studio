@@ -1,4 +1,5 @@
 import type {
+  DataSourceRecord,
   RunEvent,
   RunRecord,
   SystemDependencyReport,
@@ -29,6 +30,26 @@ export function createHttpClient(baseUrl = import.meta.env.VITE_STUDIO_API_URL ?
     label: "HTTP API",
     checkDependencies: () => request<SystemDependencyReport>(baseUrl, "/api/system/dependencies"),
     getWorkflowCatalog: () => request<WorkflowCatalog>(baseUrl, "/api/workflow/catalog"),
+    listDataSources: () => request<DataSourceRecord[]>(baseUrl, "/api/data-sources"),
+    createDataSource: (payload) =>
+      request<DataSourceRecord>(baseUrl, "/api/data-sources", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    updateDataSource: (id, payload) =>
+      request<DataSourceRecord>(baseUrl, `/api/data-sources/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      }),
+    deleteDataSource: (id) =>
+      request<void>(baseUrl, `/api/data-sources/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      }),
+    createDataSourceDerivation: (parentId, payload) =>
+      request<DataSourceRecord>(baseUrl, `/api/data-sources/${encodeURIComponent(parentId)}/derivations`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
     discoverYoutubeCollectionManifest: (payload) =>
       request<YoutubeCollectionManifest>(baseUrl, "/api/youtube/collection-manifests", {
         method: "POST",

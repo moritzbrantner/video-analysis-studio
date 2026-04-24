@@ -1,5 +1,11 @@
 import type { WorkflowObjectProperty, WorkflowTypeSpec } from "./api/client";
 
+export interface WorkflowTypeValidationIssue {
+  path: string;
+  expected: string;
+  actual: string;
+}
+
 export function workflowTypesAssignable(source: WorkflowTypeSpec, target: WorkflowTypeSpec): boolean {
   if (target.type === "any") {
     return true;
@@ -129,6 +135,105 @@ export function isWorkflowTypeSpec(value: unknown): value is WorkflowTypeSpec {
   }
 }
 
+export function validateWorkflowValue(spec: WorkflowTypeSpec, value: unknown, path = "$"): WorkflowTypeValidationIssue | null {
+  switch (spec.type) {
+    case "any":
+      return null;
+    case "null":
+      return value === null ? null : validationIssue(path, spec, value);
+    case "boolean":
+      return typeof value === "boolean" ? null : validationIssue(path, spec, value);
+    case "number":
+      return typeof value === "number" && Number.isFinite(value) ? null : validationIssue(path, spec, value);
+    case "string":
+      return typeof value === "string" ? null : validationIssue(path, spec, value);
+    case "binary":
+      return typeof value === "string" || value instanceof Uint8Array ? null : validationIssue(path, spec, value);
+    case "array": {
+      if (!Array.isArray(value)) {
+        return validationIssue(path, spec, value);
+      }
+      if (typeof spec.min_items === "number" && value.length < spec.min_items) {
+        return {
+          path,
+          expected: formatWorkflowTypeSpec(spec),
+          actual: `Array[${value.length}]`,
+        };
+      }
+      if (typeof spec.max_items === "number" && value.length > spec.max_items) {
+        return {
+          path,
+          expected: formatWorkflowTypeSpec(spec),
+          actual: `Array[${value.length}]`,
+        };
+      }
+      for (let index = 0; index < value.length; index += 1) {
+        const issue = validateWorkflowValue(spec.items, value[index], `${path}[${index}]`);
+        if (issue) {
+          return issue;
+        }
+      }
+      return null;
+    }
+    case "object": {
+      if (!isPlainObject(value)) {
+        return validationIssue(path, spec, value);
+      }
+      const properties = spec.properties ?? [];
+      for (const property of properties) {
+        const propertyValue = value[property.name];
+        if (propertyValue === undefined) {
+          if (property.required) {
+            return {
+              path: `${path}.${property.name}`,
+              expected: formatWorkflowTypeSpec(property.value),
+              actual: "missing",
+            };
+          }
+          continue;
+        }
+        const issue = validateWorkflowValue(property.value, propertyValue, `${path}.${property.name}`);
+        if (issue) {
+          return issue;
+        }
+      }
+      if (spec.additional_properties === false) {
+        const allowed = new Set(properties.map((property) => property.name));
+        for (const key of Object.keys(value)) {
+          if (!allowed.has(key)) {
+            return {
+              path: `${path}.${key}`,
+              expected: "no additional properties",
+              actual: describeWorkflowRuntimeValue(value[key]),
+            };
+          }
+        }
+      }
+      return null;
+    }
+    case "union":
+      return spec.variants.some((variant) => validateWorkflowValue(variant, value, path) === null)
+        ? null
+        : validationIssue(path, spec, value);
+  }
+}
+
+export function describeWorkflowRuntimeValue(value: unknown): string {
+  if (value === null) {
+    return "null";
+  }
+  if (Array.isArray(value)) {
+    return `Array[${value.length}]`;
+  }
+  if (value instanceof Uint8Array) {
+    return `Uint8Array(${value.byteLength})`;
+  }
+  if (typeof value === "object") {
+    return "Object";
+  }
+  return typeof value;
+}
+
 function formatWorkflowType(spec: WorkflowTypeSpec): string {
   switch (spec.type) {
     case "any":
@@ -231,6 +336,18 @@ function compareCanonicalTypeSpec(left: WorkflowTypeSpec, right: WorkflowTypeSpe
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && !Array.isArray(value) && !(value instanceof Uint8Array);
+}
+
+function validationIssue(path: string, spec: WorkflowTypeSpec, value: unknown): WorkflowTypeValidationIssue {
+  return {
+    path,
+    expected: formatWorkflowTypeSpec(spec),
+    actual: describeWorkflowRuntimeValue(value),
+  };
 }
 
 function fnv1aHash(value: string): string {

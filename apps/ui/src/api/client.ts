@@ -124,6 +124,10 @@ export interface WorkflowObjectProperty {
   required?: boolean;
 }
 
+export type WorkflowInputSurface = "source_url" | "collection_url" | "file" | "config" | "generic";
+
+export type WorkflowRuntimeValidation = "strict" | "unsafe" | "external_input";
+
 export type WorkflowTypeSpec =
   | { type: "any" }
   | { type: "null" }
@@ -140,6 +144,53 @@ export type WorkflowTypeSpec =
     }
   | { type: "union"; variants: WorkflowTypeSpec[] };
 
+export type DataSourceKind = "sqlite" | "json" | "csv" | "txt" | "folder" | "api" | "other";
+export type DataSourceDerivationKind = "alias" | "subset_view";
+
+export type DataSourceOrigin =
+  | { mode: "root" }
+  | {
+      mode: "derived_view";
+      parent_id: string;
+      derivation_kind: DataSourceDerivationKind;
+      summary?: string;
+    };
+
+export interface DataSourceRecord {
+  id: string;
+  name: string;
+  kind: DataSourceKind;
+  type: WorkflowTypeSpec;
+  location: string;
+  description: string;
+  tags: string[];
+  body: string;
+  origin: DataSourceOrigin;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DataSourceUpsert {
+  id: string;
+  name: string;
+  kind: DataSourceKind;
+  type: WorkflowTypeSpec;
+  location: string;
+  description: string;
+  tags: string[];
+  body: string;
+}
+
+export interface DataSourceDerivationInput {
+  id: string;
+  name: string;
+  type: WorkflowTypeSpec;
+  description: string;
+  tags: string[];
+  derivation_kind?: DataSourceDerivationKind;
+  summary?: string;
+}
+
 export interface PortSpec {
   id: string;
   label: string;
@@ -147,6 +198,10 @@ export interface PortSpec {
   value_type: WorkflowTypeSpec;
   optional?: boolean;
   stream?: boolean;
+  exposable_input?: boolean;
+  input_surface?: WorkflowInputSurface;
+  suggested_adapters?: string[];
+  runtime_validation?: WorkflowRuntimeValidation;
 }
 
 export interface NodeSpec {
@@ -201,6 +256,11 @@ export interface WorkflowClient {
   label: string;
   checkDependencies(): Promise<SystemDependencyReport>;
   getWorkflowCatalog(): Promise<WorkflowCatalog>;
+  listDataSources(): Promise<DataSourceRecord[]>;
+  createDataSource(request: DataSourceUpsert): Promise<DataSourceRecord>;
+  updateDataSource(id: string, request: DataSourceUpsert): Promise<DataSourceRecord>;
+  deleteDataSource(id: string): Promise<void>;
+  createDataSourceDerivation(parentId: string, request: DataSourceDerivationInput): Promise<DataSourceRecord>;
   discoverYoutubeCollectionManifest(request: YoutubeCollectionManifestRequest): Promise<YoutubeCollectionManifest>;
   startYoutubeVideoRun(request: YoutubeRunRequest): Promise<RunRecord>;
   startYoutubeCollectionRun(request: YoutubeCollectionRunRequest): Promise<RunRecord>;

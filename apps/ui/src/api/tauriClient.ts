@@ -1,4 +1,5 @@
 import type {
+  DataSourceRecord,
   RunEvent,
   RunRecord,
   SystemDependencyReport,
@@ -31,6 +32,12 @@ export function createTauriClient(): WorkflowClient {
     label: "Tauri",
     checkDependencies: async () => invoke<SystemDependencyReport>("check_dependencies"),
     getWorkflowCatalog: async () => invoke<WorkflowCatalog>("get_workflow_catalog"),
+    listDataSources: async () => invoke<DataSourceRecord[]>("list_data_sources"),
+    createDataSource: async (request) => invoke<DataSourceRecord>("create_data_source", { request }),
+    updateDataSource: async (id, request) => invoke<DataSourceRecord>("update_data_source", { id, request }),
+    deleteDataSource: async (id) => invoke<void>("delete_data_source", { id }),
+    createDataSourceDerivation: async (parentId, request) =>
+      invoke<DataSourceRecord>("create_data_source_derivation", { parentId, request }),
     discoverYoutubeCollectionManifest: async (request) =>
       invoke<YoutubeCollectionManifest>("discover_youtube_collection_manifest_command", { request }),
     startYoutubeVideoRun: async (request) =>

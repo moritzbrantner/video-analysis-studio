@@ -7,6 +7,7 @@
     "apps/*"
   ],
   "scripts": {
+    "dev": "bun run --cwd apps/ui dev",
     "api:dev": "cargo run -p studio-api -- --data-dir ./studio-data",
     "ui:dev": "bun run --cwd apps/ui dev",
     "ui:build": "bun run --cwd apps/ui build",

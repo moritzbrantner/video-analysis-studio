@@ -4,6 +4,7 @@ import type { WorkflowTypeSpec } from "../src/api/client";
 import {
   formatWorkflowTypeSpec,
   formatWorkflowTypeSpecJson,
+  validateWorkflowValue,
   workflowTypeSignature,
   workflowTypesAssignable,
 } from "../src/workflowTypeSpec";
@@ -140,5 +141,36 @@ describe("workflow type formatting and signatures", () => {
   ],
   "additional_properties": false
 }`);
+  });
+});
+
+describe("workflow type runtime validation", () => {
+  test("reports the failing path for closed object mismatches", () => {
+    expect(
+      validateWorkflowValue(
+        {
+          type: "object",
+          properties: [{ name: "id", value: { type: "string" }, required: true }],
+          additional_properties: false,
+        },
+        { id: "abc", extra: 3 },
+      ),
+    ).toEqual({
+      path: "$.extra",
+      expected: "no additional properties",
+      actual: "number",
+    });
+  });
+
+  test("accepts union values when one variant matches", () => {
+    expect(
+      validateWorkflowValue(
+        {
+          type: "union",
+          variants: [{ type: "number" }, { type: "string", semantic: "template_string" }],
+        },
+        "output/{{id}}.json",
+      ),
+    ).toBeNull();
   });
 });

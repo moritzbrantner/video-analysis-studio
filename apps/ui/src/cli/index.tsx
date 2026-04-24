@@ -9,7 +9,15 @@ export interface CliRun {
   message?: string | null;
 }
 
-export function CliRunPanel({ run }: { run: CliRun }) {
+export function CliRunPanel({ run }: { run?: CliRun | null }) {
+  if (!run) {
+    return (
+      <Panel title="CLI Run" description="No run has started yet.">
+        <EmptyState>Start a run to see command arguments, status, and output files.</EmptyState>
+      </Panel>
+    );
+  }
+
   return (
     <Panel
       title="CLI Run"

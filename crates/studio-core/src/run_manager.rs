@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, Mutex};
 use uuid::Uuid;
 
+use crate::data_sources::{
+    data_source_catalog_path, DataSourceCatalog, DataSourceDerivationInput, DataSourceRecord,
+    DataSourceUpsert,
+};
 use crate::error::{Result, StudioError};
 use crate::report::StudioReport;
 use crate::song::{
@@ -71,6 +75,7 @@ pub struct RunManager {
 
 struct RunManagerInner {
     runs: Mutex<HashMap<RunId, RunState>>,
+    data_sources: Mutex<()>,
 }
 
 struct RunState {
@@ -85,6 +90,7 @@ impl RunManager {
             data_dir,
             inner: Arc::new(RunManagerInner {
                 runs: Mutex::new(HashMap::new()),
+                data_sources: Mutex::new(()),
             }),
         }
     }
@@ -486,6 +492,51 @@ impl RunManager {
             .ok_or_else(|| StudioError::RunNotFound(run_id.to_string()))
     }
 
+    pub async fn list_data_sources(&self) -> Result<Vec<DataSourceRecord>> {
+        let _guard = self.inner.data_sources.lock().await;
+        Ok(self.load_data_source_catalog()?.data_sources)
+    }
+
+    pub async fn create_data_source(&self, input: DataSourceUpsert) -> Result<DataSourceRecord> {
+        let _guard = self.inner.data_sources.lock().await;
+        let mut catalog = self.load_data_source_catalog()?;
+        let record = catalog.create(input)?;
+        self.save_data_source_catalog(&catalog)?;
+        Ok(record)
+    }
+
+    pub async fn update_data_source(
+        &self,
+        current_id: &str,
+        input: DataSourceUpsert,
+    ) -> Result<DataSourceRecord> {
+        let _guard = self.inner.data_sources.lock().await;
+        let mut catalog = self.load_data_source_catalog()?;
+        let record = catalog.update(current_id, input)?;
+        self.save_data_source_catalog(&catalog)?;
+        Ok(record)
+    }
+
+    pub async fn delete_data_source(&self, id: &str) -> Result<()> {
+        let _guard = self.inner.data_sources.lock().await;
+        let mut catalog = self.load_data_source_catalog()?;
+        catalog.delete(id)?;
+        self.save_data_source_catalog(&catalog)?;
+        Ok(())
+    }
+
+    pub async fn create_data_source_derivation(
+        &self,
+        parent_id: &str,
+        input: DataSourceDerivationInput,
+    ) -> Result<DataSourceRecord> {
+        let _guard = self.inner.data_sources.lock().await;
+        let mut catalog = self.load_data_source_catalog()?;
+        let record = catalog.create_derivation(parent_id, input)?;
+        self.save_data_source_catalog(&catalog)?;
+        Ok(record)
+    }
+
     async fn update_run(
         &self,
         run_id: RunId,
@@ -529,6 +580,14 @@ impl RunManager {
             push_event_history(&mut state.history, event.clone());
             let _ = state.events.send(event);
         }
+    }
+
+    fn load_data_source_catalog(&self) -> Result<DataSourceCatalog> {
+        DataSourceCatalog::load(&data_source_catalog_path(&self.data_dir))
+    }
+
+    fn save_data_source_catalog(&self, catalog: &DataSourceCatalog) -> Result<()> {
+        catalog.save(&data_source_catalog_path(&self.data_dir))
     }
 }
 

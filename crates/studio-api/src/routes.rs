@@ -8,13 +8,14 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 use studio_core::{
-    check_system_dependencies, discover_youtube_collection_manifest, RunEvent, RunId, RunManager,
-    RunRecord, SongAnalysisRunRequest, SongCatalogImportRequest, StudioError, StudioReport,
+    check_system_dependencies, discover_youtube_collection_manifest, DataSourceDerivationInput,
+    DataSourceRecord, DataSourceUpsert, RunEvent, RunId, RunManager, RunRecord,
+    SongAnalysisRunRequest, SongCatalogImportRequest, StudioError, StudioReport,
     SubtitleGenerationRunRequest, WorkflowKind, YoutubeCollectionManifestRequest,
     YoutubeCollectionRunRequest, YoutubeRunRequest, YoutubeVideoReport,
 };
@@ -37,6 +38,15 @@ pub fn build_app(manager: RunManager) -> Router {
         .route("/api/system/dependencies", get(system_dependencies))
         .route("/api/workflows", get(workflows))
         .route("/api/workflow/catalog", get(workflow_catalog))
+        .route("/api/data-sources", get(list_data_sources).post(create_data_source))
+        .route(
+            "/api/data-sources/{id}",
+            put(update_data_source).delete(delete_data_source),
+        )
+        .route(
+            "/api/data-sources/{id}/derivations",
+            post(create_data_source_derivation),
+        )
         .route(
             "/api/youtube/collection-manifests",
             post(discover_collection_manifest),
@@ -109,6 +119,48 @@ async fn workflows() -> Json<Vec<WorkflowDescriptor>> {
 
 async fn workflow_catalog() -> Json<studio_core::WorkflowCatalog> {
     Json(studio_core::default_workflow_catalog())
+}
+
+async fn list_data_sources(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<DataSourceRecord>>, ApiError> {
+    Ok(Json(state.manager.list_data_sources().await?))
+}
+
+async fn create_data_source(
+    State(state): State<AppState>,
+    Json(request): Json<DataSourceUpsert>,
+) -> Result<Json<DataSourceRecord>, ApiError> {
+    Ok(Json(state.manager.create_data_source(request).await?))
+}
+
+async fn update_data_source(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<DataSourceUpsert>,
+) -> Result<Json<DataSourceRecord>, ApiError> {
+    Ok(Json(state.manager.update_data_source(&id, request).await?))
+}
+
+async fn delete_data_source(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.manager.delete_data_source(&id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn create_data_source_derivation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<DataSourceDerivationInput>,
+) -> Result<Json<DataSourceRecord>, ApiError> {
+    Ok(Json(
+        state
+            .manager
+            .create_data_source_derivation(&id, request)
+            .await?,
+    ))
 }
 
 async fn discover_collection_manifest(
@@ -536,6 +588,151 @@ mod tests {
             node["id"] == "youtube-workflow"
                 && node["package_name"] == "video-analysis-use-cases"
         }));
+    }
+
+    #[tokio::test]
+    async fn data_source_crud_routes_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = build_app(RunManager::new(dir.path().to_path_buf()));
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/data-sources")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "id": "song_catalog",
+                            "name": "Song Catalog",
+                            "kind": "sqlite",
+                            "type": {
+                                "type": "object",
+                                "properties": [],
+                                "additional_properties": true,
+                                "semantic": "song_catalog"
+                            },
+                            "location": "studio-data/catalog.sqlite",
+                            "description": "workspace catalog",
+                            "tags": ["songs", "matching"],
+                            "body": ""
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_response.status(), StatusCode::OK);
+
+        let list_response = app
+            .clone()
+            .oneshot(Request::get("/api/data-sources").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let records: Vec<studio_core::DataSourceRecord> = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, "song_catalog");
+
+        let update_response = app
+            .clone()
+            .oneshot(
+                Request::put("/api/data-sources/song_catalog")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "id": "song_catalog_v2",
+                            "name": "Song Catalog V2",
+                            "kind": "sqlite",
+                            "type": {
+                                "type": "object",
+                                "properties": [],
+                                "additional_properties": true,
+                                "semantic": "song_catalog"
+                            },
+                            "location": "studio-data/catalog.sqlite",
+                            "description": "workspace catalog",
+                            "tags": ["songs"],
+                            "body": ""
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(update_response.status(), StatusCode::OK);
+
+        let delete_response = app
+            .oneshot(
+                Request::delete("/api/data-sources/song_catalog_v2")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn derivation_route_creates_child_and_blocks_parent_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = build_app(RunManager::new(dir.path().to_path_buf()));
+
+        let create_parent = Request::post("/api/data-sources")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "id": "catalog",
+                    "name": "Catalog",
+                    "kind": "json",
+                    "type": { "type": "any" },
+                    "location": "studio-data/catalog.json",
+                    "description": "",
+                    "tags": [],
+                    "body": "{}"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let response = app.clone().oneshot(create_parent).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let derive_response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/data-sources/catalog/derivations")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "id": "catalog_view",
+                            "name": "Catalog View",
+                            "type": { "type": "any" },
+                            "description": "derived",
+                            "tags": ["view"],
+                            "derivation_kind": "alias",
+                            "summary": "subset"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(derive_response.status(), StatusCode::OK);
+
+        let delete_response = app
+            .oneshot(
+                Request::delete("/api/data-sources/catalog")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

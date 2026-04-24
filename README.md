@@ -16,8 +16,10 @@ gh auth setup-git
 bun install
 cargo check --workspace
 cargo test --workspace
-bun run --cwd apps/ui dev
+bun dev
 cargo run -p studio-api -- --data-dir ./studio-data
 ```
+
+During development, run the app with `bun dev`. The UI dev server is pinned to `http://127.0.0.1:8702` and will fail to start if that port is unavailable.
 
 The API binds to `127.0.0.1:5179` by default.
