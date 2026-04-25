@@ -3,8 +3,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
+use text_analysis_transcription::{whisper_cpp_catalog, whisper_cpp_system_info, WhisperCppCatalog};
 
 use crate::youtube::ExternalCommandConfig;
+use crate::youtube::TranscriptionEngine;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SystemDependencyReport {
@@ -20,6 +22,21 @@ pub struct DependencyStatus {
     pub message: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TranscriptionEngineStatus {
+    pub id: TranscriptionEngine,
+    pub label: String,
+    pub available: bool,
+    pub native: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TranscriptionCatalog {
+    pub default_engine: TranscriptionEngine,
+    pub engines: Vec<TranscriptionEngineStatus>,
+    pub whisper_cpp: WhisperCppCatalog,
+}
+
 pub fn check_system_dependencies(
     optional_commands: &[ExternalCommandConfig],
 ) -> SystemDependencyReport {
@@ -28,7 +45,7 @@ pub fn check_system_dependencies(
         .map(|name| dependency_status(name, true))
         .collect::<Vec<_>>();
 
-    dependencies.push(dependency_status("whisper", false));
+    dependencies.push(whisper_cpp_dependency_status());
     for command in optional_commands {
         dependencies.push(dependency_status_for_path(&command.command, false));
     }
@@ -56,24 +73,7 @@ fn dependency_status(name: &str, required: bool) -> DependencyStatus {
 fn dependency_status_for_path(command: &Path, required: bool) -> DependencyStatus {
     let resolved_path = resolve_command(command);
     let name = command.to_string_lossy().into_owned();
-    let version_arg = if name.ends_with("yt-dlp") {
-        "--version"
-    } else {
-        "-version"
-    };
-    let available = resolved_path
-        .as_ref()
-        .map(|path| {
-            Command::new(path)
-                .arg(version_arg)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map(|status| status.success())
-                .unwrap_or(true)
-        })
-        .unwrap_or(false);
+    let available = resolved_path.is_some();
     let message = if available {
         dependency_warning_message(command, &name)
     } else if required {
@@ -87,6 +87,51 @@ fn dependency_status_for_path(command: &Path, required: bool) -> DependencyStatu
         available,
         resolved_path,
         message,
+    }
+}
+
+pub fn transcription_catalog() -> TranscriptionCatalog {
+    TranscriptionCatalog {
+        default_engine: TranscriptionEngine::default(),
+        engines: vec![
+            TranscriptionEngineStatus {
+                id: TranscriptionEngine::WhisperCpp,
+                label: "Whisper.cpp (native)".to_string(),
+                available: true,
+                native: true,
+            },
+            TranscriptionEngineStatus {
+                id: TranscriptionEngine::Whisper,
+                label: "Whisper CLI".to_string(),
+                available: resolve_command(Path::new("whisper")).is_some(),
+                native: false,
+            },
+            TranscriptionEngineStatus {
+                id: TranscriptionEngine::FasterWhisper,
+                label: "Faster Whisper".to_string(),
+                available: resolve_command(Path::new("whisper-ctranslate2"))
+                    .or_else(|| resolve_command(Path::new("faster-whisper")))
+                    .is_some(),
+                native: false,
+            },
+            TranscriptionEngineStatus {
+                id: TranscriptionEngine::WhisperX,
+                label: "WhisperX".to_string(),
+                available: resolve_command(Path::new("whisperx")).is_some(),
+                native: false,
+            },
+        ],
+        whisper_cpp: whisper_cpp_catalog(),
+    }
+}
+
+fn whisper_cpp_dependency_status() -> DependencyStatus {
+    DependencyStatus {
+        name: "whisper.cpp".to_string(),
+        required: false,
+        available: true,
+        resolved_path: None,
+        message: whisper_cpp_system_info().or_else(|| Some("built into the app".to_string())),
     }
 }
 

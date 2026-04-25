@@ -65,6 +65,45 @@ pub struct RunEvent {
     pub status: RunStatus,
     pub message: String,
     pub timestamp: DateTime<Utc>,
+    #[serde(default)]
+    pub node: Option<String>,
+    #[serde(default)]
+    pub phase: Option<String>,
+    #[serde(default)]
+    pub progress: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkflowProgress {
+    pub node: String,
+    pub message: String,
+    pub phase: Option<String>,
+    pub progress: Option<f32>,
+}
+
+impl WorkflowProgress {
+    pub fn message(node: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            node: node.into(),
+            message: message.into(),
+            phase: None,
+            progress: None,
+        }
+    }
+
+    pub fn phase(
+        node: impl Into<String>,
+        phase: impl Into<String>,
+        message: impl Into<String>,
+        progress: Option<f32>,
+    ) -> Self {
+        Self {
+            node: node.into(),
+            message: message.into(),
+            phase: Some(phase.into()),
+            progress,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -142,7 +181,14 @@ impl RunManager {
                 manager.emit(run_id, RunStatus::Running, "running").await;
             });
 
-            let result = run_youtube_video_workflow(request, work_dir, report_path);
+            let mut progress = |event: WorkflowProgress| {
+                handle.block_on(async {
+                    manager
+                        .emit_workflow_progress(run_id, RunStatus::Running, event)
+                        .await;
+                });
+            };
+            let result = run_youtube_video_workflow(request, work_dir, report_path, &mut progress);
             handle.block_on(async {
                 match result {
                     Ok(_) => {
@@ -224,7 +270,15 @@ impl RunManager {
                     .await;
             });
 
-            let result = run_youtube_collection_workflow(request, work_dir, report_path);
+            let mut progress = |event: WorkflowProgress| {
+                handle.block_on(async {
+                    manager
+                        .emit_workflow_progress(run_id, RunStatus::Running, event)
+                        .await;
+                });
+            };
+            let result =
+                run_youtube_collection_workflow(request, work_dir, report_path, &mut progress);
             handle.block_on(async {
                 match result {
                     Ok(_) => {
@@ -308,7 +362,15 @@ impl RunManager {
                     .await;
             });
 
-            let result = run_song_analysis_workflow(request, data_dir, work_dir, report_path);
+            let mut progress = |event: WorkflowProgress| {
+                handle.block_on(async {
+                    manager
+                        .emit_workflow_progress(run_id, RunStatus::Running, event)
+                        .await;
+                });
+            };
+            let result =
+                run_song_analysis_workflow(request, data_dir, work_dir, report_path, &mut progress);
             handle.block_on(async {
                 match result {
                     Ok(_) => {
@@ -394,7 +456,15 @@ impl RunManager {
                     .await;
             });
 
-            let result = run_subtitle_generation_workflow(request, work_dir, report_path);
+            let mut progress = |event: WorkflowProgress| {
+                handle.block_on(async {
+                    manager
+                        .emit_workflow_progress(run_id, RunStatus::Running, event)
+                        .await;
+                });
+            };
+            let result =
+                run_subtitle_generation_workflow(request, work_dir, report_path, &mut progress);
             handle.block_on(async {
                 match result {
                     Ok(_) => {
@@ -472,6 +542,9 @@ impl RunManager {
             status: RunStatus::Canceled,
             message: "canceled".to_string(),
             timestamp: now,
+            node: None,
+            phase: None,
+            progress: None,
         };
         push_event_history(&mut state.history, event.clone());
         let _ = state.events.send(event);
@@ -564,6 +637,52 @@ impl RunManager {
     }
 
     async fn emit(&self, run_id: RunId, status: RunStatus, message: impl Into<String>) {
+        self.emit_with_node(run_id, status, message, None).await;
+    }
+
+    async fn emit_node(
+        &self,
+        run_id: RunId,
+        status: RunStatus,
+        node: impl Into<String>,
+        message: impl Into<String>,
+    ) {
+        self.emit_with_details(run_id, status, message, Some(node.into()), None, None)
+            .await;
+    }
+
+    async fn emit_with_node(
+        &self,
+        run_id: RunId,
+        status: RunStatus,
+        message: impl Into<String>,
+        node: Option<String>,
+    ) {
+        self.emit_with_details(run_id, status, message, node, None, None)
+            .await;
+    }
+
+    async fn emit_workflow_progress(&self, run_id: RunId, status: RunStatus, event: WorkflowProgress) {
+        self.emit_with_details(
+            run_id,
+            status,
+            event.message,
+            Some(event.node),
+            event.phase,
+            event.progress,
+        )
+        .await;
+    }
+
+    async fn emit_with_details(
+        &self,
+        run_id: RunId,
+        status: RunStatus,
+        message: impl Into<String>,
+        node: Option<String>,
+        phase: Option<String>,
+        progress: Option<f32>,
+    ) {
         let mut runs = self.inner.runs.lock().await;
         if let Some(state) = runs.get_mut(&run_id) {
             if state.record.status == RunStatus::Canceled
@@ -576,6 +695,9 @@ impl RunManager {
                 status,
                 message: message.into(),
                 timestamp: Utc::now(),
+                node,
+                phase,
+                progress,
             };
             push_event_history(&mut state.history, event.clone());
             let _ = state.events.send(event);

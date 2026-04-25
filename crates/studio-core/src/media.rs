@@ -3,9 +3,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde_json::Value;
+use text_analysis_transcription::{WhisperCppProgressEvent, WhisperCppTranscriber};
 
 use crate::error::{Result, StudioError};
 use crate::report::{TranscriptSegmentReport, TranscriptionReport};
+use crate::run_manager::WorkflowProgress;
 use crate::system::resolve_command;
 use crate::youtube::{ExternalCommandConfig, TranscriptionConfig, TranscriptionEngine};
 
@@ -145,6 +147,7 @@ pub(crate) fn transcribe_media(
     config: &TranscriptionConfig,
     media_path: &Path,
     work_dir: &Path,
+    progress: &mut dyn FnMut(WorkflowProgress),
 ) -> (TranscriptionReport, Option<PathBuf>) {
     if !config.enabled {
         return (
@@ -158,28 +161,28 @@ pub(crate) fn transcribe_media(
         );
     }
 
-    let command = match transcriber_command(config.engine, &config.command) {
-        Ok(command) => command,
-        Err(message) => {
-            return (
-                TranscriptionReport {
-                    status: "skipped".to_string(),
-                    text: None,
-                    segments: Vec::new(),
-                    message: Some(message),
-                },
-                None,
+    let prepared = prepare_transcription_config(config);
+    match extract_transcription_wav(media_path, work_dir).and_then(|audio_path| {
+        if prepared.engine == TranscriptionEngine::WhisperCpp {
+            run_whisper_cpp_transcriber(&prepared, &audio_path, progress)
+        } else {
+            let command = prepared.command.clone().ok_or_else(|| {
+                StudioError::MissingDependency(default_transcriber_message(prepared.engine))
+            })?;
+            progress(WorkflowProgress::message(
+                "transcriber",
+                format!(
+                    "running {} transcription",
+                    transcription_engine_label(prepared.engine)
+                ),
+            ));
+            run_transcriber_command(
+                prepared.engine,
+                &command,
+                &audio_path,
+                &work_dir.join("transcript"),
             )
         }
-    };
-
-    match extract_transcription_wav(media_path, work_dir).and_then(|audio_path| {
-        run_transcriber_command(
-            config.engine,
-            &command,
-            &audio_path,
-            &work_dir.join("transcript"),
-        )
     }) {
         Ok((report, audio_path)) => (report, Some(audio_path)),
         Err(err) => (
@@ -194,28 +197,33 @@ pub(crate) fn transcribe_media(
     }
 }
 
-fn transcriber_command(
-    engine: TranscriptionEngine,
-    configured_command: &Option<ExternalCommandConfig>,
-) -> std::result::Result<ExternalCommandConfig, String> {
-    match configured_command {
-        Some(config) => Ok(config.clone()),
-        None => {
-            for default in default_transcriber_commands(engine) {
-                if resolve_command(&default).is_some() {
-                    return Ok(ExternalCommandConfig {
-                        command: default,
-                        args: Vec::new(),
-                    });
-                }
-            }
-            return Err(default_transcriber_message(engine));
+pub(crate) fn prepare_transcription_config(
+    config: &TranscriptionConfig,
+) -> TranscriptionConfig {
+    let mut prepared = config.clone().normalized();
+    if !prepared.enabled || prepared.command.is_some() {
+        return prepared;
+    }
+
+    prepared.command = default_transcriber_command(prepared.engine);
+    prepared
+}
+
+fn default_transcriber_command(engine: TranscriptionEngine) -> Option<ExternalCommandConfig> {
+    for default in default_transcriber_commands(engine) {
+        if let Some(resolved) = resolve_command(&default) {
+            return Some(ExternalCommandConfig {
+                command: resolved,
+                args: Vec::new(),
+            });
         }
     }
+    None
 }
 
 fn default_transcriber_commands(engine: TranscriptionEngine) -> Vec<PathBuf> {
     match engine {
+        TranscriptionEngine::WhisperCpp => Vec::new(),
         TranscriptionEngine::Whisper => vec![PathBuf::from("whisper")],
         TranscriptionEngine::FasterWhisper => {
             vec![
@@ -229,6 +237,9 @@ fn default_transcriber_commands(engine: TranscriptionEngine) -> Vec<PathBuf> {
 
 fn default_transcriber_message(engine: TranscriptionEngine) -> String {
     match engine {
+        TranscriptionEngine::WhisperCpp => {
+            "native whisper.cpp transcription is unavailable".to_string()
+        }
         TranscriptionEngine::Whisper => "install whisper or configure a transcriber".to_string(),
         TranscriptionEngine::FasterWhisper => {
             "install whisper-ctranslate2/faster-whisper or configure a transcriber".to_string()
@@ -246,8 +257,8 @@ fn run_transcriber_command(
     fs::create_dir_all(output_dir)?;
 
     let status = Command::new(&config.command)
-        .arg(audio_path)
         .args(&config.args)
+        .arg(audio_path)
         .arg("--output_format")
         .arg("json")
         .arg("--output_dir")
@@ -275,8 +286,49 @@ fn run_transcriber_command(
     Ok((report, audio_path.to_path_buf()))
 }
 
+fn run_whisper_cpp_transcriber(
+    config: &TranscriptionConfig,
+    audio_path: &Path,
+    progress: &mut dyn FnMut(WorkflowProgress),
+) -> Result<(TranscriptionReport, PathBuf)> {
+    let mut transcriber = WhisperCppTranscriber::new(config.whisper_cpp.clone());
+    let parsed = transcriber
+        .transcribe_with_progress(audio_path, &mut |event| {
+            progress(whisper_cpp_progress_event(event));
+        })
+        .map_err(|error| StudioError::Workflow(error.to_string()))?;
+    Ok((
+        TranscriptionReport {
+            status: "completed".to_string(),
+            text: parsed.text.map(|text| text.trim().to_string()),
+            segments: parsed
+                .segments
+                .into_iter()
+                .map(|segment| TranscriptSegmentReport {
+                    index: segment.index,
+                    start_seconds: segment.start_seconds,
+                    end_seconds: segment.end_seconds,
+                    text: segment.text.trim().to_string(),
+                })
+                .collect(),
+            message: parsed.source,
+        },
+        audio_path.to_path_buf(),
+    ))
+}
+
+fn whisper_cpp_progress_event(event: WhisperCppProgressEvent) -> WorkflowProgress {
+    WorkflowProgress::phase(
+        "transcriber",
+        event.phase.as_str(),
+        event.message,
+        event.progress,
+    )
+}
+
 fn transcription_engine_label(engine: TranscriptionEngine) -> &'static str {
     match engine {
+        TranscriptionEngine::WhisperCpp => "whisper.cpp",
         TranscriptionEngine::Whisper => "whisper",
         TranscriptionEngine::FasterWhisper => "faster-whisper",
         TranscriptionEngine::WhisperX => "whisperx",

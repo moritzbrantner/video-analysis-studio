@@ -18,6 +18,7 @@ use crate::report::{
     MusicSegmentReport, SongAnalysisReport, SongAssetReport, SongFingerprintQueryReport,
     SongIdentificationReport, SongMatchCandidateReport, SongMatchedSegmentReport, SongSourceReport,
 };
+use crate::run_manager::WorkflowProgress;
 use crate::system::resolve_command;
 use crate::youtube::{ExternalCommandConfig, TranscriptionConfig};
 
@@ -264,6 +265,7 @@ pub fn run_song_analysis_workflow(
     data_dir: PathBuf,
     work_dir: PathBuf,
     report_path: PathBuf,
+    progress: &mut dyn FnMut(WorkflowProgress),
 ) -> Result<SongAnalysisReport> {
     request.validate()?;
     fs::create_dir_all(&work_dir)?;
@@ -309,7 +311,7 @@ pub fn run_song_analysis_workflow(
     };
 
     let (lyrics, transcription_wav) =
-        transcribe_media(&request.transcription, &media_path, &work_dir);
+        transcribe_media(&request.transcription, &media_path, &work_dir, progress);
     if lyrics.status == "completed" {
         completed.push("lyrics_transcription".to_string());
     } else {

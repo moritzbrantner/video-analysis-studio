@@ -158,12 +158,39 @@ export interface YoutubeVideoReport {
   data_buckets: DataBucketReport[];
 }
 
-export type TranscriptionEngine = "whisper" | "faster_whisper" | "fast_whisper" | "whisperx";
+export type TranscriptionEngine =
+  | "whisper_cpp"
+  | "whisper"
+  | "faster_whisper"
+  | "fast_whisper"
+  | "whisperx";
+
+export type WhisperCppModel =
+  | "tiny.en"
+  | "tiny"
+  | "base.en"
+  | "base"
+  | "small.en"
+  | "small"
+  | "medium.en"
+  | "medium"
+  | "large-v1"
+  | "large-v2"
+  | "large-v3"
+  | "large-v3-turbo";
+
+export interface WhisperCppConfig {
+  model?: WhisperCppModel;
+  language?: string | null;
+  translate?: boolean;
+  threads?: number | null;
+}
 
 export interface TranscriptionConfig {
   enabled: boolean;
   engine?: TranscriptionEngine;
   command?: { command: string; args: string[] } | null;
+  whisper_cpp?: WhisperCppConfig;
 }
 
 export type YoutubeCollectionSource =

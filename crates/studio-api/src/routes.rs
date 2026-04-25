@@ -13,9 +13,9 @@ use axum::{Json, Router};
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 use studio_core::{
-    check_system_dependencies, discover_youtube_collection_manifest, DataSourceDerivationInput,
-    DataSourceRecord, DataSourceUpsert, RunEvent, RunId, RunManager, RunRecord,
-    SongAnalysisRunRequest, SongCatalogImportRequest, StudioError, StudioReport,
+    check_system_dependencies, discover_youtube_collection_manifest, transcription_catalog,
+    DataSourceDerivationInput, DataSourceRecord, DataSourceUpsert, RunEvent, RunId, RunManager,
+    RunRecord, SongAnalysisRunRequest, SongCatalogImportRequest, StudioError, StudioReport,
     SubtitleGenerationRunRequest, WorkflowKind, YoutubeCollectionManifestRequest,
     YoutubeCollectionRunRequest, YoutubeRunRequest, YoutubeVideoReport,
 };
@@ -36,9 +36,13 @@ pub fn build_app(manager: RunManager) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/api/system/dependencies", get(system_dependencies))
+        .route("/api/transcription/catalog", get(transcription_catalog_route))
         .route("/api/workflows", get(workflows))
         .route("/api/workflow/catalog", get(workflow_catalog))
-        .route("/api/data-sources", get(list_data_sources).post(create_data_source))
+        .route(
+            "/api/data-sources",
+            get(list_data_sources).post(create_data_source),
+        )
         .route(
             "/api/data-sources/{id}",
             put(update_data_source).delete(delete_data_source),
@@ -90,6 +94,10 @@ async fn health() -> Json<HealthResponse> {
 
 async fn system_dependencies() -> Json<studio_core::SystemDependencyReport> {
     Json(check_system_dependencies(&[]))
+}
+
+async fn transcription_catalog_route() -> Json<studio_core::TranscriptionCatalog> {
+    Json(transcription_catalog())
 }
 
 async fn workflows() -> Json<Vec<WorkflowDescriptor>> {
@@ -585,8 +593,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(value["version"], 1);
         assert!(value["nodes"].as_array().unwrap().iter().any(|node| {
-            node["id"] == "youtube-workflow"
-                && node["package_name"] == "video-analysis-use-cases"
+            node["id"] == "youtube-workflow" && node["package_name"] == "video-analysis-use-cases"
         }));
     }
 
@@ -626,7 +633,11 @@ mod tests {
 
         let list_response = app
             .clone()
-            .oneshot(Request::get("/api/data-sources").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get("/api/data-sources")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(list_response.status(), StatusCode::OK);

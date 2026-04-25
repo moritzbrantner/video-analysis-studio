@@ -3,6 +3,7 @@ import type {
   RunEvent,
   RunRecord,
   SystemDependencyReport,
+  TranscriptionCatalog,
   WorkflowCatalog,
   WorkflowClient,
   YoutubeRunRequest,
@@ -23,12 +24,13 @@ import {
   isYoutubeVideoReport as videoReport,
 } from "./client";
 
-const defaultBaseUrl = "http://127.0.0.1:5179";
+const defaultBaseUrl = __STUDIO_API_URL__;
 
 export function createHttpClient(baseUrl = import.meta.env.VITE_STUDIO_API_URL ?? defaultBaseUrl): WorkflowClient {
   return {
     label: "HTTP API",
     checkDependencies: () => request<SystemDependencyReport>(baseUrl, "/api/system/dependencies"),
+    getTranscriptionCatalog: () => request<TranscriptionCatalog>(baseUrl, "/api/transcription/catalog"),
     getWorkflowCatalog: () => request<WorkflowCatalog>(baseUrl, "/api/workflow/catalog"),
     listDataSources: () => request<DataSourceRecord[]>(baseUrl, "/api/data-sources"),
     createDataSource: (payload) =>
@@ -132,13 +134,18 @@ export function createHttpClient(baseUrl = import.meta.env.VITE_STUDIO_API_URL ?
 }
 
 async function request<T>(baseUrl: string, path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init.headers ?? {}),
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...(init.headers ?? {}),
+      },
+    });
+  } catch (error) {
+    throw normalizeRequestError(baseUrl, error);
+  }
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
     throw new Error(payload?.error ?? `Request failed with ${response.status}`);
@@ -147,4 +154,14 @@ async function request<T>(baseUrl: string, path: string, init: RequestInit = {})
     return undefined as T;
   }
   return (await response.json()) as T;
+}
+
+function normalizeRequestError(baseUrl: string, error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof TypeError) {
+    return new Error(
+      `Could not reach the Studio API at ${baseUrl}. Check config/runtime.json, start it with \`bun run api:dev\`, or set \`VITE_STUDIO_API_URL\`.`,
+    );
+  }
+  return new Error(message);
 }

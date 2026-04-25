@@ -189,12 +189,7 @@ impl DataSourceCatalog {
             .ok_or_else(|| {
                 StudioError::InvalidRequest(format!("data source {} does not exist", current_id))
             })?;
-        if input.id != current_id
-            && self
-                .data_sources
-                .iter()
-                .any(|record| record.id == input.id)
-        {
+        if input.id != current_id && self.data_sources.iter().any(|record| record.id == input.id) {
             return Err(StudioError::InvalidRequest(format!(
                 "data source {} already exists",
                 input.id
@@ -204,11 +199,9 @@ impl DataSourceCatalog {
         let current = self.data_sources[index].clone();
         let updated_at = Utc::now();
         let next = match &current.origin {
-            DataSourceOrigin::Root => normalize_root_record_with_timestamps(
-                input,
-                current.created_at,
-                updated_at,
-            ),
+            DataSourceOrigin::Root => {
+                normalize_root_record_with_timestamps(input, current.created_at, updated_at)
+            }
             DataSourceOrigin::DerivedView {
                 parent_id,
                 derivation_kind,
@@ -303,7 +296,9 @@ impl DataSourceCatalog {
             input.tags,
             DerivedRecordOptions {
                 parent_id: parent.id,
-                derivation_kind: input.derivation_kind.unwrap_or(DataSourceDerivationKind::Alias),
+                derivation_kind: input
+                    .derivation_kind
+                    .unwrap_or(DataSourceDerivationKind::Alias),
                 summary: input.summary,
                 created_at: now,
                 updated_at: now,
@@ -324,7 +319,8 @@ impl DataSourceCatalog {
     }
 
     fn sort_records(&mut self) {
-        self.data_sources.sort_by(|left, right| left.id.cmp(&right.id));
+        self.data_sources
+            .sort_by(|left, right| left.id.cmp(&right.id));
     }
 
     fn sync_descendant_kind(
@@ -370,10 +366,11 @@ pub fn validate_data_source_id(value: &str) -> Result<()> {
             "data source id is required".to_string(),
         ));
     }
-    if value
-        .chars()
-        .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || matches!(character, '_' | '-'))
-    {
+    if value.chars().all(|character| {
+        character.is_ascii_lowercase()
+            || character.is_ascii_digit()
+            || matches!(character, '_' | '-')
+    }) {
         return Ok(());
     }
     Err(StudioError::InvalidRequest(format!(
@@ -383,7 +380,10 @@ pub fn validate_data_source_id(value: &str) -> Result<()> {
 }
 
 pub fn editable_inline_body(kind: DataSourceKind) -> bool {
-    matches!(kind, DataSourceKind::Json | DataSourceKind::Txt | DataSourceKind::Api)
+    matches!(
+        kind,
+        DataSourceKind::Json | DataSourceKind::Txt | DataSourceKind::Api
+    )
 }
 
 pub fn migrate_legacy_data_sources(value: &Value) -> Result<Vec<DataSourceRecord>> {
@@ -502,10 +502,7 @@ fn migrate_legacy_type(value: &Value) -> Result<WorkflowTypeSpec> {
     let object = value.as_object().ok_or_else(|| {
         StudioError::InvalidRequest("legacy data source type must be an object".to_string())
     })?;
-    let type_name = object
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or("any");
+    let type_name = object.get("type").and_then(Value::as_str).unwrap_or("any");
     match type_name {
         "port" => Ok(port_type_to_workflow_type(
             object
@@ -514,22 +511,20 @@ fn migrate_legacy_type(value: &Value) -> Result<WorkflowTypeSpec> {
                 .unwrap_or("data_value"),
         )),
         "string" => Ok(WorkflowTypeSpec::String {
-            semantic: parse_semantic(
-                object.get("semantic").and_then(Value::as_str),
-            ),
+            semantic: parse_semantic(object.get("semantic").and_then(Value::as_str)),
         }),
         "binary" => Ok(WorkflowTypeSpec::Binary {
             media_type: object
                 .get("mediaType")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
-            semantic: parse_semantic(
-                object.get("semantic").and_then(Value::as_str),
-            ),
+            semantic: parse_semantic(object.get("semantic").and_then(Value::as_str)),
         }),
         "array" => Ok(WorkflowTypeSpec::Array {
             items: Box::new(migrate_legacy_type(
-                object.get("items").unwrap_or(&Value::Object(Default::default())),
+                object
+                    .get("items")
+                    .unwrap_or(&Value::Object(Default::default())),
             )?),
             min_items: object
                 .get("minItems")
@@ -551,15 +546,18 @@ fn migrate_legacy_type(value: &Value) -> Result<WorkflowTypeSpec> {
                 .get("additionalProperties")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
-            semantic: parse_semantic(
-                object.get("semantic").and_then(Value::as_str),
-            ),
+            semantic: parse_semantic(object.get("semantic").and_then(Value::as_str)),
         }),
         "union" => Ok(WorkflowTypeSpec::Union {
             variants: object
                 .get("variants")
                 .and_then(Value::as_array)
-                .map(|variants| variants.iter().map(migrate_legacy_type).collect::<Result<Vec<_>>>())
+                .map(|variants| {
+                    variants
+                        .iter()
+                        .map(migrate_legacy_type)
+                        .collect::<Result<Vec<_>>>()
+                })
                 .transpose()?
                 .unwrap_or_default(),
         }),
@@ -592,10 +590,7 @@ fn migrate_legacy_properties(
             continue;
         }
         let schema = property_object.get("schema").ok_or_else(|| {
-            StudioError::InvalidRequest(format!(
-                "legacy property {} is missing schema",
-                name
-            ))
+            StudioError::InvalidRequest(format!("legacy property {} is missing schema", name))
         })?;
         migrated.push(
             video_analysis_use_cases::workflow_catalog::WorkflowObjectProperty {

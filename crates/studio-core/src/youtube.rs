@@ -21,7 +21,7 @@ use video_analysis_models::{
 };
 
 use crate::error::{Result, StudioError};
-use crate::media::transcribe_media;
+use crate::media::{prepare_transcription_config, transcribe_media};
 use crate::report::{
     AppliedCollectionFilters, AssetReport, AudioReport, CapabilityReport, CollectionAssetReport,
     CollectionItemReport, CollectionItemStatus, CollectionSummary, DataBucketReport, EventReport,
@@ -29,7 +29,9 @@ use crate::report::{
     TranscriptionReport, VideoReport, YoutubeCollectionReport, YoutubeCollectionSourceReport,
     YoutubeVideoReport,
 };
+use crate::run_manager::WorkflowProgress;
 use crate::system::resolve_command;
+pub use video_analysis_use_cases::youtube::{WhisperCppConfig, WhisperCppModel};
 
 pub const DEFAULT_SCENE_THRESHOLD: f32 = 27.0;
 pub const DEFAULT_MIN_SCENE_LEN: u64 = 15;
@@ -55,6 +57,8 @@ pub struct TranscriptionConfig {
     #[serde(default)]
     pub engine: TranscriptionEngine,
     pub command: Option<ExternalCommandConfig>,
+    #[serde(default)]
+    pub whisper_cpp: WhisperCppConfig,
 }
 
 impl Default for TranscriptionConfig {
@@ -63,13 +67,24 @@ impl Default for TranscriptionConfig {
             enabled: true,
             engine: TranscriptionEngine::default(),
             command: None,
+            whisper_cpp: WhisperCppConfig::default(),
         }
+    }
+}
+
+impl TranscriptionConfig {
+    pub fn normalized(mut self) -> Self {
+        if self.engine == TranscriptionEngine::Whisper && self.command.is_none() {
+            self.engine = TranscriptionEngine::WhisperCpp;
+        }
+        self
     }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TranscriptionEngine {
+    WhisperCpp,
     Whisper,
     #[serde(alias = "fast_whisper")]
     FasterWhisper,
@@ -78,7 +93,7 @@ pub enum TranscriptionEngine {
 
 impl Default for TranscriptionEngine {
     fn default() -> Self {
-        Self::Whisper
+        Self::WhisperCpp
     }
 }
 
@@ -426,17 +441,28 @@ pub struct YoutubeCollectionManifestItem {
 }
 
 pub fn run_youtube_video_workflow(
-    request: YoutubeRunRequest,
+    mut request: YoutubeRunRequest,
     work_dir: PathBuf,
     report_path: PathBuf,
+    progress: &mut dyn FnMut(WorkflowProgress),
 ) -> Result<YoutubeVideoReport> {
+    request.transcription = request.transcription.normalized();
     request.validate()?;
+    request.transcription = prepare_transcription_config(&request.transcription);
     let package_request =
         to_package_value::<video_analysis_use_cases::youtube::YoutubeRunRequest>(&request)?;
-    let report = video_analysis_use_cases::youtube::run_youtube_video_workflow(
+    let report = video_analysis_use_cases::youtube::run_youtube_video_workflow_with_progress(
         package_request,
         work_dir,
         report_path,
+        &mut |event| {
+            progress(WorkflowProgress::phase(
+                "transcriber",
+                event.phase.as_str(),
+                event.message,
+                event.progress,
+            ));
+        },
     )?;
     from_package_value(report)
 }
@@ -454,18 +480,29 @@ pub fn discover_youtube_collection_manifest(
 }
 
 pub fn run_youtube_collection_workflow(
-    request: YoutubeCollectionRunRequest,
+    mut request: YoutubeCollectionRunRequest,
     work_dir: PathBuf,
     report_path: PathBuf,
+    progress: &mut dyn FnMut(WorkflowProgress),
 ) -> Result<YoutubeCollectionReport> {
+    request.analysis.transcription = request.analysis.transcription.normalized();
     request.validate()?;
+    request.analysis.transcription = prepare_transcription_config(&request.analysis.transcription);
     let package_request = to_package_value::<
         video_analysis_use_cases::youtube::YoutubeCollectionRunRequest,
     >(&request)?;
-    let report = video_analysis_use_cases::youtube::run_youtube_collection_workflow(
+    let report = video_analysis_use_cases::youtube::run_youtube_collection_workflow_with_progress(
         package_request,
         work_dir,
         report_path,
+        &mut |event| {
+            progress(WorkflowProgress::phase(
+                "transcriber",
+                event.phase.as_str(),
+                event.message,
+                event.progress,
+            ));
+        },
     )?;
     from_package_value(report)
 }
@@ -1229,8 +1266,9 @@ fn transcribe_video(
     request: &YoutubeRunRequest,
     video_path: &Path,
     work_dir: &Path,
+    progress: &mut dyn FnMut(WorkflowProgress),
 ) -> (TranscriptionReport, Option<PathBuf>) {
-    transcribe_media(&request.transcription, video_path, work_dir)
+    transcribe_media(&request.transcription, video_path, work_dir, progress)
 }
 
 fn analyze_audio(

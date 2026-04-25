@@ -1,4 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
+import { readRuntimeConfig } from "../../scripts/runtime-config.mjs";
+
+const runtimeConfig = readRuntimeConfig();
+const e2eBaseUrl = `http://${runtimeConfig.ui.e2eHost}:${runtimeConfig.ui.e2ePort}`;
+const e2eCommand = `bun run dev -- --host ${runtimeConfig.ui.e2eHost} --port ${runtimeConfig.ui.e2ePort}`;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -10,12 +15,12 @@ export default defineConfig({
     ["html", { open: "never" }],
   ],
   use: {
-    baseURL: "http://127.0.0.1:4173",
+    baseURL: e2eBaseUrl,
     trace: "on-first-retry",
   },
   webServer: {
-    command: "bun run dev --host 127.0.0.1 --port 4173",
-    url: "http://127.0.0.1:4173",
+    command: e2eCommand,
+    url: e2eBaseUrl,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },

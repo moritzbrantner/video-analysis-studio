@@ -1,8 +1,9 @@
 use studio_core::{
-    check_system_dependencies, discover_youtube_collection_manifest, DataSourceDerivationInput,
-    DataSourceRecord, DataSourceUpsert, RunEvent, RunId, RunManager, RunRecord, RunStatus,
-    SongAnalysisRunRequest, SongCatalogImportRequest, SongCatalogImportResponse, StudioReport,
-    SubtitleGenerationRunRequest, SystemDependencyReport, WorkflowCatalog,
+    check_system_dependencies, discover_youtube_collection_manifest, transcription_catalog,
+    DataSourceDerivationInput, DataSourceRecord, DataSourceUpsert, RunEvent, RunId, RunManager,
+    RunRecord, RunStatus, SongAnalysisRunRequest, SongCatalogImportRequest,
+    SongCatalogImportResponse, StudioReport, SubtitleGenerationRunRequest,
+    SystemDependencyReport, TranscriptionCatalog, WorkflowCatalog,
     YoutubeCollectionManifest, YoutubeCollectionManifestRequest, YoutubeCollectionRunRequest,
     YoutubeRunRequest,
 };
@@ -23,8 +24,19 @@ pub async fn get_workflow_catalog() -> Result<WorkflowCatalog, String> {
 }
 
 #[tauri::command]
-pub async fn list_data_sources(state: State<'_, StudioState>) -> Result<Vec<DataSourceRecord>, String> {
-    state.manager.list_data_sources().await.map_err(error_string)
+pub async fn get_transcription_catalog() -> Result<TranscriptionCatalog, String> {
+    Ok(transcription_catalog())
+}
+
+#[tauri::command]
+pub async fn list_data_sources(
+    state: State<'_, StudioState>,
+) -> Result<Vec<DataSourceRecord>, String> {
+    state
+        .manager
+        .list_data_sources()
+        .await
+        .map_err(error_string)
 }
 
 #[tauri::command]
@@ -53,10 +65,7 @@ pub async fn update_data_source(
 }
 
 #[tauri::command]
-pub async fn delete_data_source(
-    state: State<'_, StudioState>,
-    id: String,
-) -> Result<(), String> {
+pub async fn delete_data_source(state: State<'_, StudioState>, id: String) -> Result<(), String> {
     state
         .manager
         .delete_data_source(&id)

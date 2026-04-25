@@ -35,6 +35,7 @@ import {
   type StudioReport,
   type SubtitleGenerationRunRequest,
   type TranscriptionEngine,
+  type WhisperCppModel,
   type YoutubeCollectionManifest,
   type YoutubeCollectionRunRequest,
 } from "./index";
@@ -75,6 +76,7 @@ import {
   type WorkflowSemanticKind,
   type PortKind as RustPortKind,
   type PortSpec as RustPortSpec,
+  type TranscriptionCatalog,
   type WorkflowTypeSpec,
   type YoutubeRunRequest,
 } from "./api/client";
@@ -126,6 +128,7 @@ interface WorkflowRunForm {
   visualSampleEvery: number;
   skipTranscription: boolean;
   transcriptionEngine: Exclude<TranscriptionEngine, "fast_whisper">;
+  transcriptionModel: WhisperCppModel;
   transcriptionCommand: string;
   objectCommand: string;
   ocrCommand: string;
@@ -215,7 +218,8 @@ const initialForm: WorkflowRunForm = {
   maxFrames: "",
   visualSampleEvery: 30,
   skipTranscription: false,
-  transcriptionEngine: "whisper",
+  transcriptionEngine: "whisper_cpp",
+  transcriptionModel: "base.en",
   transcriptionCommand: "",
   objectCommand: "",
   ocrCommand: "",
@@ -274,6 +278,7 @@ function App() {
   const [dataSourcesLoading, setDataSourcesLoading] = useState(true);
   const [legacyLocalDataSources, setLegacyLocalDataSources] = useState(() => loadLegacyLocalDataSources());
   const [workflowCatalog, setWorkflowCatalog] = useState<RustWorkflowCatalog | null>(null);
+  const [transcriptionCatalog, setTranscriptionCatalog] = useState<TranscriptionCatalog | null>(null);
   const [portTypeColors, setPortTypeColors] = useState<PortTypeColors>(loadPortTypeColors);
   const [hotkeyBindings, setHotkeyBindings] = useState<HotkeyBindings>(loadHotkeyBindings);
   const [workflowFocusTarget, setWorkflowFocusTarget] = useState<WorkflowFocusTarget | null>(null);
@@ -336,6 +341,39 @@ function App() {
       .catch(() => {
         if (!canceled) {
           setWorkflowCatalog(null);
+        }
+      });
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let canceled = false;
+    getWorkflowClient()
+      .getTranscriptionCatalog()
+      .then((catalog) => {
+        if (canceled) {
+          return;
+        }
+        setTranscriptionCatalog(catalog);
+        setForm((current) => {
+          const nextEngine =
+            current.transcriptionEngine === initialForm.transcriptionEngine
+              ? defaultTranscriptionEngine(catalog)
+              : current.transcriptionEngine;
+          const nextModel =
+            current.transcriptionModel === initialForm.transcriptionModel
+              ? defaultWhisperCppModel(catalog)
+              : current.transcriptionModel;
+          return nextEngine === current.transcriptionEngine && nextModel === current.transcriptionModel
+            ? current
+            : { ...current, transcriptionEngine: nextEngine, transcriptionModel: nextModel };
+        });
+      })
+      .catch(() => {
+        if (!canceled) {
+          setTranscriptionCatalog(null);
         }
       });
     return () => {
@@ -594,10 +632,8 @@ function App() {
 
   const startNewWorkflowRun = useCallback(() => {
     setForm({
-      ...initialForm,
+      ...createDefaultRunForm(selectedWorkflowKind, transcriptionCatalog),
       sourceMode: selectedWorkflowKind === "youtube-collection" ? "collection" : "url",
-      workDir: defaultWorkDirForWorkflowKind(selectedWorkflowKind),
-      output: defaultOutputForWorkflowKind(selectedWorkflowKind),
     });
     setRunStatus("pending");
     setLastRun(null);
@@ -608,7 +644,7 @@ function App() {
     setCollectionManifestPreview(initialCollectionManifestPreview);
     navigateToPage("analysis");
     setViewMode("run");
-  }, [navigateToPage, selectedWorkflowKind]);
+  }, [navigateToPage, selectedWorkflowKind, transcriptionCatalog]);
 
   const focusWorkflowInput = useCallback(
     (input: WorkflowRunInput) => {
@@ -688,12 +724,12 @@ function App() {
       }
       setForm(
         isYoutubeCollectionRunRequest(run.request)
-          ? formFromYoutubeCollectionRunRequest(run.request)
+          ? formFromYoutubeCollectionRunRequest(run.request, transcriptionCatalog)
           : isSubtitleGenerationRunRequest(run.request)
-            ? formFromSubtitleGenerationRunRequest(run.request)
+            ? formFromSubtitleGenerationRunRequest(run.request, transcriptionCatalog)
           : isSongAnalysisRunRequest(run.request)
-            ? formFromSongAnalysisRunRequest(run.request)
-            : formFromYoutubeRunRequest(run.request),
+            ? formFromSongAnalysisRunRequest(run.request, transcriptionCatalog)
+            : formFromYoutubeRunRequest(run.request, transcriptionCatalog),
       );
       setRunStatus(run.status);
       setLastRun(workflowRunToCliRun(run));
@@ -737,7 +773,7 @@ function App() {
         }
       }
     },
-    [commitWorkflowLibrary, navigateToPage, workflowLibrary],
+    [commitWorkflowLibrary, navigateToPage, transcriptionCatalog, workflowLibrary],
   );
 
   const handleRunFormChange = useCallback(
@@ -1357,6 +1393,7 @@ function App() {
                 workflowLibrary={workflowLibrary}
                 activeWorkflow={activeWorkflow}
                 activeWorkflowInputModel={activeWorkflowInputModel}
+                transcriptionCatalog={transcriptionCatalog}
                 selectedWorkflowKind={selectedWorkflowKind}
                 onSelectWorkflow={activateWorkflowDefinition}
                 onCreateWorkflow={createWorkflowDefinition}
@@ -1409,6 +1446,7 @@ function RunWorkspace({
   workflowLibrary,
   activeWorkflow,
   activeWorkflowInputModel,
+  transcriptionCatalog,
   selectedWorkflowKind,
   onSelectWorkflow,
   onCreateWorkflow,
@@ -1436,6 +1474,7 @@ function RunWorkspace({
   workflowLibrary: SavedWorkflowLibrary;
   activeWorkflow: SavedWorkflow;
   activeWorkflowInputModel: WorkflowRunInputModel;
+  transcriptionCatalog: TranscriptionCatalog | null;
   selectedWorkflowKind: WorkflowKindId;
   onSelectWorkflow: (workflowId: string) => void;
   onCreateWorkflow: () => void;
@@ -1473,6 +1512,7 @@ function RunWorkspace({
         <WorkflowRunControls
           form={form}
           inputModel={activeWorkflowInputModel}
+          transcriptionCatalog={transcriptionCatalog}
           selectedWorkflowKind={selectedWorkflowKind}
           onChange={onFormChange}
           onFocusWorkflowInput={onFocusWorkflowInput}
@@ -1499,6 +1539,7 @@ function RunWorkspace({
       </section>
       <section className="min-w-0 space-y-4">
         <CliRunPanel run={cliRun} />
+        <RunNodeStatusPanel events={runEvents} />
         <RunEventTimeline events={runEvents} stdout={runOutput.stdout} stderr={runOutput.stderr} />
       </section>
     </div>
@@ -10498,6 +10539,7 @@ function effectiveSourceMode(form: WorkflowRunForm, inputModel?: WorkflowRunInpu
 function WorkflowRunControls({
   form,
   inputModel,
+  transcriptionCatalog,
   selectedWorkflowKind,
   onChange,
   onFocusWorkflowInput,
@@ -10513,6 +10555,7 @@ function WorkflowRunControls({
 }: {
   form: WorkflowRunForm;
   inputModel: WorkflowRunInputModel;
+  transcriptionCatalog: TranscriptionCatalog | null;
   selectedWorkflowKind: WorkflowKindId;
   onChange: (form: WorkflowRunForm) => void;
   onFocusWorkflowInput: (input: WorkflowRunInput) => void;
@@ -10553,6 +10596,8 @@ function WorkflowRunControls({
   const canCancel = Boolean(activeRunId && (activeStatus === "pending" || activeStatus === "running" || isRunning));
   const canRetry = Boolean(activeRunRecord && ["failed", "canceled", "succeeded"].includes(activeRunRecord.status));
   const canOpenReport = activeRunRecord?.status === "succeeded";
+  const usesNativeWhisperCpp = form.transcriptionEngine === "whisper_cpp";
+  const transcriptionModels = transcriptionCatalog?.whisper_cpp.models ?? [{ model: form.transcriptionModel, cached: false }];
 
   return (
     <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
@@ -10714,14 +10759,24 @@ function WorkflowRunControls({
                       onChange={(value) => set("transcriptionEngine", value)}
                     />
                   </Field>
-                  <Field label="Transcriber command">
-                    <input
-                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-                      value={form.transcriptionCommand}
-                      placeholder={defaultTranscriptionCommand(form.transcriptionEngine)}
-                      onChange={(event) => set("transcriptionCommand", event.target.value)}
-                    />
-                  </Field>
+                  {usesNativeWhisperCpp ? (
+                    <Field label="Whisper.cpp model">
+                      <TranscriptionModelSelect
+                        value={form.transcriptionModel}
+                        models={transcriptionModels}
+                        onChange={(value) => set("transcriptionModel", value)}
+                      />
+                    </Field>
+                  ) : (
+                    <Field label="Transcriber command">
+                      <input
+                        className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                        value={form.transcriptionCommand}
+                        placeholder={defaultTranscriptionCommand(form.transcriptionEngine)}
+                        onChange={(event) => set("transcriptionCommand", event.target.value)}
+                      />
+                    </Field>
+                  )}
                 </div>
                 <label className="flex items-center gap-3 rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-800">
                   <input
@@ -10814,14 +10869,24 @@ function WorkflowRunControls({
                   onChange={(value) => set("transcriptionEngine", value)}
                 />
               </Field>
-              <Field label={workflowInputFieldLabel("Transcriber command", runConfigInput)}>
-                <input
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-                  value={form.transcriptionCommand}
-                  placeholder={defaultTranscriptionCommand(form.transcriptionEngine)}
-                  onChange={(event) => set("transcriptionCommand", event.target.value)}
-                />
-              </Field>
+              {usesNativeWhisperCpp ? (
+                <Field label={workflowInputFieldLabel("Whisper.cpp model", runConfigInput)}>
+                  <TranscriptionModelSelect
+                    value={form.transcriptionModel}
+                    models={transcriptionModels}
+                    onChange={(value) => set("transcriptionModel", value)}
+                  />
+                </Field>
+              ) : (
+                <Field label={workflowInputFieldLabel("Transcriber command", runConfigInput)}>
+                  <input
+                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                    value={form.transcriptionCommand}
+                    placeholder={defaultTranscriptionCommand(form.transcriptionEngine)}
+                    onChange={(event) => set("transcriptionCommand", event.target.value)}
+                  />
+                </Field>
+              )}
             </div>
 
             <Field
@@ -10962,14 +11027,24 @@ function WorkflowRunControls({
                       onChange={(value) => set("transcriptionEngine", value)}
                     />
                   </Field>
-                  <Field label="Lyrics transcriber command">
-                    <input
-                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-                      value={form.transcriptionCommand}
-                      placeholder={defaultTranscriptionCommand(form.transcriptionEngine)}
-                      onChange={(event) => set("transcriptionCommand", event.target.value)}
-                    />
-                  </Field>
+                  {usesNativeWhisperCpp ? (
+                    <Field label="Whisper.cpp model">
+                      <TranscriptionModelSelect
+                        value={form.transcriptionModel}
+                        models={transcriptionModels}
+                        onChange={(value) => set("transcriptionModel", value)}
+                      />
+                    </Field>
+                  ) : (
+                    <Field label="Lyrics transcriber command">
+                      <input
+                        className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                        value={form.transcriptionCommand}
+                        placeholder={defaultTranscriptionCommand(form.transcriptionEngine)}
+                        onChange={(event) => set("transcriptionCommand", event.target.value)}
+                      />
+                    </Field>
+                  )}
                 </div>
                 <Field label="Music analyzer command">
                   <input
@@ -11095,6 +11170,21 @@ function RunEventTimeline({
                   <span className={classNames("rounded-md px-2 py-0.5 text-xs font-medium", runStatusPillClass(event.status))}>
                     {event.status}
                   </span>
+                  {event.node ? (
+                    <span className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs font-medium text-zinc-700">
+                      {formatRunNodeLabel(event.node)}
+                    </span>
+                  ) : null}
+                  {event.phase ? (
+                    <span className="rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700">
+                      {formatRunPhaseLabel(event.phase)}
+                    </span>
+                  ) : null}
+                  {typeof event.progress === "number" ? (
+                    <span className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs font-medium text-zinc-700">
+                      {formatRunProgress(event.progress)}
+                    </span>
+                  ) : null}
                   <span className="text-xs tabular-nums text-zinc-500">{new Date(event.timestamp).toLocaleString()}</span>
                 </div>
                 <p className="mt-2 text-sm text-zinc-800">{event.message}</p>
@@ -11106,6 +11196,51 @@ function RunEventTimeline({
         )}
         {stderr && <OutputBlock label="stderr" value={stderr} tone="rose" />}
         {stdout && <OutputBlock label="stdout" value={stdout} tone="zinc" />}
+      </div>
+    </section>
+  );
+}
+
+function RunNodeStatusPanel({ events }: { events: RunEvent[] }) {
+  const nodeEvents = events.filter((event) => Boolean(event.node));
+  if (nodeEvents.length === 0) {
+    return null;
+  }
+
+  const byNode = new Map<string, RunEvent>();
+  for (const event of nodeEvents) {
+    if (event.node) {
+      byNode.set(event.node, event);
+    }
+  }
+
+  return (
+    <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
+      <div className="border-b border-zinc-200 px-4 py-3">
+        <h2 className="text-sm font-semibold text-zinc-950">Run Nodes</h2>
+      </div>
+      <div className="space-y-3 p-4">
+        {[...byNode.entries()].map(([node, event]) => (
+          <div key={`${node}-${event.timestamp}`} className="rounded-lg border border-zinc-200 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold text-zinc-900">{formatRunNodeLabel(node)}</span>
+              <span className={classNames("rounded-md px-2 py-0.5 text-xs font-medium", runStatusPillClass(event.status))}>
+                {event.status}
+              </span>
+              {event.phase ? (
+                <span className="rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700">
+                  {formatRunPhaseLabel(event.phase)}
+                </span>
+              ) : null}
+              {typeof event.progress === "number" ? (
+                <span className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs font-medium text-zinc-700">
+                  {formatRunProgress(event.progress)}
+                </span>
+              ) : null}
+            </div>
+            <p className="mt-2 text-sm text-zinc-700">{event.message}</p>
+          </div>
+        ))}
       </div>
     </section>
   );
@@ -11124,6 +11259,31 @@ function runStatusPillClass(status: RunStatus): string {
     case "pending":
       return "bg-zinc-100 text-zinc-700";
   }
+}
+
+function formatRunNodeLabel(node: string): string {
+  return node
+    .split("_")
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+function formatRunPhaseLabel(phase: NonNullable<RunEvent["phase"]>): string {
+  switch (phase) {
+    case "preparing":
+      return "Preparing";
+    case "downloading_model":
+      return "Downloading Model";
+    case "loading_model":
+      return "Loading Model";
+    case "transcribing":
+      return "Transcribing";
+  }
+}
+
+function formatRunProgress(progress: number): string {
+  const clamped = Math.max(0, Math.min(1, progress));
+  return `${Math.round(clamped * 100)}%`;
 }
 
 function OutputBlock({ label, value, tone }: { label: string; value: string; tone: "rose" | "zinc" }) {
@@ -11176,9 +11336,36 @@ function TranscriptionEngineSelect({
       value={value}
       onChange={(event) => onChange(event.target.value as Exclude<TranscriptionEngine, "fast_whisper">)}
     >
-      <option value="whisper">Whisper</option>
+      <option value="whisper_cpp">Whisper.cpp (native)</option>
+      <option value="whisper">Whisper CLI</option>
       <option value="faster_whisper">Faster Whisper</option>
       <option value="whisperx">WhisperX</option>
+    </select>
+  );
+}
+
+function TranscriptionModelSelect({
+  value,
+  models,
+  onChange,
+}: {
+  value: WhisperCppModel;
+  models: Array<{ model: WhisperCppModel; cached: boolean }>;
+  onChange: (value: WhisperCppModel) => void;
+}) {
+  const options = models.length > 0 ? models : [{ model: value, cached: false }];
+  return (
+    <select
+      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+      value={value}
+      onChange={(event) => onChange(event.target.value as WhisperCppModel)}
+    >
+      {options.map((option) => (
+        <option key={option.model} value={option.model}>
+          {option.model}
+          {option.cached ? " (cached)" : ""}
+        </option>
+      ))}
     </select>
   );
 }
@@ -11316,7 +11503,7 @@ function buildCommand(
       command.push("--skip-transcription");
     }
     command.push("--transcription-engine", form.transcriptionEngine);
-    if (form.transcriptionCommand.trim()) {
+    if (form.transcriptionEngine !== "whisper_cpp" && form.transcriptionCommand.trim()) {
       command.push("--transcriber-command", form.transcriptionCommand.trim());
     }
     if (form.musicCommand.trim()) {
@@ -11335,7 +11522,7 @@ function buildCommand(
     ];
     command.push(sourceMode === "url" ? "--url" : "--input", sourceMode === "url" ? form.url : form.input);
     command.push("--transcription-engine", form.transcriptionEngine);
-    if (form.transcriptionCommand.trim()) {
+    if (form.transcriptionEngine !== "whisper_cpp" && form.transcriptionCommand.trim()) {
       command.push("--transcriber-command", form.transcriptionCommand.trim());
     }
     command.push("--write-to-video-folder");
@@ -11368,7 +11555,7 @@ function buildCommand(
     command.push("--skip-transcription");
   }
   command.push("--transcription-engine", form.transcriptionEngine);
-  if (form.transcriptionCommand.trim()) {
+  if (form.transcriptionEngine !== "whisper_cpp" && form.transcriptionCommand.trim()) {
     command.push("--transcriber-command", form.transcriptionCommand.trim());
   }
   if (form.objectCommand.trim()) {
@@ -11397,9 +11584,7 @@ function buildYoutubeRunRequest(form: WorkflowRunForm, inputModel?: WorkflowRunI
     max_frames: form.maxFrames.trim() ? Number(form.maxFrames.trim()) : null,
     visual_sample_every: form.visualSampleEvery,
     transcription: {
-      enabled: !form.skipTranscription,
-      engine: form.transcriptionEngine,
-      command: commandConfig(form.transcriptionCommand),
+      ...buildTranscriptionRequest(form, !form.skipTranscription),
     },
     models: {
       object: commandConfig(form.objectCommand),
@@ -11438,11 +11623,7 @@ function buildYoutubeCollectionRunRequest(
       min_scene_len: form.minSceneLen,
       max_frames: form.maxFrames.trim() ? Number(form.maxFrames.trim()) : null,
       visual_sample_every: form.visualSampleEvery,
-      transcription: {
-        enabled: !form.skipTranscription,
-        engine: form.transcriptionEngine,
-        command: commandConfig(form.transcriptionCommand),
-      },
+      transcription: buildTranscriptionRequest(form, !form.skipTranscription),
       models: {
         object: commandConfig(form.objectCommand),
         ocr: commandConfig(form.ocrCommand),
@@ -11472,11 +11653,7 @@ function buildSongAnalysisRunRequest(form: WorkflowRunForm, inputModel?: Workflo
       ambiguous_margin: form.songAmbiguousMargin,
       max_candidates: form.songMaxCandidates,
     },
-    transcription: {
-      enabled: !form.skipTranscription,
-      engine: form.transcriptionEngine,
-      command: commandConfig(form.transcriptionCommand),
-    },
+    transcription: buildTranscriptionRequest(form, !form.skipTranscription),
     music: {
       enabled: true,
       command: commandConfig(form.musicCommand),
@@ -11496,16 +11673,13 @@ function buildSubtitleGenerationRunRequest(form: WorkflowRunForm, inputModel?: W
         ? { kind: "youtube_url", url: form.url.trim() }
         : { kind: "local_file", path: form.input.trim() },
     work_dir: form.workDir.trim() || null,
-    transcription: {
-      enabled: true,
-      engine: form.transcriptionEngine,
-      command: commandConfig(form.transcriptionCommand),
-    },
+    transcription: buildTranscriptionRequest(form, true),
     overwrite: true,
   };
 }
 
-function formFromYoutubeRunRequest(request: YoutubeRunRequest): WorkflowRunForm {
+function formFromYoutubeRunRequest(request: YoutubeRunRequest, catalog?: TranscriptionCatalog | null): WorkflowRunForm {
+  const transcriptionEngine = normalizedTranscriptionEngine(request.transcription.engine, request.transcription.command);
   return {
     ...initialForm,
     sourceMode: request.source.kind === "youtube_url" ? "url" : "file",
@@ -11517,7 +11691,8 @@ function formFromYoutubeRunRequest(request: YoutubeRunRequest): WorkflowRunForm 
     maxFrames: request.max_frames ? String(request.max_frames) : "",
     visualSampleEvery: request.visual_sample_every,
     skipTranscription: !request.transcription.enabled,
-    transcriptionEngine: normalizedTranscriptionEngine(request.transcription.engine),
+    transcriptionEngine,
+    transcriptionModel: request.transcription.whisper_cpp?.model ?? defaultWhisperCppModel(catalog),
     transcriptionCommand: commandConfigToInput(request.transcription.command),
     objectCommand: commandConfigToInput(request.models.object),
     ocrCommand: commandConfigToInput(request.models.ocr),
@@ -11525,7 +11700,14 @@ function formFromYoutubeRunRequest(request: YoutubeRunRequest): WorkflowRunForm 
   };
 }
 
-function formFromYoutubeCollectionRunRequest(request: YoutubeCollectionRunRequest): WorkflowRunForm {
+function formFromYoutubeCollectionRunRequest(
+  request: YoutubeCollectionRunRequest,
+  catalog?: TranscriptionCatalog | null,
+): WorkflowRunForm {
+  const transcriptionEngine = normalizedTranscriptionEngine(
+    request.analysis.transcription.engine,
+    request.analysis.transcription.command,
+  );
   return {
     ...initialForm,
     sourceMode: "collection",
@@ -11536,7 +11718,8 @@ function formFromYoutubeCollectionRunRequest(request: YoutubeCollectionRunReques
     maxFrames: request.analysis.max_frames ? String(request.analysis.max_frames) : "",
     visualSampleEvery: request.analysis.visual_sample_every,
     skipTranscription: !request.analysis.transcription.enabled,
-    transcriptionEngine: normalizedTranscriptionEngine(request.analysis.transcription.engine),
+    transcriptionEngine,
+    transcriptionModel: request.analysis.transcription.whisper_cpp?.model ?? defaultWhisperCppModel(catalog),
     transcriptionCommand: commandConfigToInput(request.analysis.transcription.command),
     objectCommand: commandConfigToInput(request.analysis.models.object),
     ocrCommand: commandConfigToInput(request.analysis.models.ocr),
@@ -11552,7 +11735,8 @@ function formFromYoutubeCollectionRunRequest(request: YoutubeCollectionRunReques
   };
 }
 
-function formFromSongAnalysisRunRequest(request: SongAnalysisRunRequest): WorkflowRunForm {
+function formFromSongAnalysisRunRequest(request: SongAnalysisRunRequest, catalog?: TranscriptionCatalog | null): WorkflowRunForm {
+  const transcriptionEngine = normalizedTranscriptionEngine(request.transcription.engine, request.transcription.command);
   return {
     ...initialForm,
     sourceMode: request.source.kind === "youtube_url" ? "url" : "file",
@@ -11565,7 +11749,8 @@ function formFromSongAnalysisRunRequest(request: SongAnalysisRunRequest): Workfl
     songAmbiguousMargin: request.identification.ambiguous_margin,
     songMaxCandidates: request.identification.max_candidates,
     skipTranscription: !request.transcription.enabled,
-    transcriptionEngine: normalizedTranscriptionEngine(request.transcription.engine),
+    transcriptionEngine,
+    transcriptionModel: request.transcription.whisper_cpp?.model ?? defaultWhisperCppModel(catalog),
     transcriptionCommand: commandConfigToInput(request.transcription.command),
     songWindowSeconds: request.music.window_seconds,
     songHopSeconds: request.music.hop_seconds,
@@ -11575,7 +11760,11 @@ function formFromSongAnalysisRunRequest(request: SongAnalysisRunRequest): Workfl
   };
 }
 
-function formFromSubtitleGenerationRunRequest(request: SubtitleGenerationRunRequest): WorkflowRunForm {
+function formFromSubtitleGenerationRunRequest(
+  request: SubtitleGenerationRunRequest,
+  catalog?: TranscriptionCatalog | null,
+): WorkflowRunForm {
+  const transcriptionEngine = normalizedTranscriptionEngine(request.transcription.engine, request.transcription.command);
   return {
     ...initialForm,
     sourceMode: request.source.kind === "youtube_url" ? "url" : "file",
@@ -11586,7 +11775,8 @@ function formFromSubtitleGenerationRunRequest(request: SubtitleGenerationRunRequ
       ? `${request.work_dir.replace(/\/$/, "")}/subtitle-generation.json`
       : "workflow-output/subtitle-generation/subtitle-generation.json",
     skipTranscription: false,
-    transcriptionEngine: normalizedTranscriptionEngine(request.transcription.engine),
+    transcriptionEngine,
+    transcriptionModel: request.transcription.whisper_cpp?.model ?? defaultWhisperCppModel(catalog),
     transcriptionCommand: commandConfigToInput(request.transcription.command),
   };
 }
@@ -11613,12 +11803,65 @@ function commandConfigToInput(config: { command: string; args: string[] } | null
   return [config.command, ...config.args].filter(Boolean).join(" ");
 }
 
-function normalizedTranscriptionEngine(value: TranscriptionEngine | undefined): Exclude<TranscriptionEngine, "fast_whisper"> {
-  return value === "whisperx" ? "whisperx" : value === "faster_whisper" || value === "fast_whisper" ? "faster_whisper" : "whisper";
+function buildTranscriptionRequest(form: WorkflowRunForm, enabled: boolean) {
+  const usesNativeWhisperCpp = form.transcriptionEngine === "whisper_cpp";
+  return {
+    enabled,
+    engine: form.transcriptionEngine,
+    command: usesNativeWhisperCpp ? null : commandConfig(form.transcriptionCommand),
+    whisper_cpp: usesNativeWhisperCpp
+      ? {
+          model: form.transcriptionModel,
+          language: null,
+          translate: false,
+          threads: null,
+        }
+      : undefined,
+  };
+}
+
+function normalizedTranscriptionEngine(
+  value: TranscriptionEngine | undefined,
+  command?: { command: string; args: string[] } | null,
+): Exclude<TranscriptionEngine, "fast_whisper"> {
+  if (value === "whisperx") {
+    return "whisperx";
+  }
+  if (value === "faster_whisper" || value === "fast_whisper") {
+    return "faster_whisper";
+  }
+  if (value === "whisper_cpp" || value == null) {
+    return "whisper_cpp";
+  }
+  return command ? "whisper" : "whisper_cpp";
+}
+
+function defaultTranscriptionEngine(catalog?: TranscriptionCatalog | null): Exclude<TranscriptionEngine, "fast_whisper"> {
+  return normalizedTranscriptionEngine(catalog?.default_engine);
+}
+
+function defaultWhisperCppModel(catalog?: TranscriptionCatalog | null): WhisperCppModel {
+  return catalog?.whisper_cpp.default_model ?? initialForm.transcriptionModel;
+}
+
+function createDefaultRunForm(
+  workflowKind: WorkflowKindId,
+  catalog?: TranscriptionCatalog | null,
+): WorkflowRunForm {
+  return {
+    ...initialForm,
+    sourceMode: workflowKind === "youtube-collection" ? "collection" : "url",
+    workDir: defaultWorkDirForWorkflowKind(workflowKind),
+    output: defaultOutputForWorkflowKind(workflowKind),
+    transcriptionEngine: defaultTranscriptionEngine(catalog),
+    transcriptionModel: defaultWhisperCppModel(catalog),
+  };
 }
 
 function defaultTranscriptionCommand(engine: Exclude<TranscriptionEngine, "fast_whisper">): string {
   switch (engine) {
+    case "whisper_cpp":
+      return "";
     case "faster_whisper":
       return "whisper-ctranslate2";
     case "whisperx":

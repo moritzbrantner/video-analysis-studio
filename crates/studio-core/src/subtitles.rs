@@ -12,6 +12,7 @@ use crate::report::{
     CapabilityReport, SourceReport, SubtitleAssetReport, SubtitleGenerationReport, SubtitleReport,
     TranscriptSegmentReport,
 };
+use crate::run_manager::WorkflowProgress;
 use crate::youtube::{SourceSpec, TranscriptionConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -52,6 +53,7 @@ pub fn run_subtitle_generation_workflow(
     request: SubtitleGenerationRunRequest,
     work_dir: PathBuf,
     report_path: PathBuf,
+    progress: &mut dyn FnMut(WorkflowProgress),
 ) -> Result<SubtitleGenerationReport> {
     request.validate()?;
     fs::create_dir_all(&work_dir)?;
@@ -77,7 +79,7 @@ pub fn run_subtitle_generation_workflow(
     }
 
     let (transcription, audio_wav) =
-        transcribe_media(&request.transcription, &video_path, &work_dir);
+        transcribe_media(&request.transcription, &video_path, &work_dir, progress);
     if transcription.status != "completed" {
         return Err(StudioError::Workflow(format!(
             "subtitle generation requires completed transcription: {}",
@@ -86,6 +88,10 @@ pub fn run_subtitle_generation_workflow(
     }
     completed.push("transcription".to_string());
 
+    progress(WorkflowProgress::message(
+        "subtitle",
+        "writing subtitle file".to_string(),
+    ));
     write_srt_file(&subtitle_path, &transcription.segments)?;
     completed.push("subtitle_srt".to_string());
     if transcription.segments.is_empty() {

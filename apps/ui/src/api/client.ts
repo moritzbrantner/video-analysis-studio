@@ -5,6 +5,7 @@ import type {
   SongCatalogImportRequest,
   SongCatalogImportResponse,
   TranscriptionEngine,
+  WhisperCppModel,
   SubtitleGenerationReport,
   SubtitleGenerationRunRequest,
   YoutubeCollectionManifest,
@@ -36,6 +37,9 @@ export interface RunEvent {
   status: RunStatus;
   message: string;
   timestamp: string;
+  node?: string | null;
+  phase?: "preparing" | "downloading_model" | "loading_model" | "transcribing" | null;
+  progress?: number | null;
   stdout?: string | null;
   stderr?: string | null;
 }
@@ -50,6 +54,27 @@ export interface DependencyStatus {
 
 export interface SystemDependencyReport {
   dependencies: DependencyStatus[];
+}
+
+export interface WhisperCppModelStatus {
+  model: WhisperCppModel;
+  cached: boolean;
+}
+
+export interface TranscriptionEngineStatus {
+  id: TranscriptionEngine;
+  label: string;
+  available: boolean;
+  native: boolean;
+}
+
+export interface TranscriptionCatalog {
+  default_engine: TranscriptionEngine;
+  engines: TranscriptionEngineStatus[];
+  whisper_cpp: {
+    default_model: WhisperCppModel;
+    models: WhisperCppModelStatus[];
+  };
 }
 
 export type PortKind =
@@ -244,6 +269,12 @@ export interface YoutubeRunRequest {
     enabled: boolean;
     engine?: TranscriptionEngine;
     command?: ExternalCommandConfig | null;
+    whisper_cpp?: {
+      model?: WhisperCppModel;
+      language?: string | null;
+      translate?: boolean;
+      threads?: number | null;
+    };
   };
   models: {
     object?: ExternalCommandConfig | null;
@@ -255,6 +286,7 @@ export interface YoutubeRunRequest {
 export interface WorkflowClient {
   label: string;
   checkDependencies(): Promise<SystemDependencyReport>;
+  getTranscriptionCatalog(): Promise<TranscriptionCatalog>;
   getWorkflowCatalog(): Promise<WorkflowCatalog>;
   listDataSources(): Promise<DataSourceRecord[]>;
   createDataSource(request: DataSourceUpsert): Promise<DataSourceRecord>;

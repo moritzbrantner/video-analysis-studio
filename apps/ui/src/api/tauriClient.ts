@@ -3,6 +3,7 @@ import type {
   RunEvent,
   RunRecord,
   SystemDependencyReport,
+  TranscriptionCatalog,
   WorkflowCatalog,
   WorkflowClient,
   YoutubeRunRequest,
@@ -31,6 +32,7 @@ export function createTauriClient(): WorkflowClient {
   return {
     label: "Tauri",
     checkDependencies: async () => invoke<SystemDependencyReport>("check_dependencies"),
+    getTranscriptionCatalog: async () => invoke<TranscriptionCatalog>("get_transcription_catalog"),
     getWorkflowCatalog: async () => invoke<WorkflowCatalog>("get_workflow_catalog"),
     listDataSources: async () => invoke<DataSourceRecord[]>("list_data_sources"),
     createDataSource: async (request) => invoke<DataSourceRecord>("create_data_source", { request }),

@@ -17,9 +17,10 @@ bun install
 cargo check --workspace
 cargo test --workspace
 bun dev
-cargo run -p studio-api -- --data-dir ./studio-data
 ```
 
-During development, run the app with `bun dev`. The UI dev server is pinned to `http://127.0.0.1:8702` and will fail to start if that port is unavailable.
+During development, run the app with `bun dev`. It reads `config/runtime.json` at startup, starts the localhost API from that config, waits for the API to come up, and then launches the Vite dev server with the configured UI port. The default UI dev port remains `8702`.
 
-The API binds to `127.0.0.1:5179` by default.
+If you need the backend separately, use `bun run api:dev`.
+
+The API host and port, UI dev port, and UI test port all come from `config/runtime.json`. The browser UI uses the same startup config for its default API base URL. `VITE_STUDIO_API_URL` can still override the API URL when needed.

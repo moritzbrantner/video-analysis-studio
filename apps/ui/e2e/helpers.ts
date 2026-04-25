@@ -1,4 +1,7 @@
 import { expect, type Page, type Route } from "@playwright/test";
+import { studioApiBaseUrl } from "../../../scripts/runtime-config.mjs";
+
+const apiBaseUrl = studioApiBaseUrl();
 
 const graphSummaryPattern = /(\d+)\s+components\s+\D+\s+(\d+)\s+connections/;
 const savedVersionsPattern = /(\d+)\s+saved/;
@@ -94,7 +97,7 @@ export async function mockWorkflowBackend(page: Page) {
   const runs = new Map<string, MockRunState>();
   let nextRunId = 0;
 
-  await page.route("http://127.0.0.1:5179/api/**", async (route) => {
+  await page.route(`${apiBaseUrl}/api/**`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
