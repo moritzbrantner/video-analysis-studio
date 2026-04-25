@@ -1,5 +1,3 @@
-import { useRef, useState } from "react";
-
 import { DataBucketOverview } from "../data";
 import {
   EventList,
@@ -9,18 +7,11 @@ import {
 } from "../core";
 import { SourceSummary, AssetSummary } from "../ingest";
 import { CapabilityPanel, ModelObservationGrid } from "../models";
-import { MediaPreviewPanel, type MediaPreviewHandle } from "../media";
+import { MediaPreviewPanel } from "../media";
 import { SplitPlanTable } from "../split";
 import { TranscriptPanel } from "../workflows";
-import type {
-  AnalysisEvent,
-  AnalysisObservation,
-  SceneReport,
-  TimelineScene,
-  TranscriptSegmentReport,
-  YoutubeVideoReport,
-} from "../types";
-import { sceneIndex, sceneStartSeconds } from "../shared/utils";
+import type { YoutubeVideoReport } from "../types";
+import { useVideoSelectionState } from "./video-selection";
 
 export function VideoOverviewDashboard({ report, runId }: { report: YoutubeVideoReport; runId?: string | null }) {
   const controls = useVideoSeekState(report, null);
@@ -31,7 +22,8 @@ export function VideoOverviewDashboard({ report, runId }: { report: YoutubeVideo
         report={report}
         runId={runId}
         activeSceneIndex={controls.activeSceneIndex}
-        onSelectScene={controls.selectScene}
+        activeTimelineItemId={controls.activeTimelineItemId}
+        onSelectTimelineItem={controls.selectTimelineItem}
       />
       <VideoSummaryCards video={report.video} />
       <div className="grid gap-4 2xl:grid-cols-2">
@@ -57,7 +49,8 @@ export function VideoScenesDashboard({ report, runId }: { report: YoutubeVideoRe
         report={report}
         runId={runId}
         activeSceneIndex={controls.activeSceneIndex}
-        onSelectScene={controls.selectScene}
+        activeTimelineItemId={controls.activeTimelineItemId}
+        onSelectTimelineItem={controls.selectTimelineItem}
       />
       <ScenePanel
         scenes={report.video.scenes}
@@ -73,7 +66,14 @@ export function VideoSignalsDashboard({ report, runId }: { report: YoutubeVideoR
   const controls = useVideoSeekState(report, null);
   return (
     <>
-      <MediaPreviewPanel ref={controls.mediaPreviewRef} report={report} runId={runId} />
+      <MediaPreviewPanel
+        ref={controls.mediaPreviewRef}
+        report={report}
+        runId={runId}
+        activeSceneIndex={controls.activeSceneIndex}
+        activeTimelineItemId={controls.activeTimelineItemId}
+        onSelectTimelineItem={controls.selectTimelineItem}
+      />
       <ObservationList
         observations={report.video.observations}
         title="Video Observations"
@@ -113,85 +113,7 @@ export function VideoDataDashboard({ report }: { report: YoutubeVideoReport }) {
 }
 
 function useVideoSeekState(report: YoutubeVideoReport, initialSceneIndex: number | null) {
-  const mediaPreviewRef = useRef<MediaPreviewHandle | null>(null);
-  const [activeSceneIndex, setActiveSceneIndex] = useState<number | null>(initialSceneIndex);
-  const [activeObservationIndex, setActiveObservationIndex] = useState<number | null>(null);
-  const [activeTranscriptSegmentIndex, setActiveTranscriptSegmentIndex] = useState<number | null>(null);
-  const [activeAudioEventIndex, setActiveAudioEventIndex] = useState<number | null>(null);
-  const [activeTextEventIndex, setActiveTextEventIndex] = useState<number | null>(null);
-
-  function seekTo(seconds?: number | null) {
-    mediaPreviewRef.current?.seekTo(seconds);
-  }
-
-  function clearSignalSelections() {
-    setActiveObservationIndex(null);
-    setActiveTranscriptSegmentIndex(null);
-    setActiveAudioEventIndex(null);
-    setActiveTextEventIndex(null);
-  }
-
-  function selectScene(scene: SceneReport, index: number) {
-    setActiveSceneIndex(scene.index);
-    clearSignalSelections();
-    seekTo(scene.start_seconds ?? report.video.scenes[index]?.start_seconds);
-  }
-
-  function selectTimelineScene(scene: TimelineScene, index: number) {
-    setActiveSceneIndex(sceneIndex(scene, index + 1));
-    clearSignalSelections();
-    seekTo(sceneStartSeconds(scene));
-  }
-
-  function selectObservation(observation: AnalysisObservation, index: number) {
-    setActiveObservationIndex(index);
-    if (observation.scene_index != null) {
-      setActiveSceneIndex(observation.scene_index);
-    }
-    setActiveTranscriptSegmentIndex(null);
-    setActiveAudioEventIndex(null);
-    setActiveTextEventIndex(null);
-    seekTo(observation.timestamp_seconds);
-  }
-
-  function selectTranscriptSegment(segment: TranscriptSegmentReport) {
-    setActiveTranscriptSegmentIndex(segment.index);
-    setActiveObservationIndex(null);
-    setActiveAudioEventIndex(null);
-    setActiveTextEventIndex(null);
-    seekTo(segment.start_seconds);
-  }
-
-  function selectAudioEvent(event: AnalysisEvent, index: number) {
-    setActiveAudioEventIndex(index);
-    setActiveObservationIndex(null);
-    setActiveTranscriptSegmentIndex(null);
-    setActiveTextEventIndex(null);
-    seekTo(event.timestamp_seconds);
-  }
-
-  function selectTextEvent(event: AnalysisEvent, index: number) {
-    setActiveTextEventIndex(index);
-    setActiveObservationIndex(null);
-    setActiveTranscriptSegmentIndex(null);
-    setActiveAudioEventIndex(null);
-    seekTo(event.timestamp_seconds);
-  }
-
-  return {
-    mediaPreviewRef,
-    activeSceneIndex,
-    activeObservationIndex,
-    activeTranscriptSegmentIndex,
-    activeAudioEventIndex,
-    activeTextEventIndex,
-    selectScene,
-    selectTimelineScene,
-    selectObservation,
-    selectTranscriptSegment,
-    selectAudioEvent,
-    selectTextEvent,
-  };
+  return useVideoSelectionState(report, initialSceneIndex);
 }
 
 function basename(path: string): string {

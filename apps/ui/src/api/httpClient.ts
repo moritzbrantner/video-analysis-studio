@@ -24,7 +24,7 @@ import {
   isYoutubeVideoReport as videoReport,
 } from "./client";
 
-const defaultBaseUrl = __STUDIO_API_URL__;
+const defaultBaseUrl = typeof __STUDIO_API_URL__ === "string" ? __STUDIO_API_URL__ : "";
 
 export function createHttpClient(baseUrl = import.meta.env.VITE_STUDIO_API_URL ?? defaultBaseUrl): WorkflowClient {
   return {

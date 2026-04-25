@@ -197,9 +197,7 @@ pub(crate) fn transcribe_media(
     }
 }
 
-pub(crate) fn prepare_transcription_config(
-    config: &TranscriptionConfig,
-) -> TranscriptionConfig {
+pub(crate) fn prepare_transcription_config(config: &TranscriptionConfig) -> TranscriptionConfig {
     let mut prepared = config.clone().normalized();
     if !prepared.enabled || prepared.command.is_some() {
         return prepared;
@@ -406,7 +404,13 @@ pub(crate) fn display_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
+    use tempfile::tempdir;
+
+    use crate::test_support::{prepend_path, write_executable};
+    use crate::youtube::{ExternalCommandConfig, WhisperCppConfig};
 
     #[test]
     fn parses_whisper_json_segments() {
@@ -430,5 +434,93 @@ mod tests {
         assert_eq!(parsed.text.as_deref(), Some("first second"));
         assert_eq!(parsed.segments.len(), 2);
         assert_eq!(parsed.segments[0].end_seconds, Some(4.0));
+    }
+
+    #[test]
+    fn transcribe_media_runs_whisper_command() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let _path_guard = prepend_path(&bin_dir);
+
+        write_executable(
+            &bin_dir,
+            "ffmpeg",
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+input=""
+previous=""
+for arg in "$@"; do
+  if [[ "$previous" == "-i" ]]; then
+    input="$arg"
+  fi
+  previous="$arg"
+done
+cp "$input" "${@: -1}"
+"#,
+        )
+        .unwrap();
+        let whisper_path = write_executable(
+            &bin_dir,
+            "fake-whisper",
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+audio_path="$1"
+shift
+output_dir=""
+while (($#)); do
+  if [[ "$1" == "--output_dir" ]]; then
+    output_dir="$2"
+    shift 2
+    continue
+  fi
+  shift
+done
+test -f "$audio_path"
+mkdir -p "$output_dir"
+cat > "$output_dir/result.json" <<'JSON'
+{"text":"stub transcript","segments":[{"start":0.0,"end":1.25,"text":" hello from stub "}]}
+JSON
+"#,
+        )
+        .unwrap();
+
+        let media_path = dir.path().join("input.wav");
+        fs::write(&media_path, b"fake wav bytes").unwrap();
+        let work_dir = dir.path().join("work");
+        let expected_audio_path = work_dir.join("audio.wav");
+        let expected_transcript_path = work_dir.join("transcript").join("result.json");
+        let expected_message = format!("whisper: {}", display_path(&expected_transcript_path));
+        let config = TranscriptionConfig {
+            enabled: true,
+            engine: TranscriptionEngine::Whisper,
+            command: Some(ExternalCommandConfig {
+                command: whisper_path,
+                args: Vec::new(),
+            }),
+            whisper_cpp: WhisperCppConfig::default(),
+        };
+        let mut progress_events = Vec::new();
+
+        let (report, audio_path) =
+            transcribe_media(&config, &media_path, &work_dir, &mut |event| {
+                progress_events.push(event);
+            });
+
+        assert_eq!(audio_path, Some(expected_audio_path.clone()));
+        assert_eq!(report.status, "completed");
+        assert_eq!(report.text.as_deref(), Some("stub transcript"));
+        assert_eq!(report.segments.len(), 1);
+        assert_eq!(report.segments[0].text, "hello from stub");
+        assert_eq!(report.segments[0].start_seconds, Some(0.0));
+        assert_eq!(report.message.as_deref(), Some(expected_message.as_str()));
+        assert_eq!(
+            progress_events,
+            vec![WorkflowProgress::message(
+                "transcriber",
+                "running whisper transcription"
+            )]
+        );
+        assert_eq!(fs::read(&expected_audio_path).unwrap(), b"fake wav bytes");
     }
 }

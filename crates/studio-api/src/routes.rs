@@ -36,7 +36,10 @@ pub fn build_app(manager: RunManager) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/api/system/dependencies", get(system_dependencies))
-        .route("/api/transcription/catalog", get(transcription_catalog_route))
+        .route(
+            "/api/transcription/catalog",
+            get(transcription_catalog_route),
+        )
         .route("/api/workflows", get(workflows))
         .route("/api/workflow/catalog", get(workflow_catalog))
         .route(

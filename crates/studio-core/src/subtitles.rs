@@ -171,7 +171,13 @@ fn write_json_report<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
+    use tempfile::tempdir;
+
+    use crate::test_support::{prepend_path, write_executable};
+    use crate::youtube::{ExternalCommandConfig, TranscriptionEngine, WhisperCppConfig};
 
     #[test]
     fn subtitle_path_reuses_video_folder_and_stem() {
@@ -202,5 +208,155 @@ mod tests {
             text,
             "1\n00:00:01,250 --> 00:00:03,500\nHello\n\n2\n00:01:03,000 --> 00:01:05,125\nWorld\n\n"
         );
+    }
+
+    #[test]
+    fn youtube_subtitle_pipeline_downloads_transcribes_and_writes_srt() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let _path_guard = prepend_path(&bin_dir);
+
+        write_executable(
+            &bin_dir,
+            "ffmpeg",
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+input=""
+previous=""
+for arg in "$@"; do
+  if [[ "$previous" == "-i" ]]; then
+    input="$arg"
+  fi
+  previous="$arg"
+done
+cp "$input" "${@: -1}"
+"#,
+        )
+        .unwrap();
+        write_executable(
+            &bin_dir,
+            "yt-dlp",
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+template=""
+previous=""
+for arg in "$@"; do
+  if [[ "$previous" == "-o" ]]; then
+    template="$arg"
+  fi
+  previous="$arg"
+done
+output="${template//%(ext)s/mp4}"
+mkdir -p "$(dirname "$output")"
+printf 'downloaded video bytes' > "$output"
+printf '%s\n' "$output"
+"#,
+        )
+        .unwrap();
+        let whisper_path = write_executable(
+            &bin_dir,
+            "fake-whisper",
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+audio_path="$1"
+shift
+output_dir=""
+while (($#)); do
+  if [[ "$1" == "--output_dir" ]]; then
+    output_dir="$2"
+    shift 2
+    continue
+  fi
+  shift
+done
+test -f "$audio_path"
+mkdir -p "$output_dir"
+cat > "$output_dir/subtitles.json" <<'JSON'
+{"text":"hello youtube world","segments":[{"start":0.0,"end":1.5,"text":" hello youtube "},{"start":1.5,"end":3.0,"text":" world "}]}
+JSON
+"#,
+        )
+        .unwrap();
+
+        let work_dir = dir.path().join("work");
+        let report_path = work_dir.join("subtitle-generation.json");
+        let downloaded_video = work_dir.join("youtube-video.mp4");
+        let subtitle_path = work_dir.join("youtube-video.srt");
+        let audio_path = work_dir.join("audio.wav");
+        let audio_path_display = display_path(&audio_path);
+        let source_url = "https://www.youtube.com/watch?v=abc123";
+        let request = SubtitleGenerationRunRequest {
+            source: SourceSpec::YoutubeUrl {
+                url: source_url.to_string(),
+            },
+            work_dir: None,
+            transcription: TranscriptionConfig {
+                enabled: true,
+                engine: TranscriptionEngine::Whisper,
+                command: Some(ExternalCommandConfig {
+                    command: whisper_path,
+                    args: Vec::new(),
+                }),
+                whisper_cpp: WhisperCppConfig::default(),
+            },
+            overwrite: true,
+        };
+        let mut progress_events = Vec::new();
+
+        let report = run_subtitle_generation_workflow(
+            request,
+            work_dir.clone(),
+            report_path.clone(),
+            &mut |event| {
+                progress_events.push(event);
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.workflow, "subtitle_generation");
+        assert_eq!(report.source.url.as_deref(), Some(source_url));
+        assert_eq!(report.source.local_video, display_path(&downloaded_video));
+        assert_eq!(report.assets.work_dir, display_path(&work_dir));
+        assert_eq!(report.assets.report_path, display_path(&report_path));
+        assert_eq!(
+            report.assets.audio_wav.as_deref(),
+            Some(audio_path_display.as_str())
+        );
+        assert_eq!(report.assets.subtitle_path, display_path(&subtitle_path));
+        assert_eq!(
+            report.capabilities.completed,
+            vec![
+                "youtube_download".to_string(),
+                "transcription".to_string(),
+                "subtitle_srt".to_string()
+            ]
+        );
+        assert!(report.capabilities.skipped.is_empty());
+        assert_eq!(report.transcription.status, "completed");
+        assert_eq!(
+            report.transcription.text.as_deref(),
+            Some("hello youtube world")
+        );
+        assert_eq!(report.transcription.segments.len(), 2);
+        assert_eq!(report.subtitle.format, "srt");
+        assert_eq!(report.subtitle.path, display_path(&subtitle_path));
+        assert_eq!(report.subtitle.segments, 2);
+        assert_eq!(
+            fs::read_to_string(&subtitle_path).unwrap(),
+            "1\n00:00:00,000 --> 00:00:01,500\nhello youtube\n\n2\n00:00:01,500 --> 00:00:03,000\nworld\n\n"
+        );
+
+        let persisted: SubtitleGenerationReport =
+            serde_json::from_slice(&fs::read(&report_path).unwrap()).unwrap();
+        assert_eq!(persisted, report);
+        assert!(progress_events.contains(&WorkflowProgress::message(
+            "transcriber",
+            "running whisper transcription"
+        )));
+        assert!(progress_events.contains(&WorkflowProgress::message(
+            "subtitle",
+            "writing subtitle file"
+        )));
     }
 }

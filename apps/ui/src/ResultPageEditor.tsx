@@ -40,8 +40,11 @@ import {
   isYoutubeCollectionReport,
   isYoutubeVideoReport,
 } from "./api/client";
+import { MediaPreviewPanel } from "./media";
+import { useVideoSelectionState, type VideoSelectionControls } from "./dashboard/video-selection";
 
 export type DashboardWidgetId =
+  | "media-preview"
   | "summary"
   | "source-assets"
   | "scenes"
@@ -73,6 +76,7 @@ export type DashboardLayout =
     };
 
 export type DashboardDataKind =
+  | "media_preview"
   | "video_metadata"
   | "scene_result"
   | "video_observation"
@@ -118,6 +122,7 @@ const songReportKinds: ReportKind[] = ["song-analysis"];
 const collectionReportKinds: ReportKind[] = ["youtube-collection"];
 
 const widgetOptions: DashboardWidgetOption[] = [
+  { id: "media-preview", label: "Media Preview", dataKinds: ["media_preview"], reportKinds: videoReportKinds },
   { id: "summary", label: "Summary", dataKinds: ["video_metadata", "scene_result"], reportKinds: ["youtube-video", "song-analysis", "subtitle-generation"] },
   { id: "source-assets", label: "Source + Assets", dataKinds: ["json_report"], reportKinds: ["youtube-video", "song-analysis", "subtitle-generation"] },
   { id: "scenes", label: "Scenes", dataKinds: ["scene_result"], reportKinds: videoReportKinds },
@@ -148,22 +153,34 @@ let nextSplitId = 0;
 export const defaultDashboardLayout: DashboardLayout = {
   type: "split",
   id: "default-root",
-  direction: "row",
-  sizes: [1, 1],
+  direction: "column",
+  sizes: [1.1, 1.9],
   children: [
     {
-      type: "split",
-      id: "default-left-column",
-      direction: "column",
-      sizes: [1, 1, 1],
-      children: [{ type: "widget", id: "summary" }, { type: "widget", id: "observations" }, { type: "widget", id: "audio-events" }],
+      type: "widget",
+      id: "media-preview",
     },
     {
       type: "split",
-      id: "default-right-column",
-      direction: "column",
-      sizes: [1, 1, 1],
-      children: [{ type: "widget", id: "scenes" }, { type: "widget", id: "transcript" }, { type: "widget", id: "data-buckets" }],
+      id: "default-content-row",
+      direction: "row",
+      sizes: [1, 1],
+      children: [
+        {
+          type: "split",
+          id: "default-left-column",
+          direction: "column",
+          sizes: [1, 1, 1],
+          children: [{ type: "widget", id: "summary" }, { type: "widget", id: "observations" }, { type: "widget", id: "audio-events" }],
+        },
+        {
+          type: "split",
+          id: "default-right-column",
+          direction: "column",
+          sizes: [1, 1, 1],
+          children: [{ type: "widget", id: "scenes" }, { type: "widget", id: "transcript" }, { type: "widget", id: "data-buckets" }],
+        },
+      ],
     },
   ],
 };
@@ -229,14 +246,17 @@ const subtitleDefaultDashboardLayout: DashboardLayout = {
 
 export function ResultPageEditor({
   report,
+  runId,
   layout,
   onLayoutChange,
 }: {
   report: StudioReport;
+  runId?: string | null;
   layout: DashboardLayout;
   onLayoutChange: (layout: DashboardLayout) => void;
 }) {
   const reportKind = reportKindForReport(report);
+  const videoSelection = useVideoSelectionState(isYoutubeVideoReport(report) ? report : null, null);
   const sanitizedLayout = useMemo(() => sanitizeDashboardLayout(layout, reportKind), [layout, reportKind]);
   const activeWidgetIds = useMemo(() => widgetIdsForLayout(sanitizedLayout), [sanitizedLayout]);
   const inactiveOptions = dashboardWidgetOptionsForReportKind(reportKind).filter(
@@ -385,6 +405,8 @@ export function ResultPageEditor({
           node={sanitizedLayout}
           path={[]}
           report={report}
+          runId={runId}
+          videoSelection={videoSelection}
           canRemove={visibleCount > 1}
           currentDragPayload={currentDragPayload}
           onDragWidget={handleWidgetDragStart}
@@ -489,6 +511,8 @@ function DashboardLayoutNode({
   node,
   path,
   report,
+  runId,
+  videoSelection,
   canRemove,
   currentDragPayload,
   onDragWidget,
@@ -500,6 +524,8 @@ function DashboardLayoutNode({
   node: DashboardLayout;
   path: number[];
   report: StudioReport;
+  runId?: string | null;
+  videoSelection: VideoSelectionControls;
   canRemove: boolean;
   currentDragPayload: DragPayload | null;
   onDragWidget: (event: ReactDragEvent<HTMLElement>, widgetId: DashboardWidgetId) => void;
@@ -519,6 +545,8 @@ function DashboardLayoutNode({
       <ResultWidgetPanel
         widgetId={node.id}
         report={report}
+        runId={runId}
+        videoSelection={videoSelection}
         canRemove={canRemove}
         currentDragPayload={currentDragPayload}
         onDragWidget={onDragWidget}
@@ -534,6 +562,8 @@ function DashboardLayoutNode({
       node={node}
       path={path}
       report={report}
+      runId={runId}
+      videoSelection={videoSelection}
       canRemove={canRemove}
       currentDragPayload={currentDragPayload}
       onDragWidget={onDragWidget}
@@ -549,6 +579,8 @@ function SplitPane({
   node,
   path,
   report,
+  runId,
+  videoSelection,
   canRemove,
   currentDragPayload,
   onDragWidget,
@@ -560,6 +592,8 @@ function SplitPane({
   node: Extract<DashboardLayout, { type: "split" }>;
   path: number[];
   report: StudioReport;
+  runId?: string | null;
+  videoSelection: VideoSelectionControls;
   canRemove: boolean;
   currentDragPayload: DragPayload | null;
   onDragWidget: (event: ReactDragEvent<HTMLElement>, widgetId: DashboardWidgetId) => void;
@@ -586,6 +620,8 @@ function SplitPane({
               node={child}
               path={[...path, index]}
               report={report}
+              runId={runId}
+              videoSelection={videoSelection}
               canRemove={canRemove}
               currentDragPayload={currentDragPayload}
               onDragWidget={onDragWidget}
@@ -613,6 +649,8 @@ function SplitPane({
 function ResultWidgetPanel({
   widgetId,
   report,
+  runId,
+  videoSelection,
   canRemove,
   currentDragPayload,
   onDragWidget,
@@ -622,6 +660,8 @@ function ResultWidgetPanel({
 }: {
   widgetId: DashboardWidgetId;
   report: StudioReport;
+  runId?: string | null;
+  videoSelection: VideoSelectionControls;
   canRemove: boolean;
   currentDragPayload: DragPayload | null;
   onDragWidget: (event: ReactDragEvent<HTMLElement>, widgetId: DashboardWidgetId) => void;
@@ -678,7 +718,7 @@ function ResultWidgetPanel({
           <CloseIcon className="h-4 w-4" />
         </button>
       </div>
-      <div className="min-h-0 flex-1 overflow-auto p-3">{renderWidget(widgetId, report)}</div>
+      <div className="min-h-0 flex-1 overflow-auto p-3">{renderWidget(widgetId, report, runId, videoSelection)}</div>
     </section>
   );
 }
@@ -874,7 +914,12 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-function renderWidget(widgetId: DashboardWidgetId, report: StudioReport) {
+function renderWidget(
+  widgetId: DashboardWidgetId,
+  report: StudioReport,
+  runId?: string | null,
+  videoSelection?: VideoSelectionControls | null,
+) {
   if (isYoutubeCollectionReport(report)) {
     switch (widgetId) {
       case "collection-summary":
@@ -960,6 +1005,17 @@ function renderWidget(widgetId: DashboardWidgetId, report: StudioReport) {
     return null;
   }
   switch (widgetId) {
+    case "media-preview":
+      return (
+        <MediaPreviewPanel
+          ref={videoSelection?.mediaPreviewRef}
+          report={report}
+          runId={runId}
+          activeSceneIndex={videoSelection?.activeSceneIndex}
+          activeTimelineItemId={videoSelection?.activeTimelineItemId}
+          onSelectTimelineItem={videoSelection?.selectTimelineItem}
+        />
+      );
     case "summary":
       return <VideoSummaryCards video={report.video} />;
     case "source-assets":
@@ -970,20 +1026,55 @@ function renderWidget(widgetId: DashboardWidgetId, report: StudioReport) {
         </div>
       );
     case "scenes":
-      return <ScenePanel scenes={report.video.scenes} />;
+      return (
+        <ScenePanel
+          scenes={report.video.scenes}
+          activeSceneIndex={videoSelection?.activeSceneIndex}
+          onSelectScene={videoSelection?.selectTimelineScene}
+        />
+      );
     case "observations":
       return (
         <div className="grid gap-4 2xl:grid-cols-2">
-          <ObservationList observations={report.video.observations} title="Video Observations" />
-          <ModelObservationGrid observations={report.video.observations} />
+          <ObservationList
+            observations={report.video.observations}
+            title="Video Observations"
+            activeObservationIndex={videoSelection?.activeObservationIndex}
+            onSelectObservation={videoSelection?.selectObservation}
+          />
+          <ModelObservationGrid
+            observations={report.video.observations}
+            activeObservationIndex={videoSelection?.activeObservationIndex}
+            onSelectObservation={videoSelection?.selectObservation}
+          />
         </div>
       );
     case "transcript":
-      return <TranscriptPanel transcription={report.transcription} />;
+      return (
+        <TranscriptPanel
+          transcription={report.transcription}
+          activeSegmentIndex={videoSelection?.activeTranscriptSegmentIndex}
+          onSelectSegment={videoSelection?.selectTranscriptSegment}
+        />
+      );
     case "audio-events":
-      return <EventList events={report.audio.events} title={`Audio Events (${report.audio.status})`} />;
+      return (
+        <EventList
+          events={report.audio.events}
+          title={`Audio Events (${report.audio.status})`}
+          activeEventIndex={videoSelection?.activeAudioEventIndex}
+          onSelectEvent={videoSelection?.selectAudioEvent}
+        />
+      );
     case "text-events":
-      return <EventList events={report.text.events} title={`Text Events (${report.text.status})`} />;
+      return (
+        <EventList
+          events={report.text.events}
+          title={`Text Events (${report.text.status})`}
+          activeEventIndex={videoSelection?.activeTextEventIndex}
+          onSelectEvent={videoSelection?.selectTextEvent}
+        />
+      );
     case "data-buckets":
       return <DataBucketOverview buckets={report.data_buckets} />;
     case "collection-summary":

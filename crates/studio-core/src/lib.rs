@@ -6,6 +6,8 @@ mod run_manager;
 mod song;
 mod subtitles;
 mod system;
+#[cfg(test)]
+mod test_support;
 mod youtube;
 
 pub use data_sources::{

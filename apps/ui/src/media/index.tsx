@@ -64,7 +64,8 @@ export interface MediaPreviewPanelProps {
   report: StudioReport;
   runId?: string | null;
   activeSceneIndex?: number | null;
-  onSelectScene?: (scene: SceneReport, index: number) => void;
+  activeTimelineItemId?: string | null;
+  onSelectTimelineItem?: (item: MediaTimelineItem) => void;
   className?: string;
 }
 
@@ -72,7 +73,8 @@ export const MediaPreviewPanel = forwardRef<MediaPreviewHandle, MediaPreviewPane
   report,
   runId,
   activeSceneIndex,
-  onSelectScene,
+  activeTimelineItemId,
+  onSelectTimelineItem,
   className,
 }, ref) {
   const candidates = useMemo(() => mediaCandidatesForReport(report), [report]);
@@ -164,8 +166,9 @@ export const MediaPreviewPanel = forwardRef<MediaPreviewHandle, MediaPreviewPane
         <MediaTimelineList
           items={timeline}
           activeSceneIndex={activeSceneIndex}
+          activeTimelineItemId={activeTimelineItemId}
           onSeek={seek}
-          onSelectScene={onSelectScene}
+          onSelectTimelineItem={onSelectTimelineItem}
         />
       </div>
     </Panel>
@@ -175,13 +178,15 @@ export const MediaPreviewPanel = forwardRef<MediaPreviewHandle, MediaPreviewPane
 export function MediaTimelineList({
   items,
   activeSceneIndex,
+  activeTimelineItemId,
   onSeek,
-  onSelectScene,
+  onSelectTimelineItem,
 }: {
   items: MediaTimelineItem[];
   activeSceneIndex?: number | null;
+  activeTimelineItemId?: string | null;
   onSeek: (seconds?: number | null) => void;
-  onSelectScene?: (scene: SceneReport, index: number) => void;
+  onSelectTimelineItem?: (item: MediaTimelineItem) => void;
 }) {
   if (items.length === 0) {
     return <EmptyState>No timed report entries</EmptyState>;
@@ -190,19 +195,22 @@ export function MediaTimelineList({
   return (
     <div className="max-h-[420px] overflow-auto rounded-lg border border-zinc-200">
       {items.map((item) => {
-        const active = item.kind === "scene" && activeSceneIndex === item.scene.index;
+        const active = activeTimelineItemId === item.id;
+        const relatedSceneActive = item.kind === "scene" && activeSceneIndex === item.scene.index;
         return (
           <button
             key={item.id}
             type="button"
             className={cn(
               "block w-full border-b border-zinc-100 px-3 py-2 text-left last:border-b-0 hover:bg-zinc-50",
-              active && "bg-sky-50",
+              relatedSceneActive && "bg-sky-50",
+              active && "bg-zinc-100 ring-1 ring-inset ring-zinc-300",
             )}
             onClick={() => {
-              onSeek(item.seconds);
-              if (item.kind === "scene") {
-                onSelectScene?.(item.scene, item.sceneIndex);
+              if (onSelectTimelineItem) {
+                onSelectTimelineItem(item);
+              } else {
+                onSeek(item.seconds);
               }
             }}
           >
@@ -218,12 +226,13 @@ export function MediaTimelineList({
   );
 }
 
-type MediaTimelineItem =
-  | { id: string; kind: "scene"; seconds: number; label: string; scene: SceneReport; sceneIndex: number }
-  | { id: string; kind: "transcript"; seconds?: number | null; label: string }
-  | { id: string; kind: "observation"; seconds?: number | null; label: string }
-  | { id: string; kind: "event"; seconds?: number | null; label: string }
-  | { id: string; kind: "music"; seconds: number; label: string };
+export type MediaTimelineItem =
+  | { id: string; kind: "scene"; seconds: number; label: string; scene: SceneReport; originalIndex: number }
+  | { id: string; kind: "transcript"; seconds?: number | null; label: string; segment: TranscriptSegmentReport }
+  | { id: string; kind: "observation"; seconds?: number | null; label: string; observation: AnalysisObservation; originalIndex: number }
+  | { id: string; kind: "audio-event"; seconds?: number | null; label: string; event: AnalysisEvent; originalIndex: number }
+  | { id: string; kind: "text-event"; seconds?: number | null; label: string; event: AnalysisEvent; originalIndex: number }
+  | { id: string; kind: "music"; seconds: number; label: string; segment: MusicSegmentReport };
 
 function timelineItemsForReport(report: StudioReport): MediaTimelineItem[] {
   if ("video" in report && "transcription" in report) {
@@ -254,7 +263,7 @@ function sceneItems(scenes: SceneReport[]): MediaTimelineItem[] {
     seconds: scene.start_seconds,
     label: `Scene ${scene.index} ${formatSeconds(scene.start_seconds)}-${formatSeconds(scene.end_seconds)}`,
     scene,
-    sceneIndex: index,
+    originalIndex: index,
   }));
 }
 
@@ -264,6 +273,7 @@ function transcriptItems(segments: TranscriptSegmentReport[]): MediaTimelineItem
     kind: "transcript",
     seconds: segment.start_seconds,
     label: segment.text,
+    segment,
   }));
 }
 
@@ -273,15 +283,19 @@ function observationItems(observations: AnalysisObservation[]): MediaTimelineIte
     kind: "observation",
     seconds: observation.timestamp_seconds,
     label: observation.label ?? observation.text ?? observation.kind,
+    observation,
+    originalIndex: index,
   }));
 }
 
 function eventItems(events: AnalysisEvent[], prefix: string): MediaTimelineItem[] {
   return events.map((event, index) => ({
     id: `${prefix}:${index}`,
-    kind: "event",
+    kind: prefix === "audio" ? "audio-event" : "text-event",
     seconds: event.timestamp_seconds,
     label: `${event.analyzer}: ${event.label}`,
+    event,
+    originalIndex: index,
   }));
 }
 
@@ -291,6 +305,7 @@ function musicItems(segments: MusicSegmentReport[]): MediaTimelineItem[] {
     kind: "music",
     seconds: segment.start_seconds,
     label: `${segment.bpm != null ? `${segment.bpm.toFixed(1)} BPM` : "BPM n/a"} ${segment.key ?? ""} ${segment.mode ?? ""}`.trim(),
+    segment,
   }));
 }
 
@@ -321,8 +336,10 @@ function toneForTimelineKind(kind: MediaTimelineItem["kind"]): "neutral" | "sky"
       return "emerald";
     case "observation":
       return "violet";
-    case "event":
+    case "audio-event":
       return "amber";
+    case "text-event":
+      return "rose";
     case "music":
       return "rose";
   }

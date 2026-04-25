@@ -36,6 +36,7 @@ describe("dashboard layout helpers", () => {
 
   test("video report options exclude song-only widgets", () => {
     const ids = optionIds("youtube-video");
+    expect(ids).toContain("media-preview");
     expect(ids).not.toContain("song-identification");
     expect(ids).not.toContain("song-music");
   });

@@ -47,7 +47,7 @@ export function ReportDashboard({ report, mode, runId, layout, onLayoutChange }:
   if (mode === "result") {
     return (
       <section className="min-w-0 space-y-4">
-        <ResultPageEditor report={report} layout={layout} onLayoutChange={onLayoutChange} />
+        <ResultPageEditor report={report} runId={runId} layout={layout} onLayoutChange={onLayoutChange} />
       </section>
     );
   }

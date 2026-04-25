@@ -662,7 +662,12 @@ impl RunManager {
             .await;
     }
 
-    async fn emit_workflow_progress(&self, run_id: RunId, status: RunStatus, event: WorkflowProgress) {
+    async fn emit_workflow_progress(
+        &self,
+        run_id: RunId,
+        status: RunStatus,
+        event: WorkflowProgress,
+    ) {
         self.emit_with_details(
             run_id,
             status,

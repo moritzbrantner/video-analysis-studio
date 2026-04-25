@@ -5417,14 +5417,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "video-analysis-gaussian-splatting"
-version = "0.1.0"
-dependencies = [
- "video-analysis-core",
- "video-analysis-radiance-fields",
-]
-
-[[package]]
 name = "video-analysis-ingest"
 version = "0.1.0"
 dependencies = [
@@ -5455,46 +5447,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "video-analysis-radiance-fields"
-version = "0.1.0"
-dependencies = [
- "video-analysis-core",
-]
-
-[[package]]
-name = "video-analysis-radiance-io"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "video-analysis-core",
- "video-analysis-gaussian-splatting",
- "video-analysis-radiance-fields",
- "video-analysis-reconstruction",
-]
-
-[[package]]
-name = "video-analysis-radiance-pipeline"
-version = "0.1.0"
-dependencies = [
- "video-analysis-core",
- "video-analysis-ffmpeg",
- "video-analysis-gaussian-splatting",
- "video-analysis-ingest",
- "video-analysis-radiance-fields",
- "video-analysis-radiance-io",
-]
-
-[[package]]
-name = "video-analysis-reconstruction"
-version = "0.1.0"
-dependencies = [
- "video-analysis-core",
- "video-analysis-radiance-fields",
-]
-
-[[package]]
 name = "video-analysis-use-cases"
 version = "0.1.0"
 dependencies = [
@@ -5511,7 +5463,6 @@ dependencies = [
  "video-analysis-ffmpeg",
  "video-analysis-ingest",
  "video-analysis-models",
- "video-analysis-radiance-pipeline",
 ]
 
 [[package]]

@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
-use text_analysis_transcription::{whisper_cpp_catalog, whisper_cpp_system_info, WhisperCppCatalog};
+use text_analysis_transcription::{
+    whisper_cpp_catalog, whisper_cpp_system_info, WhisperCppCatalog,
+};
 
 use crate::youtube::ExternalCommandConfig;
 use crate::youtube::TranscriptionEngine;
