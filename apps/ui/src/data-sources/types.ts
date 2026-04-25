@@ -102,6 +102,129 @@ export function editableInlineBody(kind: DataSourceKind): boolean {
   return kind === "json" || kind === "txt" || kind === "api";
 }
 
+export type DataSourcePopulationMode = "inline" | "location" | "metadata";
+
+export interface DataSourcePopulationOption {
+  value: DataSourcePopulationMode;
+  label: string;
+  description: string;
+}
+
+export function dataSourcePopulationOptions(kind: DataSourceKind): DataSourcePopulationOption[] {
+  switch (kind) {
+    case "json":
+      return [
+        {
+          value: "inline",
+          label: "Paste JSON",
+          description: "Provide the JSON payload directly and validate it against the schema.",
+        },
+        {
+          value: "location",
+          label: "Use File Or URL",
+          description: "Point the source at a JSON file or remote URL and keep the payload external.",
+        },
+        {
+          value: "metadata",
+          label: "Define Later",
+          description: "Create the typed source now and decide how to populate it later.",
+        },
+      ];
+    case "txt":
+      return [
+        {
+          value: "inline",
+          label: "Paste Text",
+          description: "Enter the text contents directly in the catalog.",
+        },
+        {
+          value: "location",
+          label: "Use File Path",
+          description: "Reference a text file and keep the contents outside the catalog.",
+        },
+        {
+          value: "metadata",
+          label: "Define Later",
+          description: "Create the source now and attach contents later.",
+        },
+      ];
+    case "api":
+      return [
+        {
+          value: "location",
+          label: "Use Endpoint",
+          description: "Reference an API endpoint or route that will provide this schema.",
+        },
+        {
+          value: "inline",
+          label: "Paste Sample",
+          description: "Store a representative JSON response inline as a sample payload.",
+        },
+        {
+          value: "metadata",
+          label: "Define Later",
+          description: "Create the typed endpoint contract now and wire it up later.",
+        },
+      ];
+    case "sqlite":
+      return [
+        {
+          value: "location",
+          label: "Use Database Path",
+          description: "Reference a SQLite database file on disk.",
+        },
+        {
+          value: "metadata",
+          label: "Define Later",
+          description: "Create the source contract now and connect the database later.",
+        },
+      ];
+    case "csv":
+      return [
+        {
+          value: "location",
+          label: "Use CSV Path",
+          description: "Reference a CSV file on disk or in the workspace.",
+        },
+        {
+          value: "metadata",
+          label: "Define Later",
+          description: "Define the row shape now and attach a file later.",
+        },
+      ];
+    case "folder":
+      return [
+        {
+          value: "location",
+          label: "Use Folder Path",
+          description: "Reference a folder whose contents match this schema.",
+        },
+        {
+          value: "metadata",
+          label: "Define Later",
+          description: "Define the folder contract now and pick the directory later.",
+        },
+      ];
+    case "other":
+      return [
+        {
+          value: "location",
+          label: "Use External Reference",
+          description: "Point the source at a path, URI, or other external system.",
+        },
+        {
+          value: "metadata",
+          label: "Define Later",
+          description: "Capture only the typed contract for now.",
+        },
+      ];
+  }
+}
+
+export function defaultDataSourcePopulationMode(kind: DataSourceKind): DataSourcePopulationMode {
+  return dataSourcePopulationOptions(kind)[0]?.value ?? "metadata";
+}
+
 export function defaultDataSourceType(kind: DataSourceKind): WorkflowTypeSpec {
   switch (kind) {
     case "json":

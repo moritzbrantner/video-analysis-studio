@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 
 import { dataSourceDeleteBlockers } from "../src/data-sources/derivations";
 import { collectDataSourceReferences } from "../src/data-sources/references";
-import { parseImportedDataSourcesJson } from "../src/data-sources/types";
+import {
+  defaultDataSourcePopulationMode,
+  parseImportedDataSourcesJson,
+  dataSourcePopulationOptions,
+} from "../src/data-sources/types";
 
 describe("data source import parsing", () => {
   test("converts legacy schema payloads into workflow type specs", () => {
@@ -108,5 +112,24 @@ describe("data source references", () => {
     );
 
     expect(blockers).toEqual({ childCount: 1, referenceCount: 1 });
+  });
+});
+
+describe("data source creation helpers", () => {
+  test("json sources default to inline population with fallback options", () => {
+    expect(defaultDataSourcePopulationMode("json")).toBe("inline");
+    expect(dataSourcePopulationOptions("json").map((option) => option.value)).toEqual([
+      "inline",
+      "location",
+      "metadata",
+    ]);
+  });
+
+  test("sqlite sources require an external location or deferred setup", () => {
+    expect(defaultDataSourcePopulationMode("sqlite")).toBe("location");
+    expect(dataSourcePopulationOptions("sqlite").map((option) => option.value)).toEqual([
+      "location",
+      "metadata",
+    ]);
   });
 });

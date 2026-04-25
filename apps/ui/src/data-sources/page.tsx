@@ -25,6 +25,9 @@ import { WorkflowTypeEditor } from "./schema";
 import {
   dataSourceKindLabel,
   dataSourceToUpsert,
+  dataSourcePopulationOptions,
+  defaultDataSourcePopulationMode,
+  defaultDataSourceType,
   defaultDataSourceUpsert,
   downloadDataSourcesJson,
   editableInlineBody,
@@ -34,6 +37,7 @@ import {
   normalizeDataSourceId,
   normalizeTagText,
   parseImportedDataSourcesJson,
+  type DataSourcePopulationMode,
   validateDataSourceBody,
   validateDataSourceId,
 } from "./types";
@@ -70,6 +74,12 @@ export function DataSourcesPage({
 }: DataSourcesPageProps) {
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [createStep, setCreateStep] = useState<"schema" | "population">("schema");
+  const [createDraft, setCreateDraft] = useState<DataSourceUpsert>(() => defaultDataSourceUpsert([]));
+  const [createTagText, setCreateTagText] = useState("");
+  const [createTypeError, setCreateTypeError] = useState<string | null>(null);
+  const [createPopulationMode, setCreatePopulationMode] = useState<DataSourcePopulationMode>("inline");
   const [draft, setDraft] = useState<DataSourceUpsert>(() => defaultDataSourceUpsert([]));
   const [tagText, setTagText] = useState("");
   const [typeError, setTypeError] = useState<string | null>(null);
@@ -125,8 +135,75 @@ export function DataSourcesPage({
     setDerivationTypeError(null);
   }, [activeRecord]);
 
+  const openCreateForm = () => {
+    const nextDraft = defaultDataSourceUpsert(dataSources.map((record) => record.id));
+    setCreateDraft(nextDraft);
+    setCreateTagText("");
+    setCreateTypeError(null);
+    setCreatePopulationMode(defaultDataSourcePopulationMode(nextDraft.kind));
+    setCreateStep("schema");
+    setShowCreateForm(true);
+    setMessage(null);
+  };
+
+  const cancelCreateForm = () => {
+    setShowCreateForm(false);
+    setCreateStep("schema");
+    setCreateTypeError(null);
+  };
+
+  const selectCreateKind = (kind: DataSourceKind) => {
+    setCreateDraft((current) => ({
+      ...current,
+      kind,
+      type: defaultDataSourceType(kind),
+      body: editableInlineBody(kind) ? current.body : "",
+    }));
+    setCreatePopulationMode(defaultDataSourcePopulationMode(kind));
+    setCreateTypeError(null);
+  };
+
+  const continueCreateForm = () => {
+    if (createTypeError) {
+      setMessage("Type contract JSON must be valid before continuing.");
+      return;
+    }
+    setCreateStep("population");
+  };
+
   const createRootSource = async () => {
-    const created = await onCreateDataSource(defaultDataSourceUpsert(dataSources.map((record) => record.id)));
+    const nextId = normalizeDataSourceId(createDraft.id);
+    const idError = validateDataSourceId(nextId, dataSources.map((record) => record.id));
+    if (idError) {
+      setMessage(idError);
+      return;
+    }
+    if (createTypeError) {
+      setMessage("Type contract JSON must be valid before creating the source.");
+      return;
+    }
+    const nextDraft: DataSourceUpsert = {
+      ...createDraft,
+      id: nextId,
+      name: createDraft.name.trim(),
+      location: createPopulationMode === "metadata" ? "" : createDraft.location.trim(),
+      description: createDraft.description.trim(),
+      tags: normalizeTagText(createTagText),
+      body:
+        createPopulationMode === "inline" && editableInlineBody(createDraft.kind) ? createDraft.body : "",
+    };
+    if (createPopulationMode === "location" && !nextDraft.location) {
+      setMessage("Location is required when the source is populated from a path or URL.");
+      return;
+    }
+    const bodyError = validateDataSourceBody(nextDraft);
+    if (bodyError) {
+      setMessage(bodyError);
+      return;
+    }
+    const created = await onCreateDataSource(nextDraft);
+    setShowCreateForm(false);
+    setCreateStep("schema");
     setActiveId(created.id);
     setMessage(`Created ${created.id}.`);
   };
@@ -293,6 +370,12 @@ export function DataSourcesPage({
     ? dataSourceDeleteBlockers(activeRecord, dataSources, references)
     : { childCount: 0, referenceCount: 0 };
 
+  const detailDescription =
+    message ??
+    (showCreateForm
+      ? "Step through schema setup first, then choose how this source will be populated."
+      : "IDs are stable workflow handles. Derived sources inherit root location and body.");
+
   return (
     <section className="space-y-4">
       {legacyMigrationAvailable && dataSources.length === 0 && onImportLegacy ? (
@@ -328,7 +411,7 @@ export function DataSourcesPage({
               <button
                 type="button"
                 className="inline-flex h-9 items-center justify-center rounded-lg border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
-                onClick={createRootSource}
+                onClick={openCreateForm}
               >
                 New
               </button>
@@ -403,7 +486,10 @@ export function DataSourcesPage({
                         ? "border-zinc-950 bg-zinc-950 text-white"
                         : "border-zinc-200 bg-white text-zinc-900 hover:border-zinc-300 hover:bg-zinc-50",
                     )}
-                    onClick={() => setActiveId(record.id)}
+                    onClick={() => {
+                      setShowCreateForm(false);
+                      setActiveId(record.id);
+                    }}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -430,10 +516,30 @@ export function DataSourcesPage({
         </Panel>
 
         <Panel
-          title={activeRecord ? "Edit Source" : "Source Details"}
-          description={message ?? "IDs are stable workflow handles. Derived sources inherit root location and body."}
+          title={showCreateForm ? "Create Source" : activeRecord ? "Edit Source" : "Source Details"}
+          description={detailDescription}
         >
-          {!activeRecord ? (
+          {showCreateForm ? (
+            <CreateDataSourceWizard
+              step={createStep}
+              draft={createDraft}
+              tagText={createTagText}
+              populationMode={createPopulationMode}
+              typeError={createTypeError}
+              onDraftChange={setCreateDraft}
+              onTagTextChange={setCreateTagText}
+              onPopulationModeChange={setCreatePopulationMode}
+              onTypeChange={(value, jsonError) => {
+                setCreateDraft((current) => ({ ...current, type: value }));
+                setCreateTypeError(jsonError);
+              }}
+              onSelectKind={selectCreateKind}
+              onBack={() => setCreateStep("schema")}
+              onCancel={cancelCreateForm}
+              onContinue={continueCreateForm}
+              onCreate={createRootSource}
+            />
+          ) : !activeRecord ? (
             <EmptyState>Select or create a data source.</EmptyState>
           ) : (
             <div className="space-y-6">
@@ -727,10 +833,315 @@ export function DataSourcesPage({
   );
 }
 
+function CreateDataSourceWizard({
+  step,
+  draft,
+  tagText,
+  populationMode,
+  typeError,
+  onDraftChange,
+  onTagTextChange,
+  onPopulationModeChange,
+  onTypeChange,
+  onSelectKind,
+  onBack,
+  onCancel,
+  onContinue,
+  onCreate,
+}: {
+  step: "schema" | "population";
+  draft: DataSourceUpsert;
+  tagText: string;
+  populationMode: DataSourcePopulationMode;
+  typeError: string | null;
+  onDraftChange: (next: DataSourceUpsert | ((current: DataSourceUpsert) => DataSourceUpsert)) => void;
+  onTagTextChange: (value: string) => void;
+  onPopulationModeChange: (mode: DataSourcePopulationMode) => void;
+  onTypeChange: (value: DataSourceUpsert["type"], jsonError: string | null) => void;
+  onSelectKind: (kind: DataSourceKind) => void;
+  onBack: () => void;
+  onCancel: () => void;
+  onContinue: () => void;
+  onCreate: () => Promise<void>;
+}) {
+  const populationOptions = dataSourcePopulationOptions(draft.kind);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap gap-2">
+        <Badge tone={step === "schema" ? "sky" : "neutral"}>1. Schema</Badge>
+        <Badge tone={step === "population" ? "sky" : "neutral"}>2. Data</Badge>
+      </div>
+
+      <Panel
+        title="Choose A Starting Schema"
+        description="Start from a source preset, then adjust the type contract if the default shape is too loose or too strict."
+        className="shadow-none"
+      >
+        <div className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {dataSourceKinds.map((kind) => (
+              <button
+                key={kind}
+                type="button"
+                className={cn(
+                  "rounded-lg border px-3 py-3 text-left transition",
+                  draft.kind === kind
+                    ? "border-zinc-950 bg-zinc-950 text-white"
+                    : "border-zinc-200 bg-white text-zinc-900 hover:border-zinc-300 hover:bg-zinc-50",
+                )}
+                onClick={() => onSelectKind(kind)}
+              >
+                <div className="font-medium">{dataSourceKindLabel(kind)}</div>
+                <div className="mt-1 text-xs opacity-80">{describeDataSourceKind(kind)}</div>
+              </button>
+            ))}
+          </div>
+          <WorkflowTypeEditor value={draft.type} onChange={onTypeChange} />
+        </div>
+      </Panel>
+
+      {step === "population" ? (
+        <Panel
+          title="Choose How To Populate It"
+          description="This decides whether the source stores inline contents, points at an external location, or exists as a typed contract only."
+          className="shadow-none"
+        >
+          <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {populationOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={cn(
+                    "rounded-lg border px-3 py-3 text-left transition",
+                    populationMode === option.value
+                      ? "border-zinc-950 bg-zinc-950 text-white"
+                      : "border-zinc-200 bg-white text-zinc-900 hover:border-zinc-300 hover:bg-zinc-50",
+                  )}
+                  onClick={() => onPopulationModeChange(option.value)}
+                >
+                  <div className="font-medium">{option.label}</div>
+                  <div className="mt-1 text-xs opacity-80">{option.description}</div>
+                </button>
+              ))}
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="ID">
+                <input
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 font-mono text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={draft.id}
+                  onBlur={() => onDraftChange((current) => ({ ...current, id: normalizeDataSourceId(current.id) }))}
+                  onChange={(event) => onDraftChange((current) => ({ ...current, id: event.target.value }))}
+                />
+              </Field>
+              <Field label="Name">
+                <input
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={draft.name}
+                  onChange={(event) => onDraftChange((current) => ({ ...current, name: event.target.value }))}
+                />
+              </Field>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="Kind">
+                <ReadOnlyValue>{dataSourceKindLabel(draft.kind)}</ReadOnlyValue>
+              </Field>
+              <Field label="Type Summary">
+                <ReadOnlyValue>{formatWorkflowTypeSpec(draft.type)}</ReadOnlyValue>
+              </Field>
+            </div>
+
+            {populationMode === "location" ? (
+              <Field label={locationFieldLabel(draft.kind)} hint={locationFieldHint(draft.kind)}>
+                <input
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={draft.location}
+                  onChange={(event) => onDraftChange((current) => ({ ...current, location: event.target.value }))}
+                  placeholder={locationPlaceholder(draft.kind)}
+                />
+              </Field>
+            ) : null}
+
+            {populationMode === "inline" && editableInlineBody(draft.kind) ? (
+              <Field label={inlineBodyLabel(draft.kind)} hint={inlineBodyHint(draft.kind, typeError)}>
+                <textarea
+                  className="min-h-32 w-full rounded-lg border border-zinc-300 px-3 py-2 font-mono text-xs outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={draft.body}
+                  onChange={(event) => onDraftChange((current) => ({ ...current, body: event.target.value }))}
+                  placeholder={inlineBodyPlaceholder(draft.kind)}
+                  spellCheck={false}
+                />
+              </Field>
+            ) : null}
+
+            {populationMode === "metadata" ? (
+              <div className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-3 py-3 text-sm text-zinc-600">
+                This will create the typed source without attaching a body or location yet. You can fill those in later from the editor.
+              </div>
+            ) : null}
+
+            <Field label="Tags">
+              <input
+                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={tagText}
+                onChange={(event) => onTagTextChange(event.target.value)}
+                placeholder="songs, matching, catalog"
+              />
+            </Field>
+
+            <Field label="Description">
+              <textarea
+                className="min-h-24 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={draft.description}
+                onChange={(event) => onDraftChange((current) => ({ ...current, description: event.target.value }))}
+              />
+            </Field>
+          </div>
+        </Panel>
+      ) : null}
+
+      <div className="flex flex-wrap justify-end gap-2">
+        {step === "population" ? (
+          <button
+            type="button"
+            className="inline-flex h-9 items-center justify-center rounded-lg border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+            onClick={onBack}
+          >
+            Back
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="inline-flex h-9 items-center justify-center rounded-lg border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
+        {step === "schema" ? (
+          <button
+            type="button"
+            className="inline-flex h-9 items-center justify-center rounded-lg bg-zinc-950 px-3 text-sm font-medium text-white hover:bg-zinc-800"
+            onClick={onContinue}
+          >
+            Continue To Data
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="inline-flex h-9 items-center justify-center rounded-lg bg-zinc-950 px-3 text-sm font-medium text-white hover:bg-zinc-800"
+            onClick={() => void onCreate()}
+          >
+            Create Source
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function isDerivedOriginRecord<T extends { origin: DataSourceOrigin }>(
   record: T,
 ): record is T & { origin: Extract<DataSourceOrigin, { mode: "derived_view" }> } {
   return record.origin.mode === "derived_view";
+}
+
+function describeDataSourceKind(kind: DataSourceKind): string {
+  switch (kind) {
+    case "sqlite":
+      return "Structured records backed by a local SQLite database file.";
+    case "json":
+      return "Structured JSON documents, objects, or arrays.";
+    case "csv":
+      return "Tabular rows from a CSV file with a typed record shape.";
+    case "txt":
+      return "Plain text, prompts, notes, or templates.";
+    case "folder":
+      return "A directory-shaped source whose contents are treated as a bucket.";
+    case "api":
+      return "HTTP responses or endpoint contracts with typed payloads.";
+    case "other":
+      return "Anything else that still needs a stable typed handle.";
+  }
+}
+
+function locationFieldLabel(kind: DataSourceKind): string {
+  switch (kind) {
+    case "api":
+      return "Endpoint URL";
+    case "folder":
+      return "Folder Path";
+    default:
+      return "Location / Path / URL";
+  }
+}
+
+function locationFieldHint(kind: DataSourceKind): string {
+  switch (kind) {
+    case "api":
+      return "Use a full URL or a workspace-relative route description.";
+    case "folder":
+      return "Point this source at the directory that will satisfy the schema.";
+    default:
+      return "Keep the payload external and reference where it lives.";
+  }
+}
+
+function locationPlaceholder(kind: DataSourceKind): string {
+  switch (kind) {
+    case "sqlite":
+      return "studio-data/catalog.sqlite";
+    case "csv":
+      return "studio-data/catalog.csv";
+    case "txt":
+      return "studio-data/notes.txt";
+    case "folder":
+      return "studio-data/assets";
+    case "api":
+      return "https://api.example.com/catalog";
+    case "json":
+      return "studio-data/catalog.json";
+    case "other":
+      return "s3://bucket/path-or-custom-reference";
+  }
+}
+
+function inlineBodyLabel(kind: DataSourceKind): string {
+  switch (kind) {
+    case "txt":
+      return "Inline Text";
+    case "api":
+      return "Sample Response Body";
+    default:
+      return "Inline Body";
+  }
+}
+
+function inlineBodyHint(kind: DataSourceKind, typeError: string | null): string {
+  if (typeError) {
+    return "Fix the type contract JSON above before this inline payload can be validated.";
+  }
+  switch (kind) {
+    case "txt":
+      return "Store the text contents directly in the catalog.";
+    case "api":
+      return "Paste a representative JSON response for this endpoint.";
+    default:
+      return "Paste JSON that matches the selected type contract.";
+  }
+}
+
+function inlineBodyPlaceholder(kind: DataSourceKind): string {
+  switch (kind) {
+    case "txt":
+      return "Write the source contents here...";
+    case "api":
+      return '{\n  "items": []\n}';
+    default:
+      return '{\n  "id": "example"\n}';
+  }
 }
 
 function Field({
