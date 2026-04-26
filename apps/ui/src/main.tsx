@@ -80,6 +80,7 @@ import {
   type WorkflowTypeSpec,
   type YoutubeRunRequest,
 } from "./api/client";
+import workflowSeedDefinitionsJson from "./workflow-seeds.json";
 import {
   describeWorkflowRuntimeValue,
   formatWorkflowTypeSpec,
@@ -2159,6 +2160,12 @@ interface WorkflowSeedTemplate {
   edges: WorkflowSeedEdgeLayout[];
 }
 
+interface WorkflowSeedDefinitionsFile {
+  starterTemplates: Record<string, WorkflowSeedTemplate>;
+  basicTestTemplates: Record<string, WorkflowSeedTemplate>;
+  exampleStarterTemplates: Record<string, WorkflowSeedTemplate>;
+}
+
 interface WorkflowLayoutSize {
   width: number;
   height: number;
@@ -3316,139 +3323,16 @@ const initialWorkflowEdges: Edge[] = [
   workflowEdge("subtitle-writer", "report", "http-result-sink", "report"),
 ];
 
-const workflowStarterTemplates = {
-  "youtube-video": {
-    nodes: [
-      { id: "youtube-workflow", x: 80, y: 180 },
-      { id: "download", x: 470, y: 180 },
-      { id: "ffmpeg", x: 860, y: 180 },
-      { id: "content-detector", x: 1250, y: 180 },
-    ],
-    edges: [
-      { source: "youtube-workflow", sourcePortId: "url", target: "download", targetPortId: "url" },
-      { source: "youtube-workflow", sourcePortId: "file", target: "ffmpeg", targetPortId: "file" },
-      { source: "download", sourcePortId: "file", target: "ffmpeg", targetPortId: "file" },
-      { source: "youtube-workflow", sourcePortId: "config", target: "content-detector", targetPortId: "config" },
-      { source: "ffmpeg", sourcePortId: "frames", target: "content-detector", targetPortId: "frames" },
-    ],
-  },
-  "youtube-collection": {
-    nodes: [
-      { id: "youtube-workflow", x: 80, y: 180 },
-      { id: "collection-manifest", x: 470, y: 180 },
-      { id: "collection-download-loop", x: 860, y: 180 },
-      { id: "ffmpeg", x: 1250, y: 180 },
-    ],
-    edges: [
-      { source: "youtube-workflow", sourcePortId: "collection", target: "collection-manifest", targetPortId: "url" },
-      { source: "collection-manifest", sourcePortId: "manifest", target: "collection-download-loop", targetPortId: "manifest" },
-      { source: "youtube-workflow", sourcePortId: "config", target: "collection-download-loop", targetPortId: "config" },
-      { source: "collection-download-loop", sourcePortId: "files", target: "ffmpeg", targetPortId: "file" },
-    ],
-  },
-  "song-analysis": {
-    nodes: [
-      { id: "song-workflow", x: 80, y: 180 },
-      { id: "song-fingerprinter", x: 470, y: 120 },
-      { id: "song-catalog-matcher", x: 860, y: 120 },
-      { id: "song-music-analyzer", x: 860, y: 320 },
-    ],
-    edges: [
-      { source: "song-workflow", sourcePortId: "file", target: "song-fingerprinter", targetPortId: "file" },
-      { source: "song-workflow", sourcePortId: "file", target: "song-music-analyzer", targetPortId: "file" },
-      { source: "song-workflow", sourcePortId: "config", target: "song-catalog-matcher", targetPortId: "config" },
-      { source: "song-workflow", sourcePortId: "config", target: "song-music-analyzer", targetPortId: "config" },
-      { source: "song-fingerprinter", sourcePortId: "fingerprint", target: "song-catalog-matcher", targetPortId: "fingerprint" },
-    ],
-  },
-  "subtitle-generation": {
-    nodes: [
-      { id: "subtitle-workflow", x: 80, y: 180 },
-      { id: "download", x: 470, y: 180 },
-      { id: "ffmpeg", x: 860, y: 180 },
-      { id: "transcriber", x: 1250, y: 180 },
-      { id: "subtitle-writer", x: 1640, y: 180 },
-    ],
-    edges: [
-      { source: "subtitle-workflow", sourcePortId: "url", target: "download", targetPortId: "url" },
-      { source: "subtitle-workflow", sourcePortId: "file", target: "ffmpeg", targetPortId: "file" },
-      { source: "download", sourcePortId: "file", target: "ffmpeg", targetPortId: "file" },
-      { source: "ffmpeg", sourcePortId: "wav", target: "transcriber", targetPortId: "wav" },
-      { source: "subtitle-workflow", sourcePortId: "file", target: "subtitle-writer", targetPortId: "file" },
-      { source: "subtitle-workflow", sourcePortId: "config", target: "subtitle-writer", targetPortId: "config" },
-      { source: "transcriber", sourcePortId: "segments", target: "subtitle-writer", targetPortId: "segments" },
-    ],
-  },
-} satisfies Record<WorkflowKindId, WorkflowSeedTemplate>;
+const workflowSeedDefinitions = workflowSeedDefinitionsJson as WorkflowSeedDefinitionsFile;
+const workflowStarterTemplates = workflowSeedDefinitions.starterTemplates as Record<
+  WorkflowKindId,
+  WorkflowSeedTemplate
+>;
 
 // Internal smoke-test fixtures for structural workflow graph coverage only.
-const basicWorkflowTestTemplates: Record<string, WorkflowSeedTemplate> = {
-  "Linear Video Ingest Smoke": {
-    nodes: [
-      { id: "download", x: 80, y: 180 },
-      { id: "ffmpeg", x: 470, y: 180 },
-    ],
-    edges: [{ source: "download", sourcePortId: "file", target: "ffmpeg", targetPortId: "file" }],
-  },
-  "Song Match Fan-In Smoke": {
-    nodes: [
-      { id: "song-workflow", x: 80, y: 180 },
-      { id: "song-fingerprinter", x: 470, y: 120 },
-      { id: "song-catalog-matcher", x: 860, y: 180 },
-    ],
-    edges: [
-      { source: "song-workflow", sourcePortId: "file", target: "song-fingerprinter", targetPortId: "file" },
-      { source: "song-workflow", sourcePortId: "config", target: "song-catalog-matcher", targetPortId: "config" },
-      { source: "song-fingerprinter", sourcePortId: "fingerprint", target: "song-catalog-matcher", targetPortId: "fingerprint" },
-    ],
-  },
-};
+const basicWorkflowTestTemplates = workflowSeedDefinitions.basicTestTemplates;
 
-const exampleWorkflowStarterTemplates: Record<string, WorkflowSeedTemplate> = {
-  "YouTube Video Quick Review": {
-    nodes: [
-      { id: "download", x: 80, y: 180 },
-      { id: "ffmpeg", x: 470, y: 180 },
-    ],
-    edges: [{ source: "download", sourcePortId: "file", target: "ffmpeg", targetPortId: "file" }],
-  },
-  "YouTube Collection Spot Check": {
-    nodes: [
-      { id: "collection-manifest", x: 80, y: 180 },
-      { id: "collection-download-loop", x: 470, y: 180 },
-    ],
-    edges: [
-      { source: "collection-manifest", sourcePortId: "manifest", target: "collection-download-loop", targetPortId: "manifest" },
-    ],
-  },
-  "Song Analysis Quick Match": {
-    nodes: [
-      { id: "song-workflow", x: 80, y: 180 },
-      { id: "song-fingerprinter", x: 470, y: 180 },
-      { id: "song-catalog-matcher", x: 860, y: 180 },
-    ],
-    edges: [
-      { source: "song-workflow", sourcePortId: "file", target: "song-fingerprinter", targetPortId: "file" },
-      { source: "song-workflow", sourcePortId: "config", target: "song-catalog-matcher", targetPortId: "config" },
-      { source: "song-fingerprinter", sourcePortId: "fingerprint", target: "song-catalog-matcher", targetPortId: "fingerprint" },
-    ],
-  },
-  "Subtitle SRT Starter": {
-    nodes: [
-      { id: "subtitle-workflow", x: 80, y: 180 },
-      { id: "ffmpeg", x: 470, y: 180 },
-      { id: "transcriber", x: 860, y: 180 },
-      { id: "subtitle-writer", x: 1250, y: 180 },
-    ],
-    edges: [
-      { source: "subtitle-workflow", sourcePortId: "file", target: "ffmpeg", targetPortId: "file" },
-      { source: "ffmpeg", sourcePortId: "wav", target: "transcriber", targetPortId: "wav" },
-      { source: "subtitle-workflow", sourcePortId: "file", target: "subtitle-writer", targetPortId: "file" },
-      { source: "subtitle-workflow", sourcePortId: "config", target: "subtitle-writer", targetPortId: "config" },
-      { source: "transcriber", sourcePortId: "segments", target: "subtitle-writer", targetPortId: "segments" },
-    ],
-  },
-};
+const exampleWorkflowStarterTemplates = workflowSeedDefinitions.exampleStarterTemplates;
 
 function WorkflowBuilder({
   workflowLibrary,

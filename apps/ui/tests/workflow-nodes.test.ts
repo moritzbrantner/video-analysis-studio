@@ -86,6 +86,12 @@ interface WorkflowSeedFixture {
   edges: WorkflowEdgeFixture[];
 }
 
+interface WorkflowSeedDefinitionsFixture {
+  starterTemplates: Record<string, Omit<WorkflowSeedFixture, "key">>;
+  basicTestTemplates: Record<string, Omit<WorkflowSeedFixture, "key">>;
+  exampleStarterTemplates: Record<string, Omit<WorkflowSeedFixture, "key">>;
+}
+
 const workflowNodeArrayNames = [
   "initialWorkflowNodes",
   "dashboardWorkflowNodes",
@@ -95,6 +101,12 @@ const workflowNodeArrayNames = [
   "httpWorkflowNodes",
   "controlFlowWorkflowNodes",
 ] as const;
+
+const packageOnlyWorkflowNodeIds = new Set([
+  "audio-voice-analysis-workflow",
+  "image-person-edit-workflow",
+  "video-red-cars-workflow",
+]);
 
 const allowedCategories = new Set([
   "Application",
@@ -129,10 +141,16 @@ const allowedTones = new Set([
 ]);
 
 const workflowSource = readFileSync(join(import.meta.dir, "../src/main.tsx"), "utf8");
-const rustWorkflowCatalogSource = readFileSync(
-  join(import.meta.dir, "../../../../rust-packages/crates/video/video-analysis-use-cases/src/workflow_catalog.rs"),
+const workflowCatalogJsonSource = readFileSync(
+  join(import.meta.dir, "../../../../rust-packages/crates/video/video-analysis-use-cases/src/workflow_catalog.json"),
   "utf8",
 );
+const workflowCatalogDefinition = JSON.parse(workflowCatalogJsonSource) as {
+  version: number;
+  nodes: Array<{ id: string }>;
+};
+const workflowSeedJsonSource = readFileSync(join(import.meta.dir, "../src/workflow-seeds.json"), "utf8");
+const workflowSeedDefinitions = JSON.parse(workflowSeedJsonSource) as WorkflowSeedDefinitionsFixture;
 const sourceFile = ts.createSourceFile("main.tsx", workflowSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const topLevelConstants = collectTopLevelConstants(sourceFile);
 const portTypes = new Set(readStringArrayConstant("portTypes") as PortType[]);
@@ -144,9 +162,9 @@ const nodesByArrayName = new Map(
 const workflowNodes = workflowNodeArrayNames.flatMap((arrayName) => nodesByArrayName.get(arrayName) ?? []);
 const initialWorkflowNodes = nodesByArrayName.get("initialWorkflowNodes") ?? [];
 const initialWorkflowEdges = readInitialWorkflowEdges();
-const workflowStarterTemplates = readWorkflowSeedTemplates("workflowStarterTemplates");
-const basicWorkflowTestTemplates = readWorkflowSeedTemplates("basicWorkflowTestTemplates");
-const exampleWorkflowStarterTemplates = readWorkflowSeedTemplates("exampleWorkflowStarterTemplates");
+const workflowStarterTemplates = withTemplateKeys(workflowSeedDefinitions.starterTemplates);
+const basicWorkflowTestTemplates = withTemplateKeys(workflowSeedDefinitions.basicTestTemplates);
+const exampleWorkflowStarterTemplates = withTemplateKeys(workflowSeedDefinitions.exampleStarterTemplates);
 
 describe("workflow node catalog", () => {
   test("workflowNodeTemplates includes every node category array", () => {
@@ -158,8 +176,10 @@ describe("workflow node catalog", () => {
     expect(ids).toHaveLength(new Set(ids).size);
   });
 
-  test("Rust workflow catalog processing nodes exist in the TS template set", () => {
-    const rustNodeIds = [...rustWorkflowCatalogSource.matchAll(/node\(\s*"([^"]+)"/g)].map((match) => match[1]);
+  test("JSON workflow catalog nodes with TS templates exist in the TS template set", () => {
+    const rustNodeIds = workflowCatalogDefinition.nodes
+      .map((node) => node.id)
+      .filter((id) => !packageOnlyWorkflowNodeIds.has(id));
     const tsNodeIds = new Set(workflowNodes.map((node) => node.id));
     expect(rustNodeIds.length).toBeGreaterThan(10);
     for (const id of rustNodeIds) {
@@ -177,9 +197,12 @@ describe("workflow node catalog", () => {
     }
   });
 
-  test("workflow input surfaces are declared in both Rust and TS source nodes", () => {
-    expect(rustWorkflowCatalogSource).toContain("exposable_input");
-    expect(rustWorkflowCatalogSource).toContain("input_surface");
+  test("workflow input surfaces are declared in both JSON and TS source nodes", () => {
+    expect(workflowCatalogJsonSource).toContain("\"exposable_input\": true");
+    expect(workflowCatalogJsonSource).toContain("\"input_surface\": \"source_url\"");
+    expect(workflowCatalogJsonSource).toContain("\"input_surface\": \"collection_url\"");
+    expect(workflowCatalogJsonSource).toContain("\"input_surface\": \"file\"");
+    expect(workflowCatalogJsonSource).toContain("\"input_surface\": \"config\"");
     expect(workflowSource).toContain('inputSurface: "source_url"');
     expect(workflowSource).toContain('inputSurface: "collection_url"');
     expect(workflowSource).toContain('inputSurface: "file"');
@@ -555,6 +578,14 @@ function readInitialWorkflowEdges(): WorkflowEdgeFixture[] {
       targetPortId: readString(targetPortId),
     };
   });
+}
+
+function withTemplateKeys(
+  templates: Record<string, Omit<WorkflowSeedFixture, "key">>,
+): Record<string, WorkflowSeedFixture> {
+  return Object.fromEntries(
+    Object.entries(templates).map(([key, template]) => [key, { key, nodes: template.nodes, edges: template.edges }]),
+  );
 }
 
 function readWorkflowSeedTemplates(name: string): Record<string, WorkflowSeedFixture> {

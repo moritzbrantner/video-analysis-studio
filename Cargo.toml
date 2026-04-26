@@ -6,29 +6,33 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+edition = "2021"
+rust-version = "1.95"
+
 [workspace.dependencies]
-audio-analysis-recognition = { path = "../rust-packages/crates/audio/audio-analysis-recognition" }
-text-analysis-transcription = { path = "../rust-packages/crates/text/text-analysis-transcription" }
-video-analysis-core = { path = "../rust-packages/crates/video/video-analysis-core" }
-video-analysis-data = { path = "../rust-packages/crates/video/video-analysis-data" }
-video-analysis-detectors = { path = "../rust-packages/crates/video/video-analysis-detectors" }
-video-analysis-ffmpeg = { path = "../rust-packages/crates/video/video-analysis-ffmpeg" }
-video-analysis-ingest = { path = "../rust-packages/crates/video/video-analysis-ingest" }
-video-analysis-models = { path = "../rust-packages/crates/video/video-analysis-models" }
-video-analysis-use-cases = { path = "../rust-packages/crates/video/video-analysis-use-cases" }
+audio-analysis-recognition = { version = "0.1.0", path = "../rust-packages/crates/audio/audio-analysis-recognition" }
+text-analysis-transcription = { version = "0.1.0", path = "../rust-packages/crates/text/text-analysis-transcription" }
+video-analysis-core = { version = "0.1.0", path = "../rust-packages/crates/video/video-analysis-core" }
+video-analysis-data = { version = "0.1.0", path = "../rust-packages/crates/video/video-analysis-data" }
+video-analysis-detectors = { version = "0.1.0", path = "../rust-packages/crates/video/video-analysis-detectors" }
+video-analysis-ffmpeg = { version = "0.1.0", path = "../rust-packages/crates/video/video-analysis-ffmpeg" }
+video-analysis-ingest = { version = "0.1.0", path = "../rust-packages/crates/video/video-analysis-ingest" }
+video-analysis-models = { version = "0.1.0", path = "../rust-packages/crates/video/video-analysis-models" }
+video-analysis-use-cases = { version = "0.1.0", path = "../rust-packages/crates/video/video-analysis-use-cases" }
 
 anyhow = "1"
 axum = "0.8"
-chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
-clap = { version = "4", features = ["derive", "env"] }
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "serde"] }
+clap = { version = "4.5.51", features = ["derive", "env"] }
 futures = "0.3"
 http = "1"
-num-rational = "0.4"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-rusqlite = "0.32"
-tempfile = "3"
-thiserror = "2"
+num-rational = "0.4.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+rusqlite = "0.32.1"
+tempfile = "3.23.0"
+thiserror = "2.0.17"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "sync", "fs", "signal"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tower = { version = "0.5", features = ["util"] }

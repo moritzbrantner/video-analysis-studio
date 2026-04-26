@@ -1,27 +1,9 @@
-use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde::{Deserialize, Serialize};
-use video_analysis_core::{
-    AnalysisEvent, AudioAnalyzer, AudioBuffer, AudioFrame, BoundingBox, Observation,
-    ObservationKind, RealtimeVideoPipeline, TextAnalyzer, TextSegment, Timestamp, VideoAnalyzer,
-    VideoFrame,
-};
-use video_analysis_data::{
-    BucketAggregator, BucketConfig, DataBucket, DataRecord, DataStreamKind, StreamSummary,
-};
-use video_analysis_detectors::ContentDetector;
-use video_analysis_ffmpeg::{FfmpegAudioSource, FfmpegAudioSourceOptions, FfmpegVideoSource};
-use video_analysis_ingest::{AudioFrameSource, VideoFrameSource};
-use video_analysis_models::{
-    DownloadedModel, ExternalCommandModel, HuggingFaceModelSpec, ModelTask, ModelTextAnalyzer,
-    ModelVideoAnalyzer,
-};
 
 use crate::error::{Result, StudioError};
-use crate::media::{prepare_transcription_config, transcribe_media};
+use crate::media::{prepare_transcription_config, validate_local_file, validate_youtube_url};
 use crate::report::{
     AppliedCollectionFilters, AssetReport, AudioReport, CapabilityReport, CollectionAssetReport,
     CollectionItemReport, CollectionItemStatus, CollectionSummary, DataBucketReport, EventReport,
@@ -30,7 +12,6 @@ use crate::report::{
     YoutubeVideoReport,
 };
 use crate::run_manager::WorkflowProgress;
-use crate::system::resolve_command;
 pub use video_analysis_use_cases::youtube::{WhisperCppConfig, WhisperCppModel};
 
 pub const DEFAULT_SCENE_THRESHOLD: f32 = 27.0;
@@ -102,15 +83,6 @@ pub struct ModelCommandConfig {
     pub object: Option<ExternalCommandConfig>,
     pub ocr: Option<ExternalCommandConfig>,
     pub text: Option<ExternalCommandConfig>,
-}
-
-impl ModelCommandConfig {
-    pub fn optional_commands(&self) -> Vec<ExternalCommandConfig> {
-        [&self.object, &self.ocr, &self.text]
-            .into_iter()
-            .filter_map(|value| value.clone())
-            .collect()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -326,32 +298,6 @@ impl YoutubeRunOptions {
         }
         Ok(())
     }
-
-    fn to_request(&self, source: SourceSpec, work_dir: PathBuf) -> YoutubeRunRequest {
-        YoutubeRunRequest {
-            source,
-            work_dir: Some(work_dir),
-            scene_threshold: self.scene_threshold,
-            min_scene_len: self.min_scene_len,
-            max_frames: self.max_frames,
-            visual_sample_every: self.visual_sample_every,
-            transcription: self.transcription.clone(),
-            models: self.models.clone(),
-        }
-    }
-}
-
-impl From<&YoutubeRunRequest> for YoutubeRunOptions {
-    fn from(value: &YoutubeRunRequest) -> Self {
-        Self {
-            scene_threshold: value.scene_threshold,
-            min_scene_len: value.min_scene_len,
-            max_frames: value.max_frames,
-            visual_sample_every: value.visual_sample_every,
-            transcription: value.transcription.clone(),
-            models: value.models.clone(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -446,13 +392,10 @@ pub fn run_youtube_video_workflow(
     report_path: PathBuf,
     progress: &mut dyn FnMut(WorkflowProgress),
 ) -> Result<YoutubeVideoReport> {
-    request.transcription = request.transcription.normalized();
     request.validate()?;
     request.transcription = prepare_transcription_config(&request.transcription);
-    let package_request =
-        to_package_value::<video_analysis_use_cases::youtube::YoutubeRunRequest>(&request)?;
     let report = video_analysis_use_cases::youtube::run_youtube_video_workflow_with_progress(
-        package_request,
+        package_youtube_run_request(&request),
         work_dir,
         report_path,
         &mut |event| {
@@ -464,19 +407,17 @@ pub fn run_youtube_video_workflow(
             ));
         },
     )?;
-    from_package_value(report)
+    Ok(report.into())
 }
 
 pub fn discover_youtube_collection_manifest(
     request: YoutubeCollectionManifestRequest,
 ) -> Result<YoutubeCollectionManifest> {
     request.validate()?;
-    let package_request = to_package_value::<
-        video_analysis_use_cases::youtube::YoutubeCollectionManifestRequest,
-    >(&request)?;
-    let manifest =
-        video_analysis_use_cases::youtube::discover_youtube_collection_manifest(package_request)?;
-    from_package_value(manifest)
+    let manifest = video_analysis_use_cases::youtube::discover_youtube_collection_manifest(
+        package_youtube_collection_manifest_request(&request),
+    )?;
+    Ok(manifest.into())
 }
 
 pub fn run_youtube_collection_workflow(
@@ -485,14 +426,10 @@ pub fn run_youtube_collection_workflow(
     report_path: PathBuf,
     progress: &mut dyn FnMut(WorkflowProgress),
 ) -> Result<YoutubeCollectionReport> {
-    request.analysis.transcription = request.analysis.transcription.normalized();
     request.validate()?;
     request.analysis.transcription = prepare_transcription_config(&request.analysis.transcription);
-    let package_request = to_package_value::<
-        video_analysis_use_cases::youtube::YoutubeCollectionRunRequest,
-    >(&request)?;
     let report = video_analysis_use_cases::youtube::run_youtube_collection_workflow_with_progress(
-        package_request,
+        package_youtube_collection_run_request(&request),
         work_dir,
         report_path,
         &mut |event| {
@@ -504,512 +441,579 @@ pub fn run_youtube_collection_workflow(
             ));
         },
     )?;
-    from_package_value(report)
+    Ok(report.into())
 }
 
-fn to_package_value<T>(value: &impl Serialize) -> Result<T>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    Ok(serde_json::from_value(serde_json::to_value(value)?)?)
-}
-
-fn from_package_value<T, U>(value: U) -> Result<T>
-where
-    T: for<'de> Deserialize<'de>,
-    U: Serialize,
-{
-    Ok(serde_json::from_value(serde_json::to_value(value)?)?)
-}
-
-fn validate_youtube_url(url: &str) -> Result<()> {
-    let trimmed = url.trim();
-    if trimmed.is_empty() {
-        return Err(StudioError::InvalidRequest(
-            "YouTube URL is required".to_string(),
-        ));
-    }
-    let Some(rest) = trimmed
-        .strip_prefix("https://")
-        .or_else(|| trimmed.strip_prefix("http://"))
-    else {
-        return Err(StudioError::InvalidRequest(
-            "YouTube URL must use http or https".to_string(),
-        ));
-    };
-    let host = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default()
-        .split('@')
-        .last()
-        .unwrap_or_default()
-        .split(':')
-        .next()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let allowed = host == "youtu.be"
-        || host == "youtube.com"
-        || host == "www.youtube.com"
-        || host == "m.youtube.com"
-        || host.ends_with(".youtube.com");
-    if !allowed {
-        return Err(StudioError::InvalidRequest(format!(
-            "unsupported YouTube URL host: {host}"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_local_file(path: &Path) -> Result<()> {
-    if path.as_os_str().is_empty() {
-        return Err(StudioError::InvalidRequest(
-            "local file path is required".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn download_youtube_video(url: &str, work_dir: &Path) -> Result<PathBuf> {
-    let command = PathBuf::from("yt-dlp");
-    if resolve_command(&command).is_none() {
-        return Err(StudioError::MissingDependency(
-            "yt-dlp is required for YouTube downloads".to_string(),
-        ));
-    }
-
-    let output_template = work_dir.join("youtube-video.%(ext)s");
-    let output = Command::new("yt-dlp")
-        .arg("--no-playlist")
-        .arg("--merge-output-format")
-        .arg("mp4")
-        .arg("--print")
-        .arg("after_move:filepath")
-        .arg("-o")
-        .arg(&output_template)
-        .arg(url)
-        .output()?;
-
-    if !output.status.success() {
-        return Err(StudioError::Workflow(format!(
-            "yt-dlp failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-
-    for line in String::from_utf8_lossy(&output.stdout).lines().rev() {
-        let path = PathBuf::from(line.trim());
-        if path.exists() {
-            return Ok(path);
+pub(crate) fn package_source_spec(
+    value: &SourceSpec,
+) -> video_analysis_use_cases::youtube::SourceSpec {
+    match value {
+        SourceSpec::YoutubeUrl { url } => {
+            video_analysis_use_cases::youtube::SourceSpec::YoutubeUrl { url: url.clone() }
+        }
+        SourceSpec::LocalFile { path } => {
+            video_analysis_use_cases::youtube::SourceSpec::LocalFile { path: path.clone() }
         }
     }
-
-    find_downloaded_video(work_dir).ok_or_else(|| {
-        StudioError::Workflow("yt-dlp completed but no downloaded video was found".to_string())
-    })
 }
 
-fn find_downloaded_video(work_dir: &Path) -> Option<PathBuf> {
-    let mut candidates = fs::read_dir(work_dir)
-        .ok()?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| {
-            path.file_stem()
-                .and_then(|value| value.to_str())
-                .map(|stem| stem == "youtube-video")
-                .unwrap_or(false)
-        })
-        .filter(|path| {
-            matches!(
-                path.extension().and_then(|value| value.to_str()),
-                Some("mp4" | "mkv" | "webm" | "mov")
+pub(crate) fn package_external_command_config(
+    value: &ExternalCommandConfig,
+) -> video_analysis_use_cases::youtube::ExternalCommandConfig {
+    video_analysis_use_cases::youtube::ExternalCommandConfig {
+        command: value.command.clone(),
+        args: value.args.clone(),
+    }
+}
+
+pub(crate) fn package_transcription_engine(
+    value: TranscriptionEngine,
+) -> video_analysis_use_cases::youtube::TranscriptionEngine {
+    match value {
+        TranscriptionEngine::WhisperCpp => {
+            video_analysis_use_cases::youtube::TranscriptionEngine::WhisperCpp
+        }
+        TranscriptionEngine::Whisper => {
+            video_analysis_use_cases::youtube::TranscriptionEngine::Whisper
+        }
+        TranscriptionEngine::FasterWhisper => {
+            video_analysis_use_cases::youtube::TranscriptionEngine::FasterWhisper
+        }
+        TranscriptionEngine::WhisperX => {
+            video_analysis_use_cases::youtube::TranscriptionEngine::WhisperX
+        }
+    }
+}
+
+pub(crate) fn package_transcription_config(
+    value: &TranscriptionConfig,
+) -> video_analysis_use_cases::youtube::TranscriptionConfig {
+    video_analysis_use_cases::youtube::TranscriptionConfig {
+        enabled: value.enabled,
+        engine: package_transcription_engine(value.engine),
+        command: value.command.as_ref().map(package_external_command_config),
+        whisper_cpp: value.whisper_cpp.clone(),
+    }
+}
+
+fn package_model_command_config(
+    value: &ModelCommandConfig,
+) -> video_analysis_use_cases::youtube::ModelCommandConfig {
+    video_analysis_use_cases::youtube::ModelCommandConfig {
+        object: value.object.as_ref().map(package_external_command_config),
+        ocr: value.ocr.as_ref().map(package_external_command_config),
+        text: value.text.as_ref().map(package_external_command_config),
+    }
+}
+
+fn package_metadata_depth(
+    value: MetadataDepth,
+) -> video_analysis_use_cases::youtube::MetadataDepth {
+    match value {
+        MetadataDepth::Fast => video_analysis_use_cases::youtube::MetadataDepth::Fast,
+        MetadataDepth::EnrichedWhenNeeded => {
+            video_analysis_use_cases::youtube::MetadataDepth::EnrichedWhenNeeded
+        }
+        MetadataDepth::Full => video_analysis_use_cases::youtube::MetadataDepth::Full,
+    }
+}
+
+fn package_already_downloaded_policy(
+    value: AlreadyDownloadedPolicy,
+) -> video_analysis_use_cases::youtube::AlreadyDownloadedPolicy {
+    match value {
+        AlreadyDownloadedPolicy::Include => {
+            video_analysis_use_cases::youtube::AlreadyDownloadedPolicy::Include
+        }
+        AlreadyDownloadedPolicy::Skip => {
+            video_analysis_use_cases::youtube::AlreadyDownloadedPolicy::Skip
+        }
+        AlreadyDownloadedPolicy::Reuse => {
+            video_analysis_use_cases::youtube::AlreadyDownloadedPolicy::Reuse
+        }
+    }
+}
+
+fn package_manifest_filter_spec(
+    value: &ManifestFilterSpec,
+) -> video_analysis_use_cases::youtube::ManifestFilterSpec {
+    video_analysis_use_cases::youtube::ManifestFilterSpec {
+        title_contains: value.title_contains.clone(),
+        title_excludes: value.title_excludes.clone(),
+        playlist_index_min: value.playlist_index_min,
+        playlist_index_max: value.playlist_index_max,
+        upload_date_from: value.upload_date_from.clone(),
+        upload_date_to: value.upload_date_to.clone(),
+        duration_seconds_min: value.duration_seconds_min,
+        duration_seconds_max: value.duration_seconds_max,
+        already_downloaded: package_already_downloaded_policy(value.already_downloaded),
+    }
+}
+
+fn package_failed_probe_behavior(
+    value: FailedProbeBehavior,
+) -> video_analysis_use_cases::youtube::FailedProbeBehavior {
+    match value {
+        FailedProbeBehavior::Failed => {
+            video_analysis_use_cases::youtube::FailedProbeBehavior::Failed
+        }
+        FailedProbeBehavior::Include => {
+            video_analysis_use_cases::youtube::FailedProbeBehavior::Include
+        }
+        FailedProbeBehavior::Filtered => {
+            video_analysis_use_cases::youtube::FailedProbeBehavior::Filtered
+        }
+    }
+}
+
+fn package_local_file_filter_spec(
+    value: &LocalFileFilterSpec,
+) -> video_analysis_use_cases::youtube::LocalFileFilterSpec {
+    video_analysis_use_cases::youtube::LocalFileFilterSpec {
+        duration_seconds_min: value.duration_seconds_min,
+        duration_seconds_max: value.duration_seconds_max,
+        file_size_bytes_min: value.file_size_bytes_min,
+        file_size_bytes_max: value.file_size_bytes_max,
+        extension_allowlist: value.extension_allowlist.clone(),
+        failed_probe_behavior: package_failed_probe_behavior(value.failed_probe_behavior),
+    }
+}
+
+fn package_youtube_collection_source(
+    value: &YoutubeCollectionSource,
+) -> video_analysis_use_cases::youtube::YoutubeCollectionSource {
+    match value {
+        YoutubeCollectionSource::PlaylistUrl { url } => {
+            video_analysis_use_cases::youtube::YoutubeCollectionSource::PlaylistUrl {
+                url: url.clone(),
+            }
+        }
+        YoutubeCollectionSource::ChannelUrl { url } => {
+            video_analysis_use_cases::youtube::YoutubeCollectionSource::ChannelUrl {
+                url: url.clone(),
+            }
+        }
+        YoutubeCollectionSource::YoutubeUrl { url } => {
+            video_analysis_use_cases::youtube::YoutubeCollectionSource::YoutubeUrl {
+                url: url.clone(),
+            }
+        }
+    }
+}
+
+fn package_youtube_run_options(
+    value: &YoutubeRunOptions,
+) -> video_analysis_use_cases::youtube::YoutubeRunOptions {
+    video_analysis_use_cases::youtube::YoutubeRunOptions {
+        scene_threshold: value.scene_threshold,
+        min_scene_len: value.min_scene_len,
+        max_frames: value.max_frames,
+        visual_sample_every: value.visual_sample_every,
+        transcription: package_transcription_config(&value.transcription),
+        audio_separation: video_analysis_use_cases::youtube::AudioSeparationConfig::default(),
+        models: package_model_command_config(&value.models),
+    }
+}
+
+fn package_youtube_run_request(
+    value: &YoutubeRunRequest,
+) -> video_analysis_use_cases::youtube::YoutubeRunRequest {
+    video_analysis_use_cases::youtube::YoutubeRunRequest {
+        source: package_source_spec(&value.source),
+        work_dir: value.work_dir.clone(),
+        scene_threshold: value.scene_threshold,
+        min_scene_len: value.min_scene_len,
+        max_frames: value.max_frames,
+        visual_sample_every: value.visual_sample_every,
+        transcription: package_transcription_config(&value.transcription),
+        audio_separation: video_analysis_use_cases::youtube::AudioSeparationConfig::default(),
+        models: package_model_command_config(&value.models),
+    }
+}
+
+fn package_youtube_collection_manifest_request(
+    value: &YoutubeCollectionManifestRequest,
+) -> video_analysis_use_cases::youtube::YoutubeCollectionManifestRequest {
+    video_analysis_use_cases::youtube::YoutubeCollectionManifestRequest {
+        source: package_youtube_collection_source(&value.source),
+        metadata_filter: package_manifest_filter_spec(&value.metadata_filter),
+        metadata_depth: package_metadata_depth(value.metadata_depth),
+        max_items: value.max_items,
+    }
+}
+
+fn package_youtube_collection_manifest(
+    value: &YoutubeCollectionManifest,
+) -> video_analysis_use_cases::youtube::YoutubeCollectionManifest {
+    video_analysis_use_cases::youtube::YoutubeCollectionManifest {
+        collection_id: value.collection_id.clone(),
+        source: package_youtube_collection_source(&value.source),
+        title: value.title.clone(),
+        items: value
+            .items
+            .iter()
+            .map(
+                |item| video_analysis_use_cases::youtube::YoutubeCollectionManifestItem {
+                    item_id: item.item_id.clone(),
+                    youtube_id: item.youtube_id.clone(),
+                    playlist_index: item.playlist_index,
+                    title: item.title.clone(),
+                    source_url: item.source_url.clone(),
+                    duration_seconds: item.duration_seconds,
+                    upload_date: item.upload_date.clone(),
+                },
             )
-        })
-        .collect::<Vec<_>>();
-    candidates.sort();
-    candidates.pop()
-}
-
-#[derive(Debug, Deserialize)]
-struct YtDlpCollectionJson {
-    id: Option<String>,
-    title: Option<String>,
-    webpage_url: Option<String>,
-    entries: Option<Vec<Option<YtDlpEntryJson>>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct YtDlpEntryJson {
-    id: Option<String>,
-    title: Option<String>,
-    url: Option<String>,
-    webpage_url: Option<String>,
-    original_url: Option<String>,
-    playlist_index: Option<u64>,
-    duration: Option<f64>,
-    upload_date: Option<String>,
-}
-
-fn discover_collection_manifest(
-    source: &YoutubeCollectionSource,
-    max_items: Option<u64>,
-) -> Result<YoutubeCollectionManifest> {
-    let command = PathBuf::from("yt-dlp");
-    if resolve_command(&command).is_none() {
-        return Err(StudioError::MissingDependency(
-            "yt-dlp is required for YouTube collection discovery".to_string(),
-        ));
+            .collect(),
     }
-
-    let output = Command::new("yt-dlp")
-        .arg("--flat-playlist")
-        .arg("-J")
-        .arg(source.url())
-        .output()?;
-    if !output.status.success() {
-        return Err(StudioError::Workflow(format!(
-            "yt-dlp collection discovery failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-
-    let parsed: YtDlpCollectionJson = serde_json::from_slice(&output.stdout)?;
-    collection_manifest_from_yt_dlp(source.clone(), parsed, max_items)
 }
 
-fn collection_manifest_from_yt_dlp(
-    source: YoutubeCollectionSource,
-    parsed: YtDlpCollectionJson,
-    max_items: Option<u64>,
-) -> Result<YoutubeCollectionManifest> {
-    let collection_id = sanitize_item_id(
-        parsed
-            .id
-            .as_deref()
-            .or_else(|| parsed.webpage_url.as_deref())
-            .unwrap_or_else(|| source.url()),
-    );
-    let mut seen = BTreeMap::<String, u64>::new();
-    let limit = max_items.unwrap_or(u64::MAX) as usize;
-    let items = parsed
-        .entries
-        .unwrap_or_default()
-        .into_iter()
-        .flatten()
-        .take(limit)
-        .enumerate()
-        .map(|(index, entry)| {
-            let mut item_id = entry
-                .id
-                .as_deref()
-                .map(sanitize_item_id)
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| format!("item-{}", index + 1));
-            let count = seen.entry(item_id.clone()).or_insert(0);
-            if *count > 0 {
-                item_id = format!("{item_id}-{}", *count + 1);
+fn package_youtube_collection_run_request(
+    value: &YoutubeCollectionRunRequest,
+) -> video_analysis_use_cases::youtube::YoutubeCollectionRunRequest {
+    video_analysis_use_cases::youtube::YoutubeCollectionRunRequest {
+        source: value.source.as_ref().map(package_youtube_collection_source),
+        manifest: value
+            .manifest
+            .as_ref()
+            .map(package_youtube_collection_manifest),
+        metadata_filter: package_manifest_filter_spec(&value.metadata_filter),
+        local_file_filter: package_local_file_filter_spec(&value.local_file_filter),
+        analysis: package_youtube_run_options(&value.analysis),
+        delete_filtered_downloads: value.delete_filtered_downloads,
+        work_dir: value.work_dir.clone(),
+        max_items: value.max_items,
+    }
+}
+
+impl From<video_analysis_use_cases::youtube::YoutubeCollectionSource> for YoutubeCollectionSource {
+    fn from(value: video_analysis_use_cases::youtube::YoutubeCollectionSource) -> Self {
+        match value {
+            video_analysis_use_cases::youtube::YoutubeCollectionSource::PlaylistUrl { url } => {
+                Self::PlaylistUrl { url }
             }
-            *count += 1;
-            YoutubeCollectionManifestItem {
-                item_id,
-                youtube_id: entry.id.clone(),
-                playlist_index: entry.playlist_index.or(Some((index + 1) as u64)),
-                title: entry.title.clone(),
-                source_url: source_url_from_entry(&entry),
-                duration_seconds: entry.duration,
-                upload_date: entry.upload_date.clone(),
+            video_analysis_use_cases::youtube::YoutubeCollectionSource::ChannelUrl { url } => {
+                Self::ChannelUrl { url }
             }
-        })
-        .collect();
-
-    Ok(YoutubeCollectionManifest {
-        collection_id,
-        source,
-        title: parsed.title,
-        items,
-    })
-}
-
-fn enrich_manifest_items(manifest: &mut YoutubeCollectionManifest) -> Result<()> {
-    let command = PathBuf::from("yt-dlp");
-    if resolve_command(&command).is_none() {
-        return Err(StudioError::MissingDependency(
-            "yt-dlp is required for YouTube collection metadata enrichment".to_string(),
-        ));
-    }
-
-    for item in &mut manifest.items {
-        if item.duration_seconds.is_some() && item.upload_date.is_some() && item.title.is_some() {
-            continue;
-        }
-        let output = Command::new("yt-dlp")
-            .arg("--skip-download")
-            .arg("--no-playlist")
-            .arg("-J")
-            .arg(&item.source_url)
-            .output()?;
-        if !output.status.success() {
-            continue;
-        }
-        let Ok(entry) = serde_json::from_slice::<YtDlpEntryJson>(&output.stdout) else {
-            continue;
-        };
-        if item.youtube_id.is_none() {
-            item.youtube_id = entry.id;
-        }
-        if item.title.is_none() {
-            item.title = entry.title;
-        }
-        if item.duration_seconds.is_none() {
-            item.duration_seconds = entry.duration;
-        }
-        if item.upload_date.is_none() {
-            item.upload_date = entry.upload_date;
-        }
-    }
-    Ok(())
-}
-
-fn source_url_from_entry(entry: &YtDlpEntryJson) -> String {
-    for value in [&entry.webpage_url, &entry.original_url, &entry.url] {
-        if let Some(value) = value {
-            if value.starts_with("http://") || value.starts_with("https://") {
-                return value.clone();
+            video_analysis_use_cases::youtube::YoutubeCollectionSource::YoutubeUrl { url } => {
+                Self::YoutubeUrl { url }
             }
         }
     }
-    if let Some(id) = entry.id.as_deref().or(entry.url.as_deref()) {
-        return format!("https://www.youtube.com/watch?v={id}");
-    }
-    "https://www.youtube.com/".to_string()
 }
 
-fn download_youtube_video_to_dir(url: &str, media_dir: &Path, item_id: &str) -> Result<PathBuf> {
-    let command = PathBuf::from("yt-dlp");
-    if resolve_command(&command).is_none() {
-        return Err(StudioError::MissingDependency(
-            "yt-dlp is required for YouTube downloads".to_string(),
-        ));
-    }
-    fs::create_dir_all(media_dir)?;
-    let output_template = media_dir.join(format!("{}-%(id)s.%(ext)s", sanitize_item_id(item_id)));
-    let output = Command::new("yt-dlp")
-        .arg("--no-playlist")
-        .arg("--merge-output-format")
-        .arg("mp4")
-        .arg("--print")
-        .arg("after_move:filepath")
-        .arg("-o")
-        .arg(&output_template)
-        .arg(url)
-        .output()?;
-
-    if !output.status.success() {
-        return Err(StudioError::Workflow(format!(
-            "yt-dlp failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-
-    for line in String::from_utf8_lossy(&output.stdout).lines().rev() {
-        let path = PathBuf::from(line.trim());
-        if path.exists() {
-            return Ok(path);
+impl From<video_analysis_use_cases::youtube::YoutubeCollectionManifestItem>
+    for YoutubeCollectionManifestItem
+{
+    fn from(value: video_analysis_use_cases::youtube::YoutubeCollectionManifestItem) -> Self {
+        Self {
+            item_id: value.item_id,
+            youtube_id: value.youtube_id,
+            playlist_index: value.playlist_index,
+            title: value.title,
+            source_url: value.source_url,
+            duration_seconds: value.duration_seconds,
+            upload_date: value.upload_date,
         }
     }
-
-    find_existing_item_video(media_dir).ok_or_else(|| {
-        StudioError::Workflow("yt-dlp completed but no downloaded video was found".to_string())
-    })
 }
 
-fn find_existing_item_video(media_dir: &Path) -> Option<PathBuf> {
-    let mut candidates = fs::read_dir(media_dir)
-        .ok()?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| is_video_file(path))
-        .collect::<Vec<_>>();
-    candidates.sort();
-    candidates.pop()
+impl From<video_analysis_use_cases::youtube::YoutubeCollectionManifest>
+    for YoutubeCollectionManifest
+{
+    fn from(value: video_analysis_use_cases::youtube::YoutubeCollectionManifest) -> Self {
+        Self {
+            collection_id: value.collection_id,
+            source: value.source.into(),
+            title: value.title,
+            items: value.items.into_iter().map(Into::into).collect(),
+        }
+    }
 }
 
-fn is_video_file(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|value| value.to_str())
-            .map(|value| value.to_ascii_lowercase()),
-        Some(value) if matches!(value.as_str(), "mp4" | "mkv" | "webm" | "mov")
-    )
+impl From<video_analysis_use_cases::youtube::RegionReport> for RegionReport {
+    fn from(value: video_analysis_use_cases::youtube::RegionReport) -> Self {
+        Self {
+            x: value.x,
+            y: value.y,
+            width: value.width,
+            height: value.height,
+        }
+    }
 }
 
-fn metadata_filter_matches(
-    item: &YoutubeCollectionManifestItem,
-    filter: &ManifestFilterSpec,
-) -> bool {
-    if let Some(needle) = filter.title_contains.as_deref().map(normalize_text_filter) {
-        let title = item
-            .title
-            .as_deref()
-            .map(normalize_text_filter)
-            .unwrap_or_default();
-        if !title.contains(&needle) {
-            return false;
+impl From<video_analysis_use_cases::youtube::ObservationReport> for ObservationReport {
+    fn from(value: video_analysis_use_cases::youtube::ObservationReport) -> Self {
+        Self {
+            timestamp_seconds: value.timestamp_seconds,
+            frame_index: value.frame_index,
+            scene_index: value.scene_index,
+            analyzer: value.analyzer,
+            kind: value.kind,
+            label: value.label,
+            text: value.text,
+            score: value.score,
+            region: value.region.map(Into::into),
+            track_id: value.track_id,
+            attributes: value.attributes,
         }
     }
-    let title = item
-        .title
-        .as_deref()
-        .map(normalize_text_filter)
-        .unwrap_or_default();
-    for excluded in &filter.title_excludes {
-        if !excluded.trim().is_empty() && title.contains(&normalize_text_filter(excluded)) {
-            return false;
-        }
-    }
-    if let Some(min) = filter.playlist_index_min {
-        if item.playlist_index.unwrap_or(0) < min {
-            return false;
-        }
-    }
-    if let Some(max) = filter.playlist_index_max {
-        if item.playlist_index.unwrap_or(u64::MAX) > max {
-            return false;
-        }
-    }
-    if let Some(min) = filter.duration_seconds_min {
-        if item
-            .duration_seconds
-            .map(|duration| duration < min)
-            .unwrap_or(true)
-        {
-            return false;
-        }
-    }
-    if let Some(max) = filter.duration_seconds_max {
-        if item
-            .duration_seconds
-            .map(|duration| duration > max)
-            .unwrap_or(true)
-        {
-            return false;
-        }
-    }
-    if let Some(from) = normalize_upload_date_filter(filter.upload_date_from.as_deref()) {
-        if item
-            .upload_date
-            .as_deref()
-            .and_then(|value| normalize_upload_date_filter(Some(value)))
-            .map(|value| value < from)
-            .unwrap_or(true)
-        {
-            return false;
-        }
-    }
-    if let Some(to) = normalize_upload_date_filter(filter.upload_date_to.as_deref()) {
-        if item
-            .upload_date
-            .as_deref()
-            .and_then(|value| normalize_upload_date_filter(Some(value)))
-            .map(|value| value > to)
-            .unwrap_or(true)
-        {
-            return false;
-        }
-    }
-    true
 }
 
-fn local_file_filter_matches(path: &Path, filter: &LocalFileFilterSpec) -> Result<bool> {
-    let metadata = fs::metadata(path)?;
-    if let Some(min) = filter.file_size_bytes_min {
-        if metadata.len() < min {
-            return Ok(false);
+impl From<video_analysis_use_cases::youtube::SceneReport> for SceneReport {
+    fn from(value: video_analysis_use_cases::youtube::SceneReport) -> Self {
+        Self {
+            index: value.index,
+            start_frame: value.start_frame,
+            end_frame: value.end_frame,
+            start_seconds: value.start_seconds,
+            end_seconds: value.end_seconds,
+            observations: value.observations.into_iter().map(Into::into).collect(),
         }
     }
-    if let Some(max) = filter.file_size_bytes_max {
-        if metadata.len() > max {
-            return Ok(false);
-        }
-    }
-    if !filter.extension_allowlist.is_empty() {
-        let extension = path
-            .extension()
-            .and_then(|value| value.to_str())
-            .map(|value| value.trim_start_matches('.').to_ascii_lowercase())
-            .unwrap_or_default();
-        let allowed = filter.extension_allowlist.iter().any(|allowed| {
-            allowed
-                .trim()
-                .trim_start_matches('.')
-                .eq_ignore_ascii_case(&extension)
-        });
-        if !allowed {
-            return Ok(false);
-        }
-    }
+}
 
-    if filter.duration_seconds_min.is_some() || filter.duration_seconds_max.is_some() {
-        let duration = probe_local_video_duration(path)?.ok_or_else(|| {
-            StudioError::Workflow(format!(
-                "could not read local video duration: {}",
-                display_path(path)
-            ))
-        })?;
-        if let Some(min) = filter.duration_seconds_min {
-            if duration < min {
-                return Ok(false);
+impl From<video_analysis_use_cases::youtube::EventReport> for EventReport {
+    fn from(value: video_analysis_use_cases::youtube::EventReport) -> Self {
+        Self {
+            timestamp_seconds: value.timestamp_seconds,
+            analyzer: value.analyzer,
+            label: value.label,
+            score: value.score,
+        }
+    }
+}
+
+impl From<video_analysis_use_cases::youtube::VideoReport> for VideoReport {
+    fn from(value: video_analysis_use_cases::youtube::VideoReport) -> Self {
+        Self {
+            width: value.width,
+            height: value.height,
+            frame_rate: value.frame_rate,
+            duration_seconds: value.duration_seconds,
+            frames_processed: value.frames_processed,
+            scenes: value.scenes.into_iter().map(Into::into).collect(),
+            observations: value.observations.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<video_analysis_use_cases::TranscriptSegmentReport>
+    for crate::report::TranscriptSegmentReport
+{
+    fn from(value: video_analysis_use_cases::TranscriptSegmentReport) -> Self {
+        Self {
+            index: value.index,
+            start_seconds: value.start_seconds,
+            end_seconds: value.end_seconds,
+            text: value.text,
+        }
+    }
+}
+
+impl From<video_analysis_use_cases::TranscriptionReport> for TranscriptionReport {
+    fn from(value: video_analysis_use_cases::TranscriptionReport) -> Self {
+        Self {
+            status: value.status,
+            text: value.text,
+            segments: value.segments.into_iter().map(Into::into).collect(),
+            message: value.message,
+        }
+    }
+}
+
+impl From<video_analysis_use_cases::youtube::AudioReport> for AudioReport {
+    fn from(value: video_analysis_use_cases::youtube::AudioReport) -> Self {
+        Self {
+            status: value.status,
+            frames_processed: value.frames_processed,
+            events: value.events.into_iter().map(Into::into).collect(),
+            message: value.message,
+        }
+    }
+}
+
+impl From<video_analysis_use_cases::youtube::TextReport> for TextReport {
+    fn from(value: video_analysis_use_cases::youtube::TextReport) -> Self {
+        Self {
+            status: value.status,
+            segments_processed: value.segments_processed,
+            events: value.events.into_iter().map(Into::into).collect(),
+            message: value.message,
+        }
+    }
+}
+
+impl From<video_analysis_use_cases::StreamBucketReport> for StreamBucketReport {
+    fn from(value: video_analysis_use_cases::StreamBucketReport) -> Self {
+        Self {
+            stream_id: value.stream_id,
+            records: value.records,
+            estimated_bytes: value.estimated_bytes,
+            payload_counts: value.payload_counts,
+            video_frames: value.video_frames,
+            audio_frames: value.audio_frames,
+            text_segments: value.text_segments,
+        }
+    }
+}
+
+impl From<video_analysis_use_cases::DataBucketReport> for DataBucketReport {
+    fn from(value: video_analysis_use_cases::DataBucketReport) -> Self {
+        Self {
+            bucket_index: value.bucket_index,
+            records: value.records,
+            estimated_bytes: value.estimated_bytes,
+            streams: value.streams.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<video_analysis_use_cases::youtube::YoutubeVideoReport> for YoutubeVideoReport {
+    fn from(value: video_analysis_use_cases::youtube::YoutubeVideoReport) -> Self {
+        Self {
+            workflow: value.use_case,
+            source: SourceReport {
+                url: value.source.url,
+                local_video: value.source.local_video,
+            },
+            assets: AssetReport {
+                work_dir: value.assets.work_dir,
+                report_path: value.assets.report_path,
+                audio_wav: value.assets.audio_wav,
+            },
+            capabilities: CapabilityReport {
+                completed: value.capabilities.completed,
+                skipped: value.capabilities.skipped,
+            },
+            video: value.video.into(),
+            transcription: value.transcription.into(),
+            audio: value.audio.into(),
+            text: value.text.into(),
+            data_buckets: value.data_buckets.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<video_analysis_use_cases::youtube::CollectionSummary> for CollectionSummary {
+    fn from(value: video_analysis_use_cases::youtube::CollectionSummary) -> Self {
+        Self {
+            collection_id: value.collection_id,
+            title: value.title,
+            source_url: value.source_url,
+            discovered_items: value.discovered_items,
+            selected_items: value.selected_items,
+            analyzed_items: value.analyzed_items,
+            failed_items: value.failed_items,
+            filtered_items: value.filtered_items,
+            skipped_items: value.skipped_items,
+            downloaded_items: value.downloaded_items,
+            total_duration_seconds: value.total_duration_seconds,
+        }
+    }
+}
+
+impl From<video_analysis_use_cases::youtube::AppliedCollectionFilters>
+    for AppliedCollectionFilters
+{
+    fn from(value: video_analysis_use_cases::youtube::AppliedCollectionFilters) -> Self {
+        Self {
+            metadata: value.metadata,
+            local_file: value.local_file,
+        }
+    }
+}
+
+impl From<video_analysis_use_cases::youtube::YoutubeCollectionSourceReport>
+    for YoutubeCollectionSourceReport
+{
+    fn from(value: video_analysis_use_cases::youtube::YoutubeCollectionSourceReport) -> Self {
+        Self {
+            kind: value.kind,
+            url: value.url,
+            title: value.title,
+        }
+    }
+}
+
+impl From<video_analysis_use_cases::youtube::CollectionItemStatus> for CollectionItemStatus {
+    fn from(value: video_analysis_use_cases::youtube::CollectionItemStatus) -> Self {
+        match value {
+            video_analysis_use_cases::youtube::CollectionItemStatus::Discovered => Self::Discovered,
+            video_analysis_use_cases::youtube::CollectionItemStatus::MetadataFiltered => {
+                Self::MetadataFiltered
+            }
+            video_analysis_use_cases::youtube::CollectionItemStatus::Downloaded => Self::Downloaded,
+            video_analysis_use_cases::youtube::CollectionItemStatus::FileFiltered => {
+                Self::FileFiltered
+            }
+            video_analysis_use_cases::youtube::CollectionItemStatus::Analyzed => Self::Analyzed,
+            video_analysis_use_cases::youtube::CollectionItemStatus::Failed => Self::Failed,
+            video_analysis_use_cases::youtube::CollectionItemStatus::SkippedExisting => {
+                Self::SkippedExisting
             }
         }
-        if let Some(max) = filter.duration_seconds_max {
-            if duration > max {
-                return Ok(false);
-            }
+    }
+}
+
+impl From<video_analysis_use_cases::youtube::CollectionItemReport> for CollectionItemReport {
+    fn from(value: video_analysis_use_cases::youtube::CollectionItemReport) -> Self {
+        Self {
+            item_id: value.item_id,
+            youtube_id: value.youtube_id,
+            playlist_index: value.playlist_index,
+            title: value.title,
+            source_url: value.source_url,
+            local_video: value.local_video,
+            status: value.status.into(),
+            error: value.error,
+            report: value.report.map(Into::into),
         }
     }
-
-    Ok(true)
 }
 
-fn probe_local_video_duration(path: &Path) -> Result<Option<f64>> {
-    let source = FfmpegVideoSource::open(path)?;
-    Ok(source.metadata().duration_seconds)
-}
-
-fn collection_item_report(
-    item: &YoutubeCollectionManifestItem,
-    local_video: Option<&PathBuf>,
-    status: CollectionItemStatus,
-    error: Option<String>,
-    report: Option<YoutubeVideoReport>,
-) -> CollectionItemReport {
-    CollectionItemReport {
-        item_id: item.item_id.clone(),
-        youtube_id: item.youtube_id.clone(),
-        playlist_index: item.playlist_index,
-        title: item.title.clone(),
-        source_url: item.source_url.clone(),
-        local_video: local_video.map(|path| display_path(path)),
-        status,
-        error,
-        report,
+impl From<video_analysis_use_cases::youtube::YoutubeCollectionReport> for YoutubeCollectionReport {
+    fn from(value: video_analysis_use_cases::youtube::YoutubeCollectionReport) -> Self {
+        Self {
+            workflow: value.workflow,
+            collection: value.collection.into(),
+            source: value.source.into(),
+            filters: value.filters.into(),
+            items: value.items.into_iter().map(Into::into).collect(),
+            assets: CollectionAssetReport {
+                work_dir: value.assets.work_dir,
+                report_path: value.assets.report_path,
+                manifest_path: value.assets.manifest_path,
+            },
+            capabilities: CapabilityReport {
+                completed: value.capabilities.completed,
+                skipped: value.capabilities.skipped,
+            },
+        }
     }
 }
 
 fn validate_manifest_filter(filter: &ManifestFilterSpec) -> Result<()> {
-    validate_optional_nonnegative_f64(filter.duration_seconds_min, "duration_seconds_min")?;
-    validate_optional_nonnegative_f64(filter.duration_seconds_max, "duration_seconds_max")?;
-    if let (Some(min), Some(max)) = (filter.duration_seconds_min, filter.duration_seconds_max) {
+    if let (Some(min), Some(max)) = (filter.playlist_index_min, filter.playlist_index_max) {
         if min > max {
             return Err(StudioError::InvalidRequest(
-                "duration_seconds_min must be less than or equal to duration_seconds_max"
+                "metadata_filter.playlist_index_min must be less than or equal to playlist_index_max"
                     .to_string(),
             ));
         }
     }
-    if let (Some(min), Some(max)) = (filter.playlist_index_min, filter.playlist_index_max) {
+    validate_optional_nonnegative_f64(
+        filter.duration_seconds_min,
+        "metadata_filter.duration_seconds_min",
+    )?;
+    validate_optional_nonnegative_f64(
+        filter.duration_seconds_max,
+        "metadata_filter.duration_seconds_max",
+    )?;
+    if let (Some(min), Some(max)) = (filter.duration_seconds_min, filter.duration_seconds_max) {
         if min > max {
             return Err(StudioError::InvalidRequest(
-                "playlist_index_min must be less than or equal to playlist_index_max".to_string(),
+                "metadata_filter.duration_seconds_min must be less than or equal to duration_seconds_max"
+                    .to_string(),
             ));
         }
     }
@@ -1017,12 +1021,18 @@ fn validate_manifest_filter(filter: &ManifestFilterSpec) -> Result<()> {
 }
 
 fn validate_local_file_filter(filter: &LocalFileFilterSpec) -> Result<()> {
-    validate_optional_nonnegative_f64(filter.duration_seconds_min, "duration_seconds_min")?;
-    validate_optional_nonnegative_f64(filter.duration_seconds_max, "duration_seconds_max")?;
+    validate_optional_nonnegative_f64(
+        filter.duration_seconds_min,
+        "local_file_filter.duration_seconds_min",
+    )?;
+    validate_optional_nonnegative_f64(
+        filter.duration_seconds_max,
+        "local_file_filter.duration_seconds_max",
+    )?;
     if let (Some(min), Some(max)) = (filter.duration_seconds_min, filter.duration_seconds_max) {
         if min > max {
             return Err(StudioError::InvalidRequest(
-                "local duration_seconds_min must be less than or equal to duration_seconds_max"
+                "local_file_filter.duration_seconds_min must be less than or equal to duration_seconds_max"
                     .to_string(),
             ));
         }
@@ -1030,7 +1040,8 @@ fn validate_local_file_filter(filter: &LocalFileFilterSpec) -> Result<()> {
     if let (Some(min), Some(max)) = (filter.file_size_bytes_min, filter.file_size_bytes_max) {
         if min > max {
             return Err(StudioError::InvalidRequest(
-                "file_size_bytes_min must be less than or equal to file_size_bytes_max".to_string(),
+                "local_file_filter.file_size_bytes_min must be less than or equal to file_size_bytes_max"
+                    .to_string(),
             ));
         }
     }
@@ -1046,581 +1057,6 @@ fn validate_optional_nonnegative_f64(value: Option<f64>, name: &str) -> Result<(
         }
     }
     Ok(())
-}
-
-fn manifest_filter_needs_enrichment(filter: &ManifestFilterSpec) -> bool {
-    filter.duration_seconds_min.is_some()
-        || filter.duration_seconds_max.is_some()
-        || filter.upload_date_from.is_some()
-        || filter.upload_date_to.is_some()
-}
-
-fn describe_manifest_filter(filter: &ManifestFilterSpec) -> Vec<String> {
-    let mut descriptions = Vec::new();
-    if let Some(value) = filter
-        .title_contains
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        descriptions.push(format!("title contains '{value}'"));
-    }
-    for value in &filter.title_excludes {
-        if !value.trim().is_empty() {
-            descriptions.push(format!("title excludes '{value}'"));
-        }
-    }
-    if let Some(value) = filter.playlist_index_min {
-        descriptions.push(format!("playlist index >= {value}"));
-    }
-    if let Some(value) = filter.playlist_index_max {
-        descriptions.push(format!("playlist index <= {value}"));
-    }
-    if let Some(value) = filter.upload_date_from.as_deref() {
-        descriptions.push(format!("upload date >= {value}"));
-    }
-    if let Some(value) = filter.upload_date_to.as_deref() {
-        descriptions.push(format!("upload date <= {value}"));
-    }
-    if let Some(value) = filter.duration_seconds_min {
-        descriptions.push(format!("duration >= {value}s"));
-    }
-    if let Some(value) = filter.duration_seconds_max {
-        descriptions.push(format!("duration <= {value}s"));
-    }
-    descriptions.push(format!(
-        "already downloaded: {:?}",
-        filter.already_downloaded
-    ));
-    descriptions
-}
-
-fn describe_local_file_filter(filter: &LocalFileFilterSpec) -> Vec<String> {
-    let mut descriptions = Vec::new();
-    if let Some(value) = filter.duration_seconds_min {
-        descriptions.push(format!("local duration >= {value}s"));
-    }
-    if let Some(value) = filter.duration_seconds_max {
-        descriptions.push(format!("local duration <= {value}s"));
-    }
-    if let Some(value) = filter.file_size_bytes_min {
-        descriptions.push(format!("file size >= {value} bytes"));
-    }
-    if let Some(value) = filter.file_size_bytes_max {
-        descriptions.push(format!("file size <= {value} bytes"));
-    }
-    if !filter.extension_allowlist.is_empty() {
-        descriptions.push(format!(
-            "extensions: {}",
-            filter.extension_allowlist.join(", ")
-        ));
-    }
-    descriptions.push(format!("failed probe: {:?}", filter.failed_probe_behavior));
-    descriptions
-}
-
-fn normalize_text_filter(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
-}
-
-fn normalize_upload_date_filter(value: Option<&str>) -> Option<String> {
-    let normalized = value?
-        .chars()
-        .filter(|ch| ch.is_ascii_digit())
-        .collect::<String>();
-    if normalized.len() == 8 {
-        Some(normalized)
-    } else {
-        None
-    }
-}
-
-fn sanitize_item_id(value: &str) -> String {
-    let mut sanitized = value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string();
-    while sanitized.contains("--") {
-        sanitized = sanitized.replace("--", "-");
-    }
-    if sanitized.is_empty() {
-        "collection".to_string()
-    } else {
-        sanitized
-    }
-}
-
-fn analyze_video(
-    request: &YoutubeRunRequest,
-    video_path: &Path,
-    aggregator: &mut BucketAggregator,
-    data_buckets: &mut Vec<DataBucketReport>,
-) -> Result<(VideoReport, Vec<ObservationReport>)> {
-    let mut source = FfmpegVideoSource::open(video_path)?;
-    let metadata = source.metadata().clone();
-    let mut pipeline = build_video_pipeline(request)?;
-
-    while let Some(frame) = source.next_video_frame()? {
-        let frame_ref = frame.as_frame();
-        let record = DataRecord::video_frame("video", frame.position.frame_index, &frame_ref);
-        push_record(aggregator, record, data_buckets)?;
-        pipeline.process_frame(frame)?;
-        if request
-            .max_frames
-            .map(|limit| pipeline.frames_processed() >= limit)
-            .unwrap_or(false)
-        {
-            break;
-        }
-    }
-
-    let result = pipeline.finish_analysis()?;
-    let observations = result
-        .observations
-        .iter()
-        .map(observation_report)
-        .collect::<Vec<_>>();
-    let scenes = result
-        .detection
-        .scenes
-        .iter()
-        .enumerate()
-        .map(|(index, scene)| {
-            let scene_observations = observations
-                .iter()
-                .filter(|observation| observation.scene_index == Some(index as u64))
-                .cloned()
-                .collect();
-            SceneReport {
-                index: index as u64,
-                start_frame: scene.start.frame_index,
-                end_frame: scene.end.frame_index,
-                start_seconds: scene.start.timestamp.seconds(),
-                end_seconds: scene.end.timestamp.seconds(),
-                observations: scene_observations,
-            }
-        })
-        .collect::<Vec<_>>();
-
-    Ok((
-        VideoReport {
-            width: metadata.width,
-            height: metadata.height,
-            frame_rate: format!(
-                "{}/{}",
-                metadata.frame_rate.numer(),
-                metadata.frame_rate.denom()
-            ),
-            duration_seconds: metadata.duration_seconds,
-            frames_processed: result.frames_processed,
-            scenes,
-            observations: Vec::new(),
-        },
-        observations,
-    ))
-}
-
-fn build_video_pipeline(request: &YoutubeRunRequest) -> Result<RealtimeVideoPipeline> {
-    let mut builder = RealtimeVideoPipeline::builder()
-        .scene_detector(ContentDetector::new(
-            request.scene_threshold,
-            request.min_scene_len,
-        ))
-        .start_in_scene(true);
-
-    if let Some(config) = &request.models.object {
-        let backend = ExternalCommandModel::new(
-            &config.command,
-            downloaded_external_model("object-command", ModelTask::ObjectDetection),
-        )
-        .args(config.args.clone());
-        builder = builder.video_analyzer(SampledVideoAnalyzer::new(
-            ModelVideoAnalyzer::new("object_person_detector", backend),
-            request.visual_sample_every,
-        ));
-    }
-
-    if let Some(config) = &request.models.ocr {
-        let backend = ExternalCommandModel::new(
-            &config.command,
-            downloaded_external_model("ocr-command", ModelTask::Custom("ocr".to_string())),
-        )
-        .args(config.args.clone());
-        builder = builder.video_analyzer(SampledVideoAnalyzer::new(
-            ModelVideoAnalyzer::new("ocr", backend),
-            request.visual_sample_every,
-        ));
-    }
-
-    Ok(builder.build()?)
-}
-
-fn transcribe_video(
-    request: &YoutubeRunRequest,
-    video_path: &Path,
-    work_dir: &Path,
-    progress: &mut dyn FnMut(WorkflowProgress),
-) -> (TranscriptionReport, Option<PathBuf>) {
-    transcribe_media(&request.transcription, video_path, work_dir, progress)
-}
-
-fn analyze_audio(
-    video_path: &Path,
-    aggregator: &mut BucketAggregator,
-    data_buckets: &mut Vec<DataBucketReport>,
-) -> Result<AudioReport> {
-    let mut source = FfmpegAudioSource::open_path_with_options(
-        video_path,
-        FfmpegAudioSourceOptions::recorded().samples_per_chunk(16_384),
-    )?;
-    let mut pipeline = video_analysis_core::AudioPipeline::builder()
-        .analyzer(AudioEnergyAnalyzer::default())
-        .build()?;
-    while let Some(frame) = source.next_audio_frame()? {
-        let frame_ref = frame.as_frame()?;
-        let record = DataRecord::audio_frame("audio", pipeline.frames_processed(), &frame_ref);
-        push_record(aggregator, record, data_buckets)?;
-        pipeline.process_frame(frame)?;
-    }
-
-    let result = pipeline.finish_analysis()?;
-    Ok(AudioReport {
-        status: "completed".to_string(),
-        frames_processed: result.frames_processed,
-        events: result.events.iter().map(event_report).collect(),
-        message: None,
-    })
-}
-
-fn analyze_transcript_text(
-    request: &YoutubeRunRequest,
-    transcription: &TranscriptionReport,
-    aggregator: &mut BucketAggregator,
-    data_buckets: &mut Vec<DataBucketReport>,
-) -> Result<TextReport> {
-    if transcription.status != "completed" {
-        return Ok(TextReport {
-            status: "skipped".to_string(),
-            segments_processed: 0,
-            events: Vec::new(),
-            message: Some("no transcript available".to_string()),
-        });
-    }
-
-    let mut builder =
-        video_analysis_core::TextPipeline::builder().analyzer(TranscriptHeuristicAnalyzer);
-    if let Some(config) = &request.models.text {
-        let backend = ExternalCommandModel::new(
-            &config.command,
-            downloaded_external_model(
-                "text-command",
-                ModelTask::Custom("text_classification".to_string()),
-            ),
-        )
-        .args(config.args.clone());
-        builder = builder.analyzer(ModelTextAnalyzer::new("transcript_text_model", backend));
-    }
-    let mut pipeline = builder.build()?;
-
-    for segment in &transcription.segments {
-        let mut owned = video_analysis_core::OwnedTextSegment::new(segment.index, &segment.text);
-        if let Some(seconds) = segment.start_seconds {
-            owned = owned.timestamp(Timestamp::new(
-                (seconds * 1_000.0).round() as i64,
-                video_analysis_core::Timebase::new(1, 1_000),
-            ));
-        }
-        let segment_ref = owned.as_segment();
-        push_record(
-            aggregator,
-            DataRecord::text_segment("transcript", &segment_ref),
-            data_buckets,
-        )?;
-        pipeline.process_segment(owned)?;
-    }
-
-    let result = pipeline.finish_analysis()?;
-    Ok(TextReport {
-        status: "completed".to_string(),
-        segments_processed: result.segments_processed,
-        events: result.events.iter().map(event_report).collect(),
-        message: None,
-    })
-}
-
-#[derive(Default)]
-struct AudioEnergyAnalyzer {
-    current_label: Option<String>,
-}
-
-impl AudioAnalyzer for AudioEnergyAnalyzer {
-    fn name(&self) -> &str {
-        "audio_energy"
-    }
-
-    fn process_frame(
-        &mut self,
-        frame: &AudioFrame<'_>,
-    ) -> video_analysis_core::Result<Vec<AnalysisEvent>> {
-        let rms = rms(frame.data);
-        let label = if rms < 0.01 {
-            "audio:silence"
-        } else if rms > 0.2 {
-            "audio:loud"
-        } else {
-            "audio:active"
-        };
-        if self.current_label.as_deref() == Some(label) {
-            return Ok(Vec::new());
-        }
-        self.current_label = Some(label.to_string());
-        Ok(vec![AnalysisEvent::new(self.name(), label)
-            .at_timestamp(frame.timestamp)
-            .score(rms)])
-    }
-}
-
-fn rms(buffer: &AudioBuffer) -> f32 {
-    let (sum, count) = match buffer {
-        AudioBuffer::U8(values) => values.iter().fold((0.0, 0_usize), |(sum, count), value| {
-            let sample = (*value as f32 - 128.0) / 128.0;
-            (sum + sample * sample, count + 1)
-        }),
-        AudioBuffer::I16(values) => values.iter().fold((0.0, 0_usize), |(sum, count), value| {
-            let sample = *value as f32 / i16::MAX as f32;
-            (sum + sample * sample, count + 1)
-        }),
-        AudioBuffer::I32(values) => values.iter().fold((0.0, 0_usize), |(sum, count), value| {
-            let sample = *value as f32 / i32::MAX as f32;
-            (sum + sample * sample, count + 1)
-        }),
-        AudioBuffer::F32(values) => values.iter().fold((0.0, 0_usize), |(sum, count), value| {
-            (sum + value * value, count + 1)
-        }),
-    };
-    if count == 0 {
-        0.0
-    } else {
-        (sum / count as f32).sqrt()
-    }
-}
-
-#[derive(Default)]
-struct TranscriptHeuristicAnalyzer;
-
-impl TextAnalyzer for TranscriptHeuristicAnalyzer {
-    fn name(&self) -> &str {
-        "transcript_heuristics"
-    }
-
-    fn process_segment(
-        &mut self,
-        segment: &TextSegment<'_>,
-    ) -> video_analysis_core::Result<Vec<AnalysisEvent>> {
-        let mut events = Vec::new();
-        let text = segment.text.trim();
-        if text.ends_with('?') {
-            events.push(text_event(
-                self.name(),
-                "speech:question",
-                segment.timestamp,
-            ));
-        }
-        if text.contains("http://") || text.contains("https://") || text.contains("www.") {
-            events.push(text_event(self.name(), "speech:url", segment.timestamp));
-        }
-        if text
-            .split_whitespace()
-            .any(|word| word.chars().any(|character| character.is_ascii_digit()))
-        {
-            events.push(text_event(self.name(), "speech:number", segment.timestamp));
-        }
-        if text.split_whitespace().count() >= 30 {
-            events.push(text_event(
-                self.name(),
-                "speech:long_segment",
-                segment.timestamp,
-            ));
-        }
-        Ok(events)
-    }
-}
-
-fn text_event(analyzer: &str, label: &str, timestamp: Option<Timestamp>) -> AnalysisEvent {
-    let event = AnalysisEvent::new(analyzer, label);
-    if let Some(timestamp) = timestamp {
-        event.at_timestamp(timestamp)
-    } else {
-        event
-    }
-}
-
-struct SampledVideoAnalyzer<A> {
-    inner: A,
-    every: u64,
-}
-
-impl<A> SampledVideoAnalyzer<A> {
-    fn new(inner: A, every: u64) -> Self {
-        Self {
-            inner,
-            every: every.max(1),
-        }
-    }
-}
-
-impl<A: VideoAnalyzer> VideoAnalyzer for SampledVideoAnalyzer<A> {
-    fn name(&self) -> &str {
-        self.inner.name()
-    }
-
-    fn process_frame(
-        &mut self,
-        frame: &VideoFrame<'_>,
-    ) -> video_analysis_core::Result<Vec<Observation>> {
-        if frame.position.frame_index % self.every == 0 {
-            self.inner.process_frame(frame)
-        } else {
-            Ok(Vec::new())
-        }
-    }
-
-    fn finish(
-        &mut self,
-        last_position: Option<video_analysis_core::FramePosition>,
-    ) -> video_analysis_core::Result<Vec<Observation>> {
-        self.inner.finish(last_position)
-    }
-}
-
-fn downloaded_external_model(name: &str, task: ModelTask) -> DownloadedModel {
-    DownloadedModel {
-        spec: HuggingFaceModelSpec::new(name, task).name(name),
-        files: BTreeMap::new(),
-    }
-}
-
-fn observation_report(observation: &Observation) -> ObservationReport {
-    ObservationReport {
-        timestamp_seconds: observation.timestamp.map(|timestamp| timestamp.seconds()),
-        frame_index: observation.frame.map(|position| position.frame_index),
-        scene_index: observation.scene_index,
-        analyzer: observation.analyzer.clone(),
-        kind: observation_kind_name(&observation.kind),
-        label: observation.label.clone(),
-        text: observation.text.clone(),
-        score: observation.score,
-        region: observation.region.map(region_report),
-        track_id: observation.track_id.clone(),
-        attributes: observation.attributes.clone(),
-    }
-}
-
-fn observation_kind_name(kind: &ObservationKind) -> String {
-    match kind {
-        ObservationKind::Text => "text".to_string(),
-        ObservationKind::Face => "face".to_string(),
-        ObservationKind::Object => "object".to_string(),
-        ObservationKind::Scene => "scene".to_string(),
-        ObservationKind::Custom(value) => value.clone(),
-    }
-}
-
-fn region_report(region: BoundingBox) -> RegionReport {
-    RegionReport {
-        x: region.x,
-        y: region.y,
-        width: region.width,
-        height: region.height,
-    }
-}
-
-fn event_report(event: &AnalysisEvent) -> EventReport {
-    EventReport {
-        timestamp_seconds: event.timestamp.map(|timestamp| timestamp.seconds()),
-        analyzer: event.analyzer.clone(),
-        label: event.label.clone(),
-        score: event.score,
-    }
-}
-
-fn bucket_report(bucket: &DataBucket) -> DataBucketReport {
-    DataBucketReport {
-        bucket_index: bucket.bucket_index,
-        records: bucket.records,
-        estimated_bytes: bucket.estimated_bytes,
-        streams: bucket
-            .streams
-            .iter()
-            .map(|(stream_id, summary)| stream_bucket_report(stream_id, summary))
-            .collect(),
-    }
-}
-
-fn push_record(
-    aggregator: &mut BucketAggregator,
-    record: DataRecord<'_>,
-    data_buckets: &mut Vec<DataBucketReport>,
-) -> Result<()> {
-    for bucket in aggregator.push(record)? {
-        data_buckets.push(bucket_report(&bucket));
-    }
-    Ok(())
-}
-
-fn stream_bucket_report(stream_id: &str, summary: &StreamSummary) -> StreamBucketReport {
-    StreamBucketReport {
-        stream_id: stream_id.to_string(),
-        records: summary.records,
-        estimated_bytes: summary.estimated_bytes,
-        payload_counts: summary
-            .payload_counts
-            .iter()
-            .map(|(kind, count)| (data_stream_kind_name(*kind), *count))
-            .collect(),
-        video_frames: summary.video.frames,
-        audio_frames: summary.audio.frames,
-        text_segments: summary.text.segments,
-    }
-}
-
-fn data_stream_kind_name(kind: DataStreamKind) -> String {
-    match kind {
-        DataStreamKind::Video => "video".to_string(),
-        DataStreamKind::Audio => "audio".to_string(),
-        DataStreamKind::Text => "text".to_string(),
-        DataStreamKind::Number => "number".to_string(),
-        DataStreamKind::Vector => "vector".to_string(),
-        DataStreamKind::Custom => "custom".to_string(),
-    }
-}
-
-fn video_report_with_observations(
-    mut video_report: VideoReport,
-    observations: Vec<ObservationReport>,
-) -> VideoReport {
-    video_report.observations = observations;
-    video_report
-}
-
-fn write_json_report<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let bytes = serde_json::to_vec_pretty(value)?;
-    fs::write(path, bytes)?;
-    Ok(())
-}
-
-fn display_path(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
 }
 
 fn default_scene_threshold() -> f32 {
@@ -1640,7 +1076,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn validates_youtube_url_host_and_protocol() {
+    fn validates_youtube_urls() {
         assert!(validate_youtube_url("https://www.youtube.com/watch?v=abc").is_ok());
         assert!(validate_youtube_url("https://youtu.be/abc").is_ok());
         assert!(validate_youtube_url("ftp://youtube.com/watch?v=abc").is_err());
@@ -1648,225 +1084,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty_local_file_path() {
+    fn rejects_empty_local_file_request() {
         let request = YoutubeRunRequest::local_file(PathBuf::new());
         assert!(request.validate().is_err());
-    }
-
-    #[test]
-    fn resolves_default_work_dir() {
-        let request = YoutubeRunRequest::youtube_url("https://youtu.be/abc");
-        let run_id = uuid::Uuid::nil();
-        assert_eq!(
-            request.resolved_work_dir(Path::new("/tmp/studio"), run_id),
-            Path::new("/tmp/studio")
-                .join("runs")
-                .join(run_id.to_string())
-        );
-    }
-
-    #[test]
-    fn serializes_youtube_run_request() {
-        let request = YoutubeRunRequest {
-            source: SourceSpec::YoutubeUrl {
-                url: "https://youtu.be/abc".to_string(),
-            },
-            work_dir: Some(PathBuf::from("work")),
-            scene_threshold: DEFAULT_SCENE_THRESHOLD,
-            min_scene_len: DEFAULT_MIN_SCENE_LEN,
-            max_frames: Some(1),
-            visual_sample_every: DEFAULT_VISUAL_SAMPLE_EVERY,
-            transcription: TranscriptionConfig::default(),
-            models: ModelCommandConfig::default(),
-        };
-        let json = serde_json::to_string(&request).unwrap();
-        let parsed: YoutubeRunRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, request);
-    }
-
-    #[test]
-    fn serializes_report_shape_for_ui() {
-        let report = YoutubeVideoReport {
-            workflow: "youtube_video_analysis".to_string(),
-            source: SourceReport {
-                url: None,
-                local_video: "video.mp4".to_string(),
-            },
-            assets: AssetReport {
-                work_dir: "work".to_string(),
-                report_path: "work/analysis.json".to_string(),
-                audio_wav: None,
-            },
-            capabilities: CapabilityReport {
-                completed: vec!["scene_detection".to_string()],
-                skipped: Vec::new(),
-            },
-            video: VideoReport {
-                width: 64,
-                height: 64,
-                frame_rate: "10/1".to_string(),
-                duration_seconds: Some(1.0),
-                frames_processed: 1,
-                scenes: Vec::new(),
-                observations: Vec::new(),
-            },
-            transcription: TranscriptionReport {
-                status: "skipped".to_string(),
-                text: None,
-                segments: Vec::new(),
-                message: None,
-            },
-            audio: AudioReport {
-                status: "skipped".to_string(),
-                frames_processed: 0,
-                events: Vec::new(),
-                message: None,
-            },
-            text: TextReport {
-                status: "skipped".to_string(),
-                segments_processed: 0,
-                events: Vec::new(),
-                message: None,
-            },
-            data_buckets: Vec::new(),
-        };
-        let json = serde_json::to_string(&report).unwrap();
-        assert!(json.contains("\"data_buckets\""));
-    }
-
-    #[test]
-    fn parses_collection_manifest_with_stable_item_ids() {
-        let parsed: YtDlpCollectionJson = serde_json::from_str(
-            r#"{
-                "id": "PL123",
-                "title": "Playlist",
-                "webpage_url": "https://www.youtube.com/playlist?list=PL123",
-                "entries": [
-                    {"id":"abc","title":"First","url":"abc","playlist_index":1,"duration":10.0,"upload_date":"20260101"},
-                    {"id":"abc","title":"Duplicate","url":"https://www.youtube.com/watch?v=abc2","playlist_index":2}
-                ]
-            }"#,
-        )
-        .unwrap();
-        let manifest = collection_manifest_from_yt_dlp(
-            YoutubeCollectionSource::PlaylistUrl {
-                url: "https://www.youtube.com/playlist?list=PL123".to_string(),
-            },
-            parsed,
-            None,
-        )
-        .unwrap();
-
-        assert_eq!(manifest.collection_id, "PL123");
-        assert_eq!(manifest.items[0].item_id, "abc");
-        assert_eq!(manifest.items[1].item_id, "abc-2");
-        assert_eq!(
-            manifest.items[0].source_url,
-            "https://www.youtube.com/watch?v=abc"
-        );
-    }
-
-    #[test]
-    fn metadata_filters_preserve_original_item_identity() {
-        let item = YoutubeCollectionManifestItem {
-            item_id: "stable-id".to_string(),
-            youtube_id: Some("ytid".to_string()),
-            playlist_index: Some(7),
-            title: Some("Long Rust Talk".to_string()),
-            source_url: "https://www.youtube.com/watch?v=ytid".to_string(),
-            duration_seconds: Some(600.0),
-            upload_date: Some("20260420".to_string()),
-        };
-        let filter = ManifestFilterSpec {
-            title_contains: Some("rust".to_string()),
-            playlist_index_min: Some(5),
-            playlist_index_max: Some(9),
-            upload_date_from: Some("2026-04-01".to_string()),
-            upload_date_to: Some("2026-04-30".to_string()),
-            duration_seconds_min: Some(300.0),
-            duration_seconds_max: Some(900.0),
-            ..ManifestFilterSpec::default()
-        };
-
-        assert!(metadata_filter_matches(&item, &filter));
-        assert_eq!(item.item_id, "stable-id");
-        assert_eq!(item.playlist_index, Some(7));
-    }
-
-    #[test]
-    fn local_file_filter_rejects_disallowed_extensions() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("video.txt");
-        fs::write(&path, b"not a video").unwrap();
-        let filter = LocalFileFilterSpec {
-            extension_allowlist: vec!["mp4".to_string()],
-            ..LocalFileFilterSpec::default()
-        };
-
-        assert!(!local_file_filter_matches(&path, &filter).unwrap());
-    }
-
-    #[test]
-    fn serializes_collection_report_shape_for_ui() {
-        let report = YoutubeCollectionReport {
-            workflow: "youtube_collection_analysis".to_string(),
-            collection: CollectionSummary {
-                collection_id: "collection".to_string(),
-                title: Some("Collection".to_string()),
-                source_url: "https://www.youtube.com/playlist?list=abc".to_string(),
-                discovered_items: 1,
-                selected_items: 1,
-                analyzed_items: 0,
-                failed_items: 1,
-                filtered_items: 0,
-                skipped_items: 0,
-                downloaded_items: 0,
-                total_duration_seconds: None,
-            },
-            source: YoutubeCollectionSourceReport {
-                kind: "playlist_url".to_string(),
-                url: "https://www.youtube.com/playlist?list=abc".to_string(),
-                title: Some("Collection".to_string()),
-            },
-            filters: AppliedCollectionFilters {
-                metadata: Vec::new(),
-                local_file: Vec::new(),
-            },
-            items: vec![CollectionItemReport {
-                item_id: "item".to_string(),
-                youtube_id: Some("abc".to_string()),
-                playlist_index: Some(1),
-                title: Some("Item".to_string()),
-                source_url: "https://www.youtube.com/watch?v=abc".to_string(),
-                local_video: None,
-                status: CollectionItemStatus::Failed,
-                error: Some("failed".to_string()),
-                report: None,
-            }],
-            assets: CollectionAssetReport {
-                work_dir: "work".to_string(),
-                report_path: "work/collection-analysis.json".to_string(),
-                manifest_path: "work/manifest.json".to_string(),
-            },
-            capabilities: CapabilityReport {
-                completed: vec!["collection_discovery".to_string()],
-                skipped: vec!["1 collection items failed".to_string()],
-            },
-        };
-
-        let json = serde_json::to_string(&report).unwrap();
-        let parsed: YoutubeCollectionReport = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.items[0].item_id, "item");
-        assert!(json.contains("\"collection\""));
-    }
-
-    #[test]
-    fn builds_command_configs_without_shell_parsing() {
-        let config = ExternalCommandConfig {
-            command: PathBuf::from("/bin/echo"),
-            args: vec!["hello world".to_string(), "$(not-shell)".to_string()],
-        };
-        assert_eq!(config.args.len(), 2);
-        assert_eq!(config.args[0], "hello world");
     }
 }

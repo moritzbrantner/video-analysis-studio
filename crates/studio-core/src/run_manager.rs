@@ -640,17 +640,6 @@ impl RunManager {
         self.emit_with_node(run_id, status, message, None).await;
     }
 
-    async fn emit_node(
-        &self,
-        run_id: RunId,
-        status: RunStatus,
-        node: impl Into<String>,
-        message: impl Into<String>,
-    ) {
-        self.emit_with_details(run_id, status, message, Some(node.into()), None, None)
-            .await;
-    }
-
     async fn emit_with_node(
         &self,
         run_id: RunId,

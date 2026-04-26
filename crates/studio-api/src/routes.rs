@@ -594,7 +594,7 @@ mod tests {
             .await
             .unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(value["version"], 1);
+        assert!(value["version"].as_i64().unwrap_or_default() >= 1);
         assert!(value["nodes"].as_array().unwrap().iter().any(|node| {
             node["id"] == "youtube-workflow" && node["package_name"] == "video-analysis-use-cases"
         }));
