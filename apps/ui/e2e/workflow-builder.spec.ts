@@ -6,6 +6,7 @@ import {
   openWorkflowBuilder,
   savedVersionCount,
 } from "./helpers";
+import { encodeWorkflowSharePayload, workflowShareUrl } from "../src/workflowShare";
 
 test.describe("workflow builder interactions", () => {
   test("search, add, and delete component updates graph counts", async ({ page }) => {
@@ -68,5 +69,50 @@ test.describe("workflow builder interactions", () => {
 
     const afterSaved = await savedVersionCount(page);
     expect(afterSaved).toBe(beforeSaved + 1);
+  });
+
+  test("shared links import into another browser context", async ({ page, browser }) => {
+    await openWorkflowBuilder(page);
+
+    const workflowNameInput = page.getByPlaceholder("Workflow name");
+    await workflowNameInput.fill("Shared Workflow Example");
+    await workflowNameInput.press("Enter");
+    await addComponentFromLibrary(page, "HTTP Client", "http client");
+    const sharedCounts = await graphCounts(page);
+
+    const workflowPayload = await page.evaluate(() => {
+      const raw = window.localStorage.getItem("video-analysis.workflows.v1");
+      if (!raw) {
+        throw new Error("missing workflow library");
+      }
+      const library = JSON.parse(raw) as {
+        activeWorkflowId: string;
+        workflows: Array<Record<string, unknown>>;
+      };
+      const activeWorkflow = library.workflows.find((workflow) => workflow.id === library.activeWorkflowId);
+      if (!activeWorkflow) {
+        throw new Error("missing active workflow");
+      }
+      return {
+        format: "video-analysis.workflow",
+        version: 1,
+        lastUpdated: String(activeWorkflow.updatedAt ?? new Date().toISOString()),
+        workflowName: String(activeWorkflow.name ?? "Shared Workflow"),
+        workflowKind: String(activeWorkflow.kind ?? "youtube-video"),
+        workflowVersion: Number(activeWorkflow.version ?? 1),
+        nodes: Array.isArray(activeWorkflow.nodes) ? activeWorkflow.nodes : [],
+        edges: Array.isArray(activeWorkflow.edges) ? activeWorkflow.edges : [],
+      };
+    });
+    const shareToken = await encodeWorkflowSharePayload(workflowPayload);
+    const sharedLink = workflowShareUrl(new URL(page.url()).origin, shareToken);
+
+    const recipientContext = await browser.newContext();
+    const recipientPage = await recipientContext.newPage();
+    await recipientPage.goto(sharedLink);
+    await expect(recipientPage.getByPlaceholder("Workflow name")).toHaveValue("Shared Workflow Example");
+    await expect(recipientPage).toHaveURL(/\/workflow\/[^/?#]+$/);
+    expect(await graphCounts(recipientPage)).toEqual(sharedCounts);
+    await recipientContext.close();
   });
 });

@@ -90,6 +90,12 @@ import {
   workflowTypeSignature,
   workflowTypesAssignable,
 } from "./workflowTypeSpec";
+import {
+  decodeWorkflowSharePayload,
+  encodeWorkflowSharePayload,
+  workflowShareTokenFromUrl,
+  workflowShareUrl,
+} from "./workflowShare";
 
 type WorkflowKindId = "youtube-video" | "youtube-collection" | "song-analysis" | "subtitle-generation";
 type SourceMode = "url" | "file" | "collection";
@@ -283,6 +289,10 @@ function App() {
   const [portTypeColors, setPortTypeColors] = useState<PortTypeColors>(loadPortTypeColors);
   const [hotkeyBindings, setHotkeyBindings] = useState<HotkeyBindings>(loadHotkeyBindings);
   const [workflowFocusTarget, setWorkflowFocusTarget] = useState<WorkflowFocusTarget | null>(null);
+  const [workflowBuilderMessage, setWorkflowBuilderMessage] = useState<string | null>(null);
+  const [pendingWorkflowShareToken, setPendingWorkflowShareToken] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : workflowShareTokenFromUrl(window.location.href),
+  );
   const [mainSidebarCollapsed, setMainSidebarCollapsed] = useState(() =>
     loadStoredBoolean(mainSidebarCollapsedStorageKey, false),
   );
@@ -415,6 +425,7 @@ function App() {
     const onPopState = () => {
       const nextLocation = appLocationFromPath(window.location.pathname);
       setPage(nextLocation.page);
+      setPendingWorkflowShareToken(workflowShareTokenFromUrl(window.location.href));
       const nextWorkflowId = nextLocation.workflowId;
       if (!nextWorkflowId) {
         return;
@@ -437,6 +448,53 @@ function App() {
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
+
+  useEffect(() => {
+    if (!pendingWorkflowShareToken) {
+      return;
+    }
+
+    let canceled = false;
+    (async () => {
+      try {
+        const sharedWorkflowFile = await decodeWorkflowSharePayload<SavedWorkflowFile>(pendingWorkflowShareToken);
+        if (canceled) {
+          return;
+        }
+        let importedWorkflowId = workflowLibrary.activeWorkflowId;
+        let message = "Imported shared workflow";
+        setWorkflowLibrary((currentLibrary) => {
+          const imported = importSharedWorkflowFile(currentLibrary, sharedWorkflowFile);
+          importedWorkflowId = imported.workflowId;
+          message = imported.message;
+          persistSavedWorkflowLibrary(imported.library);
+          return imported.library;
+        });
+        setPage("workflow");
+        setWorkflowBuilderMessage(message);
+        if (typeof window !== "undefined") {
+          window.history.replaceState({}, "", pathForAppPage("workflow", importedWorkflowId));
+        }
+      } catch (error) {
+        if (canceled) {
+          return;
+        }
+        setPage("workflow");
+        setWorkflowBuilderMessage(error instanceof Error ? error.message : "Could not open shared workflow link");
+        if (typeof window !== "undefined") {
+          window.history.replaceState({}, "", pathForAppPage("workflow", workflowLibrary.activeWorkflowId));
+        }
+      } finally {
+        if (!canceled) {
+          setPendingWorkflowShareToken(null);
+        }
+      }
+    })();
+
+    return () => {
+      canceled = true;
+    };
+  }, [pendingWorkflowShareToken, workflowLibrary.activeWorkflowId]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1331,6 +1389,7 @@ function App() {
                 portTypeColors={portTypeColors}
                 hotkeyBindings={hotkeyBindings}
                 focusTarget={workflowFocusTarget?.workflowId === activeWorkflow.id ? workflowFocusTarget : null}
+                externalMessage={workflowBuilderMessage}
               />
             ) : page === "data-sources" ? (
               <WorkspaceDataSourcesPage
@@ -3342,6 +3401,7 @@ function WorkflowBuilder({
   portTypeColors,
   hotkeyBindings,
   focusTarget,
+  externalMessage,
 }: {
   workflowLibrary: SavedWorkflowLibrary;
   onWorkflowLibraryChange: React.Dispatch<React.SetStateAction<SavedWorkflowLibrary>>;
@@ -3350,6 +3410,7 @@ function WorkflowBuilder({
   portTypeColors: PortTypeColors;
   hotkeyBindings: HotkeyBindings;
   focusTarget: WorkflowFocusTarget | null;
+  externalMessage: string | null;
 }) {
   const activeWorkflow = useMemo(() => activeSavedWorkflow(workflowLibrary), [workflowLibrary]);
   const initialWorkflowState = useMemo(
@@ -3368,6 +3429,7 @@ function WorkflowBuilder({
   const [contextMenu, setContextMenu] = useState<WorkflowContextMenuState | null>(null);
   const [outputConnectorMenu, setOutputConnectorMenu] = useState<WorkflowOutputConnectorMenuState | null>(null);
   const [componentSearch, setComponentSearch] = useState("");
+  const [sharingWorkflow, setSharingWorkflow] = useState(false);
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<WorkflowNodeModel, Edge> | null>(null);
   const [workflowNameDraft, setWorkflowNameDraft] = useState(activeWorkflow.name);
   const workflowAutosaveReadyRef = useRef(false);
@@ -3382,6 +3444,12 @@ function WorkflowBuilder({
   useEffect(() => {
     setWorkflowNameDraft(activeWorkflow.name);
   }, [activeWorkflow.id, activeWorkflow.name]);
+
+  useEffect(() => {
+    if (externalMessage) {
+      setBlockLibraryMessage(externalMessage);
+    }
+  }, [externalMessage]);
 
   useEffect(() => {
     const nextState = workflowStateFromSavedWorkflow(activeWorkflow);
@@ -4113,6 +4181,36 @@ function WorkflowBuilder({
     setBlockLibraryMessage(`Exported workflow with ${nodes.length} component${nodes.length === 1 ? "" : "s"}`);
   }, [activeWorkflow, edges, nodes]);
 
+  const shareWorkflow = useCallback(async () => {
+    if (nodes.length === 0) {
+      setBlockLibraryMessage("No workflow to share");
+      return;
+    }
+
+    setSharingWorkflow(true);
+    try {
+      const shareToken = await encodeWorkflowSharePayload(buildWorkflowFile(activeWorkflow, nodes, edges));
+      const shareLink =
+        typeof window === "undefined" ? null : workflowShareUrl(window.location.origin, shareToken);
+      if (!shareLink) {
+        throw new Error("Workflow sharing is unavailable in this environment");
+      }
+
+      if (await copyTextToClipboard(shareLink)) {
+        setBlockLibraryMessage("Share link copied to clipboard");
+      } else if (typeof window !== "undefined") {
+        window.prompt("Copy this workflow share link", shareLink);
+        setBlockLibraryMessage("Share link ready to copy");
+      } else {
+        throw new Error("Could not copy share link");
+      }
+    } catch (error) {
+      setBlockLibraryMessage(error instanceof Error ? error.message : "Could not create share link");
+    } finally {
+      setSharingWorkflow(false);
+    }
+  }, [activeWorkflow, edges, nodes]);
+
   const importWorkflow = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
       const file = event.target.files?.[0];
@@ -4483,6 +4581,18 @@ function WorkflowBuilder({
               >
                 <SaveIcon className="h-4 w-4" />
                 Save Version
+              </button>
+              <button
+                className={classNames(
+                  "inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50",
+                  sharingWorkflow && "cursor-wait opacity-75",
+                )}
+                onClick={() => void shareWorkflow()}
+                disabled={sharingWorkflow}
+                title="Copy a shareable workflow link"
+              >
+                {sharingWorkflow ? <SpinnerIcon className="h-4 w-4" /> : <OpenIcon className="h-4 w-4" />}
+                {sharingWorkflow ? "Sharing" : "Share"}
               </button>
               <button
                 className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
@@ -7300,34 +7410,45 @@ function comparableWorkflowEdge(edge: SavedWorkflowBlockEdge): SavedWorkflowBloc
   };
 }
 
-function downloadWorkflowJson(workflow: SavedWorkflow, nodes: WorkflowNodeModel[], edges: Edge[]) {
-  if (typeof document === "undefined") {
-    return;
-  }
-
-  const lastUpdated = new Date().toISOString();
-  const payload: SavedWorkflowFile = {
+function buildWorkflowFile(workflow: SavedWorkflow, nodes: WorkflowNodeModel[], edges: Edge[]): SavedWorkflowFile {
+  return {
     format: savedWorkflowJsonFormat,
     version: savedWorkflowJsonVersion,
-    lastUpdated,
+    lastUpdated: new Date().toISOString(),
     workflowName: workflow.name,
     workflowKind: workflow.kind,
     workflowVersion: workflow.version,
     nodes: nodes.map(serializeWorkflowNode),
     edges: edges.map(serializeWorkflowEdge),
   };
+}
+
+function downloadWorkflowJson(workflow: SavedWorkflow, nodes: WorkflowNodeModel[], edges: Edge[]) {
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  const payload = buildWorkflowFile(workflow, nodes, edges);
   const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `video-analysis-workflow-${safeFlowId(workflow.name).toLowerCase()}-v${workflow.version}-${fileDateStamp(lastUpdated)}.json`;
+  link.download =
+    `video-analysis-workflow-${safeFlowId(workflow.name).toLowerCase()}-v${workflow.version}-${fileDateStamp(payload.lastUpdated)}.json`;
   document.body.append(link);
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
 }
 
-function parseWorkflowJson(text: string): { lastUpdated: string; workflowKind?: WorkflowKindId; nodes: WorkflowNodeModel[]; edges: Edge[] } {
+function parseWorkflowJson(text: string): {
+  lastUpdated: string;
+  workflowName?: string;
+  workflowKind?: WorkflowKindId;
+  workflowVersion?: number;
+  nodes: WorkflowNodeModel[];
+  edges: Edge[];
+} {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -7345,7 +7466,18 @@ function parseWorkflowJson(text: string): { lastUpdated: string; workflowKind?: 
     throw new Error(`Unsupported workflow version ${parsed.version}`);
   }
 
-  const nodes = parsed.nodes.map((node) => ({
+  return restoreWorkflowFile(parsed);
+}
+
+function restoreWorkflowFile(file: SavedWorkflowFile): {
+  lastUpdated: string;
+  workflowName?: string;
+  workflowKind?: WorkflowKindId;
+  workflowVersion?: number;
+  nodes: WorkflowNodeModel[];
+  edges: Edge[];
+} {
+  const nodes = file.nodes.map((node) => ({
     id: node.id,
     type: "workflow" as const,
     position: { ...node.position },
@@ -7356,14 +7488,16 @@ function parseWorkflowJson(text: string): { lastUpdated: string; workflowKind?: 
     throw new Error("Workflow contains duplicate component IDs");
   }
 
-  const edges = parsed.edges.map((edge) => restoreSavedWorkflowEdge(edge, nodes));
+  const edges = file.edges.map((edge) => restoreSavedWorkflowEdge(edge, nodes));
   if (edges.some((edge) => edge === null)) {
     throw new Error("Workflow contains invalid connections");
   }
 
   return {
-    lastUpdated: parsed.lastUpdated,
-    workflowKind: parsed.workflowKind,
+    lastUpdated: file.lastUpdated,
+    workflowName: file.workflowName,
+    workflowKind: file.workflowKind,
+    workflowVersion: file.workflowVersion,
     nodes,
     edges: dedupeEdges(edges.filter((edge): edge is Edge => edge !== null)),
   };
@@ -7421,6 +7555,31 @@ function formatWorkflowTimestamp(value: string): string {
     return value;
   }
   return date.toLocaleString();
+}
+
+async function copyTextToClipboard(value: string): Promise<boolean> {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      // Fall back to the legacy copy path below.
+    }
+  }
+  if (typeof document === "undefined") {
+    return false;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "true");
+  textarea.className = "fixed left-[-9999px] top-0";
+  document.body.append(textarea);
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  return copied;
 }
 
 function loadSavedWorkflowLibrary(): SavedWorkflowLibrary {
@@ -7746,6 +7905,70 @@ function nextSavedWorkflowVersionNumber(workflow: SavedWorkflow): number {
 
 function createBlankSavedWorkflow(name = "Untitled Workflow", kind: WorkflowKindId = "youtube-video"): SavedWorkflow {
   return createSavedWorkflow(name, [], [], kind);
+}
+
+function importSharedWorkflowFile(
+  library: SavedWorkflowLibrary,
+  file: SavedWorkflowFile,
+): { library: SavedWorkflowLibrary; workflowId: string; message: string } {
+  const restored = restoreWorkflowFile(file);
+  const importedSnapshot = savedWorkflowGraphSnapshot(
+    restored.nodes.map(serializeWorkflowNode),
+    restored.edges.map(serializeWorkflowEdge),
+  );
+  const importedName = file.workflowName?.trim() || "Shared Workflow";
+  const importedKind = file.workflowKind ?? "youtube-video";
+  const existing = library.workflows.find(
+    (workflow) =>
+      workflow.kind === importedKind &&
+      workflow.name === importedName &&
+      savedWorkflowGraphSnapshot(workflow.nodes, workflow.edges) === importedSnapshot,
+  );
+
+  if (existing) {
+    return {
+      library: { ...library, activeWorkflowId: existing.id },
+      workflowId: existing.id,
+      message: `Opened shared workflow "${existing.name}"`,
+    };
+  }
+
+  const versionNumber = Math.max(1, file.workflowVersion ?? 1);
+  const importedAt = new Date().toISOString();
+  const workflowId = createWorkflowId();
+  const version: SavedWorkflowVersion = {
+    id: createWorkflowVersionId(),
+    version: versionNumber,
+    name: importedName,
+    createdAt: restored.lastUpdated || importedAt,
+    nodes: restored.nodes.map(serializeWorkflowNode),
+    edges: restored.edges.map(serializeWorkflowEdge),
+  };
+  const importedWorkflow: SavedWorkflow = {
+    id: workflowId,
+    kind: importedKind,
+    name: importedName,
+    createdAt: importedAt,
+    updatedAt: restored.lastUpdated || importedAt,
+    version: versionNumber,
+    versions: [version],
+    nodes: version.nodes.map((node) => ({
+      id: node.id,
+      position: { ...node.position },
+      data: cloneWorkflowNodeData(node.data),
+    })),
+    edges: version.edges.map((edge) => ({ ...edge })),
+  };
+
+  return {
+    library: {
+      ...library,
+      activeWorkflowId: workflowId,
+      workflows: [importedWorkflow, ...library.workflows],
+    },
+    workflowId,
+    message: `Imported shared workflow "${importedName}"`,
+  };
 }
 
 function activeSavedWorkflow(library: SavedWorkflowLibrary): SavedWorkflow {
