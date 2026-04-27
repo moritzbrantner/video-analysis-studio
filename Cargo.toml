@@ -19,7 +19,7 @@ video-analysis-detectors = { version = "0.1.0", path = "../rust-packages/crates/
 video-analysis-ffmpeg = { version = "0.1.0", path = "../rust-packages/crates/video/video-analysis-ffmpeg" }
 video-analysis-ingest = { version = "0.1.0", path = "../rust-packages/crates/video/video-analysis-ingest" }
 video-analysis-models = { version = "0.1.0", path = "../rust-packages/crates/video/video-analysis-models" }
-video-analysis-use-cases = { version = "0.1.0", path = "../rust-packages/crates/video/video-analysis-use-cases" }
+video-analysis-use-cases = { version = "0.1.0", path = "../rust-packages/prototypes/rust/video-analysis-use-cases" }
 
 anyhow = "1"
 axum = "0.8"

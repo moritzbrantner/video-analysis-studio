@@ -273,6 +273,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 name = "audio-analysis-core"
 version = "0.1.0"
 dependencies = [
+ "math-signal-core",
  "tensor-data",
  "video-analysis-core",
 ]
@@ -310,6 +311,7 @@ name = "audio-analysis-processing"
 version = "0.1.0"
 dependencies = [
  "audio-analysis-core",
+ "math-signal-core",
  "video-analysis-core",
  "video-analysis-ingest",
 ]
@@ -2564,6 +2566,21 @@ name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
+
+[[package]]
+name = "math-geometry-2d"
+version = "0.1.0"
+dependencies = [
+ "video-analysis-core",
+]
+
+[[package]]
+name = "math-signal-core"
+version = "0.1.0"
+dependencies = [
+ "numbers-core",
+ "video-analysis-core",
+]
 
 [[package]]
 name = "memchr"
@@ -4835,6 +4852,7 @@ dependencies = [
 name = "text-analysis-core"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "unicode-normalization",
  "unicode-segmentation",
  "video-analysis-core",
@@ -5608,6 +5626,7 @@ dependencies = [
 name = "video-analysis-posture"
 version = "0.1.0"
 dependencies = [
+ "math-geometry-2d",
  "serde",
  "three-d-processing-core",
  "video-analysis-core",

@@ -16,6 +16,10 @@ export function studioApiBaseUrl(config = readRuntimeConfig()) {
   return `http://${config.api.host}:${config.api.port}`;
 }
 
+export function uiDevUrl(config = readRuntimeConfig()) {
+  return `http://${resolveLoopbackHost(config.ui.host)}:${config.ui.devPort}`;
+}
+
 export function uiBaseUrl(config = readRuntimeConfig()) {
   return `http://${config.ui.e2eHost}:${config.ui.e2ePort}`;
 }
@@ -52,4 +56,14 @@ function assertPort(value, label) {
   if (!Number.isInteger(value) || value < 1 || value > 65535) {
     throw new Error(`${label} must be an integer between 1 and 65535`);
   }
+}
+
+function resolveLoopbackHost(host) {
+  if (host === "0.0.0.0") {
+    return "127.0.0.1";
+  }
+  if (host === "::" || host === "[::]") {
+    return "[::1]";
+  }
+  return host;
 }

@@ -142,7 +142,7 @@ const allowedTones = new Set([
 
 const workflowSource = readFileSync(join(import.meta.dir, "../src/main.tsx"), "utf8");
 const workflowCatalogJsonSource = readFileSync(
-  join(import.meta.dir, "../../../../rust-packages/crates/video/video-analysis-use-cases/src/workflow_catalog.json"),
+  join(import.meta.dir, "../../../../rust-packages/prototypes/rust/video-analysis-use-cases/src/workflow_catalog.json"),
   "utf8",
 );
 const workflowCatalogDefinition = JSON.parse(workflowCatalogJsonSource) as {

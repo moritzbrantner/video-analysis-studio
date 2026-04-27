@@ -26,10 +26,13 @@ bun dev
 `video-analysis-studio` and `../rust-packages` are expected to move together. They share a Rust
 toolchain baseline of `1.95`, and UI workflow catalog tests in this repo read
 `../rust-packages/crates/video/video-analysis-use-cases/src/workflow_catalog.json` directly, so
-package-side workflow catalog changes are part of this repo's compatibility surface.
+package-side workflow catalog changes are part of this repo's compatibility surface. The
+catalog currently lives at `../rust-packages/prototypes/rust/video-analysis-use-cases/src/workflow_catalog.json`.
 
-During development, run the app with `bun dev`. It reads `config/runtime.json` at startup, starts the localhost API from that config, waits for the API to come up, and then launches the Vite dev server with the configured UI port. The default UI dev port remains `8702`.
+During development, run the app with `bun dev`. It reads `config/runtime.json` at startup, starts the localhost API from that config, launches the desktop app against the shared UI dev server on the configured port, waits for that UI to come up, and opens the browser version to the same URL. The default UI dev port remains `8702`.
 
 If you need the backend separately, use `bun run api:dev`.
+
+If you only need the desktop shell with the same shared UI dev server, use `bun run desktop:dev`.
 
 The API host and port, UI dev port, and UI test port all come from `config/runtime.json`. The browser UI uses the same startup config for its default API base URL. `VITE_STUDIO_API_URL` can still override the API URL when needed.
