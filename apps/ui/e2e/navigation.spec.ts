@@ -13,9 +13,13 @@ test("can navigate between core pages and toggle the sidebar", async ({ page }) 
   await expect(page).toHaveURL(/\/workflow\/[^/]+$/);
   await expect(page.getByRole("heading", { name: "Workflow Builder" })).toBeVisible();
 
+  await page.locator('button[aria-label="Components"][title="Components"]').click();
+  await expect(page).toHaveURL(/\/components$/);
+  await expect(page.getByRole("heading", { name: "Components" })).toBeVisible();
+
   await page.locator('button[aria-label="Data Sources"][title="Data Sources"]').click();
   await expect(page).toHaveURL(/\/data-sources$/);
-  await expect(page.getByRole("heading", { name: "Data Sources" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Data Sources", level: 1 })).toBeVisible();
 
   await page.getByLabel("Collapse sidebar").click();
   await expect(page.getByLabel("Expand sidebar")).toBeVisible();
@@ -49,4 +53,51 @@ test("workflow links are shareable via workflow ids in the url", async ({ browse
   await expect(sharedPage.getByRole("heading", { name: workflowName })).toBeVisible();
 
   await sharedContext.close();
+});
+
+test("saved components can be opened for modification and testing", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "video-analysis.workflowBlocks.v1",
+      JSON.stringify([
+        {
+          id: "component-1",
+          name: "Transcript Review Block",
+          kind: "youtube-video",
+          createdAt: "2026-04-27T10:00:00.000Z",
+          category: "Pipeline",
+          tags: ["review", "transcript"],
+          nodes: [
+            {
+              id: "report-loader",
+              position: { x: 0, y: 0 },
+              data: {
+                title: "Report Loader",
+                packageName: "playwright.fixture",
+                description: "Loads a report for preview.",
+                category: "Pipeline",
+                tone: "sky",
+                inputs: [{ id: "report", label: "report", type: "json_report" }],
+                outputs: [{ id: "dashboard", label: "dashboard", type: "dashboard_view" }],
+              },
+            },
+          ],
+          edges: [],
+        },
+      ]),
+    );
+  });
+
+  await page.goto("/components");
+  await expect(page.getByRole("heading", { name: "Components" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Transcript Review Block" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Modify" }).click();
+  await expect(page).toHaveURL(/\/workflow\/[^/]+$/);
+  await expect(page.getByRole("button", { name: "Update Component" })).toBeVisible();
+
+  await page.goto("/components");
+  await page.getByRole("button", { name: "Test" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("heading", { name: "New Run" })).toBeVisible();
 });

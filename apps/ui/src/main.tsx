@@ -96,10 +96,11 @@ import {
   workflowShareTokenFromUrl,
   workflowShareUrl,
 } from "./workflowShare";
+import { workflowGraphHasCycle, workflowGraphWouldCreateCycle } from "./workflowGraph";
 
 type WorkflowKindId = "youtube-video" | "youtube-collection" | "song-analysis" | "subtitle-generation";
 type SourceMode = "url" | "file" | "collection";
-type AppPage = "analysis" | "workflow" | "data-sources" | "settings";
+type AppPage = "analysis" | "workflow" | "components" | "data-sources" | "settings";
 interface AppLocation {
   page: AppPage;
   workflowId: string | null;
@@ -281,6 +282,7 @@ function App() {
   const [dashboardLayout, setDashboardLayout] = useState<DashboardLayout>(defaultDashboardLayout);
   const [workflowLibrary, setWorkflowLibrary] = useState<SavedWorkflowLibrary>(loadSavedWorkflowLibrary);
   const [workflowRuns, setWorkflowRuns] = useState<SavedWorkflowRun[]>(loadSavedWorkflowRuns);
+  const [savedBlocks, setSavedBlocks] = useState<SavedWorkflowBlock[]>(loadSavedWorkflowBlocks);
   const [dataSources, setDataSources] = useState<DataSourceEntry[]>([]);
   const [dataSourcesLoading, setDataSourcesLoading] = useState(true);
   const [legacyLocalDataSources, setLegacyLocalDataSources] = useState(() => loadLegacyLocalDataSources());
@@ -395,6 +397,10 @@ function App() {
   useEffect(() => {
     persistHotkeyBindings(hotkeyBindings);
   }, [hotkeyBindings]);
+
+  useEffect(() => {
+    persistSavedWorkflowBlocks(savedBlocks);
+  }, [savedBlocks]);
 
   useEffect(() => {
     let canceled = false;
@@ -548,6 +554,29 @@ function App() {
     persistSavedWorkflowLibrary(library);
     setWorkflowLibrary(library);
   }, []);
+
+  const activateComponentDraft = useCallback(
+    (block: SavedWorkflowBlock, targetPage: "workflow" | "analysis") => {
+      const workflow = createComponentDraftWorkflow(block);
+      const nextLibrary: SavedWorkflowLibrary = {
+        ...workflowLibrary,
+        activeWorkflowId: workflow.id,
+        workflows: [workflow, ...workflowLibrary.workflows],
+      };
+      commitWorkflowLibrary(nextLibrary);
+      setWorkflowBuilderMessage(
+        targetPage === "analysis"
+          ? `Testing component "${block.name}" in a workflow draft`
+          : `Editing component "${block.name}" in a workflow draft`,
+      );
+      setViewMode(targetPage === "analysis" ? "run" : "home");
+      navigateToPage(targetPage, {
+        workflowId: workflow.id,
+        history: targetPage === "analysis" ? "replace" : undefined,
+      });
+    },
+    [commitWorkflowLibrary, navigateToPage, workflowLibrary],
+  );
 
   const reloadDataSources = useCallback(async () => {
     const records = await getWorkflowClient().listDataSources();
@@ -1139,6 +1168,27 @@ function App() {
                 className={classNames(
                   "flex w-full items-center justify-between rounded-lg border px-3 py-3 text-left transition",
                   mainSidebarCollapsed && "h-10 justify-center px-0 py-0",
+                  page === "components"
+                    ? "border-zinc-950 bg-zinc-950 text-white"
+                    : "border-zinc-200 bg-white text-zinc-800 hover:border-zinc-300 hover:bg-zinc-50",
+                )}
+                onClick={() => navigateToPage("components")}
+                title="Components"
+                aria-label="Components"
+              >
+                {!mainSidebarCollapsed && (
+                  <span>
+                    <span className="block text-sm font-medium">Components</span>
+                    <span className="block text-xs opacity-70">Reusable graphs</span>
+                  </span>
+                )}
+                <ComponentsIcon className="h-4 w-4 shrink-0" />
+              </button>
+              <button
+                type="button"
+                className={classNames(
+                  "flex w-full items-center justify-between rounded-lg border px-3 py-3 text-left transition",
+                  mainSidebarCollapsed && "h-10 justify-center px-0 py-0",
                   page === "data-sources"
                     ? "border-zinc-950 bg-zinc-950 text-white"
                     : "border-zinc-200 bg-white text-zinc-800 hover:border-zinc-300 hover:bg-zinc-50",
@@ -1330,6 +1380,8 @@ function App() {
                   <h1 className="text-2xl font-semibold tracking-normal text-zinc-950">
                     {page === "workflow"
                       ? "Workflow Builder"
+                      : page === "components"
+                        ? "Components"
                       : page === "data-sources"
                         ? "Data Sources"
                       : page === "settings"
@@ -1341,6 +1393,8 @@ function App() {
                   <p className="mt-1 text-sm text-zinc-500">
                     {page === "workflow"
                       ? workflowKindName(activeWorkflow.kind)
+                      : page === "components"
+                        ? "Import, export, edit, and test composed workflow components"
                       : page === "data-sources"
                         ? "Catalogs, indices, references, and datasets for workflow nodes"
                       : page === "settings"
@@ -1384,12 +1438,21 @@ function App() {
               <WorkflowBuilder
                 workflowLibrary={workflowLibrary}
                 onWorkflowLibraryChange={setWorkflowLibrary}
+                savedBlocks={savedBlocks}
+                onSavedBlocksChange={setSavedBlocks}
                 workflowCatalog={workflowCatalog}
                 dataSources={dataSources}
                 portTypeColors={portTypeColors}
                 hotkeyBindings={hotkeyBindings}
                 focusTarget={workflowFocusTarget?.workflowId === activeWorkflow.id ? workflowFocusTarget : null}
                 externalMessage={workflowBuilderMessage}
+              />
+            ) : page === "components" ? (
+              <ComponentsPage
+                savedBlocks={savedBlocks}
+                onSavedBlocksChange={setSavedBlocks}
+                onEditComponent={(block) => activateComponentDraft(block, "workflow")}
+                onTestComponent={(block) => activateComponentDraft(block, "analysis")}
               />
             ) : page === "data-sources" ? (
               <WorkspaceDataSourcesPage
@@ -2055,10 +2118,16 @@ interface SavedWorkflowBlock {
   id: string;
   name: string;
   createdAt: string;
+  kind?: WorkflowKindId;
   category?: WorkflowComponentCategory;
   tags?: string[];
   nodes: SavedWorkflowBlockNode[];
   edges: SavedWorkflowBlockEdge[];
+}
+
+interface SavedWorkflowComponentDraft {
+  blockId: string;
+  blockName: string;
 }
 
 interface SavedWorkflowFile {
@@ -2089,6 +2158,7 @@ interface SavedWorkflow {
   updatedAt: string;
   version: number;
   versions: SavedWorkflowVersion[];
+  componentDraft?: SavedWorkflowComponentDraft;
   nodes: SavedWorkflowBlockNode[];
   edges: SavedWorkflowBlockEdge[];
 }
@@ -3268,6 +3338,34 @@ const controlFlowWorkflowNodes: WorkflowNodeModel[] = [
     outputs: [port("value", "selected", "data_value")],
     tags: ["control", "flow", "boolean", "select", "conditional", "ternary", "if", "else"],
   }),
+  workflowNode("for-each-item", 0, 0, {
+    title: "For Each Item",
+    packageName: "Control Flow",
+    description: "Iterates over a bounded list inside one component and emits each item as a stream without introducing graph cycles.",
+    tone: "indigo",
+    inputs: [port("items", "items", "array_value", { valueType: { type: "array", items: { type: "any" } } })],
+    outputs: [
+      port("item", "item", "data_value", { stream: true }),
+      port("index", "index", "number_value", { stream: true }),
+    ],
+    tags: ["control", "flow", "loop", "iterate", "for each", "array", "stream"],
+  }),
+  workflowNode("while-loop", 0, 0, {
+    title: "While Loop",
+    packageName: "Control Flow",
+    description: "Repeats an internal loop while the continue condition stays true, then emits the final state when the break condition is reached.",
+    tone: "violet",
+    inputs: [
+      port("state", "initial state", "data_value"),
+      port("continue", "continue condition", "boolean_value"),
+    ],
+    outputs: [
+      port("iteration", "iteration state", "data_value", { stream: true }),
+      port("index", "iteration index", "number_value", { stream: true }),
+      port("result", "final state", "data_value"),
+    ],
+    tags: ["control", "flow", "loop", "while", "break", "condition", "iterate", "state"],
+  }),
   workflowNode("data-gate", 0, 0, {
     title: "Data Gate",
     packageName: "Control Flow",
@@ -3396,6 +3494,8 @@ const exampleWorkflowStarterTemplates = workflowSeedDefinitions.exampleStarterTe
 function WorkflowBuilder({
   workflowLibrary,
   onWorkflowLibraryChange,
+  savedBlocks,
+  onSavedBlocksChange,
   workflowCatalog,
   dataSources,
   portTypeColors,
@@ -3405,6 +3505,8 @@ function WorkflowBuilder({
 }: {
   workflowLibrary: SavedWorkflowLibrary;
   onWorkflowLibraryChange: React.Dispatch<React.SetStateAction<SavedWorkflowLibrary>>;
+  savedBlocks: SavedWorkflowBlock[];
+  onSavedBlocksChange: React.Dispatch<React.SetStateAction<SavedWorkflowBlock[]>>;
   workflowCatalog: RustWorkflowCatalog | null;
   dataSources: DataSourceEntry[];
   portTypeColors: PortTypeColors;
@@ -3420,7 +3522,6 @@ function WorkflowBuilder({
   const [nodes, setNodes] = useNodesState<WorkflowNodeModel>(initialWorkflowState.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialWorkflowState.edges);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
-  const [savedBlocks, setSavedBlocks] = useState<SavedWorkflowBlock[]>(loadSavedWorkflowBlocks);
   const [blockName, setBlockName] = useState("");
   const [blockCategory, setBlockCategory] = useState<WorkflowBlockCategoryDraft>("Auto");
   const [blockTags, setBlockTags] = useState("");
@@ -3559,8 +3660,10 @@ function WorkflowBuilder({
   }, [edges, nodes, onWorkflowLibraryChange, workflowLibrary.activeWorkflowId]);
 
   const isValidConnection = useCallback(
-    (connection: Connection | Edge) => compatibleConnection(nodes, connection),
-    [nodes],
+    (connection: Connection | Edge) =>
+      compatibleConnection(nodes, connection) &&
+      !connectionCreatesLoop(edges, connection, reconnectingEdgeRef.current?.edgeId),
+    [edges, nodes],
   );
 
   const onConnect = useCallback(
@@ -3571,6 +3674,10 @@ function WorkflowBuilder({
         setConnectionMessage(connectionMismatchMessage(sourcePort, targetPort));
         return;
       }
+      if (connectionCreatesLoop(edges, connection)) {
+        setConnectionMessage(connectionLoopMessage(nodes, connection));
+        return;
+      }
       setConnectionMessage(null);
       setEdges((currentEdges) =>
         addEdge(
@@ -3579,7 +3686,7 @@ function WorkflowBuilder({
         ),
       );
     },
-    [nodes, setEdges],
+    [edges, nodes, setEdges],
   );
 
   const onReconnect = useCallback<OnReconnect<Edge>>(
@@ -3588,6 +3695,10 @@ function WorkflowBuilder({
       const targetPort = findPort(nodes, connection.target, connection.targetHandle, "in");
       if (!sourcePort || !targetPort || !portsCompatible(sourcePort, targetPort)) {
         setConnectionMessage(connectionMismatchMessage(sourcePort, targetPort));
+        return;
+      }
+      if (connectionCreatesLoop(edges, connection, oldEdge.id)) {
+        setConnectionMessage(connectionLoopMessage(nodes, connection));
         return;
       }
       setConnectionMessage(null);
@@ -3599,7 +3710,7 @@ function WorkflowBuilder({
           : withoutOldEdge.concat(nextEdge);
       });
     },
-    [nodes, setEdges],
+    [edges, nodes, setEdges],
   );
 
   const onReconnectStart = useCallback(
@@ -3884,22 +3995,18 @@ function WorkflowBuilder({
   );
 
   const saveNodesAsBlock = useCallback((nodesToSave: WorkflowNodeModel[]) => {
-    const block = createSavedWorkflowBlock(nodesToSave, edges, blockName, blockTags, blockCategory);
+    const block = createSavedWorkflowBlock(nodesToSave, edges, blockName, blockTags, blockCategory, activeWorkflow.kind);
     if (!block) {
       return;
     }
-    setSavedBlocks((currentBlocks) => {
-      const nextBlocks = [block, ...currentBlocks].slice(0, 24);
-      persistSavedWorkflowBlocks(nextBlocks);
-      return nextBlocks;
-    });
+    onSavedBlocksChange((currentBlocks) => [block, ...currentBlocks].slice(0, 24));
     setBlockName("");
     setBlockCategory("Auto");
     setBlockTags("");
     setBlockLibraryMessage("Saved component");
     setContextMenu(null);
     setOutputConnectorMenu(null);
-  }, [blockCategory, blockName, blockTags, edges]);
+  }, [activeWorkflow.kind, blockCategory, blockName, blockTags, edges, onSavedBlocksChange]);
 
   const saveSelectedBlock = useCallback(() => {
     saveNodesAsBlock(selectedNodes);
@@ -4140,13 +4247,9 @@ function WorkflowBuilder({
   }, [setEdges, setNodes]);
 
   const deleteSavedBlock = useCallback((blockId: string) => {
-    setSavedBlocks((currentBlocks) => {
-      const nextBlocks = currentBlocks.filter((block) => block.id !== blockId);
-      persistSavedWorkflowBlocks(nextBlocks);
-      return nextBlocks;
-    });
+    onSavedBlocksChange((currentBlocks) => currentBlocks.filter((block) => block.id !== blockId));
     setBlockLibraryMessage("Deleted component");
-  }, []);
+  }, [onSavedBlocksChange]);
 
   const exportSavedBlocks = useCallback(() => {
     if (savedBlocks.length === 0) {
@@ -4165,16 +4268,41 @@ function WorkflowBuilder({
 
     try {
       const importedBlocks = parseSavedWorkflowBlocksJson(await file.text());
-      setSavedBlocks((currentBlocks) => {
-        const nextBlocks = mergeSavedWorkflowBlocks(importedBlocks, currentBlocks);
-        persistSavedWorkflowBlocks(nextBlocks);
-        return nextBlocks;
-      });
+      onSavedBlocksChange((currentBlocks) => mergeSavedWorkflowBlocks(importedBlocks, currentBlocks));
       setBlockLibraryMessage(`Loaded ${importedBlocks.length} component${importedBlocks.length === 1 ? "" : "s"}`);
     } catch (error) {
       setBlockLibraryMessage(error instanceof Error ? error.message : "Could not load components");
     }
-  }, []);
+  }, [onSavedBlocksChange]);
+
+  const updateDraftComponent = useCallback(() => {
+    const draft = activeWorkflow.componentDraft;
+    if (!draft) {
+      return;
+    }
+    const existingBlock = savedBlocks.find((block) => block.id === draft.blockId);
+    if (!existingBlock) {
+      setBlockLibraryMessage("Original component was not found");
+      return;
+    }
+    const nextBlock = buildSavedWorkflowBlock(nodes, edges, {
+      requestedName: existingBlock.name,
+      requestedTags: (existingBlock.tags ?? []).join(", "),
+      requestedCategory: existingBlock.category ?? "Reusable",
+      requestedKind: activeWorkflow.kind,
+      id: existingBlock.id,
+      createdAt: existingBlock.createdAt,
+      minNodeCount: 1,
+    });
+    if (!nextBlock) {
+      setBlockLibraryMessage("Component draft is empty");
+      return;
+    }
+    onSavedBlocksChange((currentBlocks) =>
+      currentBlocks.map((block) => (block.id === existingBlock.id ? nextBlock : block)),
+    );
+    setBlockLibraryMessage(`Updated component "${existingBlock.name}"`);
+  }, [activeWorkflow.componentDraft, activeWorkflow.kind, edges, nodes, onSavedBlocksChange, savedBlocks]);
 
   const exportWorkflow = useCallback(() => {
     downloadWorkflowJson(activeWorkflow, nodes, edges);
@@ -4780,6 +4908,7 @@ function WorkflowBuilder({
             }
           }}
           onSaveWorkflowVersion={saveActiveWorkflowVersion}
+          onUpdateDraftComponent={updateDraftComponent}
           onRestoreWorkflowVersion={restoreWorkflowVersion}
           onFocusNode={focusWorkflowNode}
         />
@@ -5023,6 +5152,389 @@ function WorkflowComponentTile({
   );
 }
 
+function ComponentsPage({
+  savedBlocks,
+  onSavedBlocksChange,
+  onEditComponent,
+  onTestComponent,
+}: {
+  savedBlocks: SavedWorkflowBlock[];
+  onSavedBlocksChange: React.Dispatch<React.SetStateAction<SavedWorkflowBlock[]>>;
+  onEditComponent: (block: SavedWorkflowBlock) => void;
+  onTestComponent: (block: SavedWorkflowBlock) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [selectedBlockId, setSelectedBlockId] = useState<string | null>(savedBlocks[0]?.id ?? null);
+  const [nameDraft, setNameDraft] = useState("");
+  const [kindDraft, setKindDraft] = useState<WorkflowKindId>("youtube-video");
+  const [categoryDraft, setCategoryDraft] = useState<WorkflowComponentCategory>("Reusable");
+  const [tagsDraft, setTagsDraft] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const filteredBlocks = useMemo(() => filterSavedWorkflowBlocks(savedBlocks, search), [savedBlocks, search]);
+  const groupedBlocks = useMemo(() => groupSavedWorkflowBlocksByCategory(filteredBlocks), [filteredBlocks]);
+  const selectedBlock = useMemo(
+    () => savedBlocks.find((block) => block.id === selectedBlockId) ?? null,
+    [savedBlocks, selectedBlockId],
+  );
+  const selectedBlockInputs = useMemo(
+    () => (selectedBlock ? savedWorkflowBlockOpenInputs(selectedBlock) : []),
+    [selectedBlock],
+  );
+  const selectedBlockOutputs = useMemo(
+    () => (selectedBlock ? savedWorkflowBlockExposedOutputs(selectedBlock) : []),
+    [selectedBlock],
+  );
+
+  useEffect(() => {
+    if (!selectedBlockId || !savedBlocks.some((block) => block.id === selectedBlockId)) {
+      setSelectedBlockId(savedBlocks[0]?.id ?? null);
+    }
+  }, [savedBlocks, selectedBlockId]);
+
+  useEffect(() => {
+    if (!selectedBlock) {
+      setNameDraft("");
+      setKindDraft("youtube-video");
+      setCategoryDraft("Reusable");
+      setTagsDraft("");
+      return;
+    }
+    setNameDraft(selectedBlock.name);
+    setKindDraft(workflowKindForSavedWorkflowBlock(selectedBlock));
+    setCategoryDraft(selectedBlock.category ?? "Reusable");
+    setTagsDraft((selectedBlock.tags ?? []).join(", "));
+  }, [selectedBlock]);
+
+  const metadataDirty = selectedBlock
+    ? nameDraft.trim() !== selectedBlock.name ||
+      kindDraft !== workflowKindForSavedWorkflowBlock(selectedBlock) ||
+      categoryDraft !== (selectedBlock.category ?? "Reusable") ||
+      normalizeWorkflowTags(tagsDraft).join("|") !== (selectedBlock.tags ?? []).join("|")
+    : false;
+
+  const saveMetadata = useCallback(() => {
+    if (!selectedBlock) {
+      return;
+    }
+    const nextName = nameDraft.trim() || selectedBlock.name;
+    onSavedBlocksChange((currentBlocks) =>
+      currentBlocks.map((block) =>
+        block.id === selectedBlock.id
+          ? normalizeSavedWorkflowBlock({
+              ...block,
+              name: nextName,
+              kind: kindDraft,
+              category: categoryDraft,
+              tags: normalizeWorkflowTags(tagsDraft),
+            })
+          : block,
+      ),
+    );
+    setMessage(`Updated component "${nextName}"`);
+  }, [categoryDraft, kindDraft, nameDraft, onSavedBlocksChange, selectedBlock, tagsDraft]);
+
+  const deleteSelected = useCallback(() => {
+    if (!selectedBlock) {
+      return;
+    }
+    if (typeof window !== "undefined" && !window.confirm(`Delete component "${selectedBlock.name}"?`)) {
+      return;
+    }
+    onSavedBlocksChange((currentBlocks) => currentBlocks.filter((block) => block.id !== selectedBlock.id));
+    setMessage(`Deleted component "${selectedBlock.name}"`);
+  }, [onSavedBlocksChange, selectedBlock]);
+
+  const exportAll = useCallback(() => {
+    if (savedBlocks.length === 0) {
+      return;
+    }
+    downloadSavedWorkflowBlocksJson(savedBlocks);
+    setMessage(`Exported ${savedBlocks.length} component${savedBlocks.length === 1 ? "" : "s"}`);
+  }, [savedBlocks]);
+
+  const exportSelected = useCallback(() => {
+    if (!selectedBlock) {
+      return;
+    }
+    downloadSavedWorkflowBlocksJson([selectedBlock]);
+    setMessage(`Exported component "${selectedBlock.name}"`);
+  }, [selectedBlock]);
+
+  const importBlocks = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    try {
+      const importedBlocks = parseSavedWorkflowBlocksJson(await file.text());
+      onSavedBlocksChange((currentBlocks) => mergeSavedWorkflowBlocks(importedBlocks, currentBlocks));
+      setSelectedBlockId(importedBlocks[0]?.id ?? null);
+      setMessage(`Loaded ${importedBlocks.length} component${importedBlocks.length === 1 ? "" : "s"}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not load components");
+    }
+  }, [onSavedBlocksChange]);
+
+  return (
+    <section className="grid gap-5 xl:grid-cols-[340px_minmax(0,1fr)]">
+      <aside className="min-h-0 rounded-lg border border-zinc-200 bg-white shadow-sm">
+        <div className="border-b border-zinc-200 px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold text-zinc-950">Library</h2>
+            <span className="rounded bg-zinc-100 px-2 py-1 text-[11px] font-medium text-zinc-600">
+              {savedBlocks.length} saved
+            </span>
+          </div>
+          <input
+            className="mt-3 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+            value={search}
+            placeholder="Search saved components"
+            onChange={(event) => setSearch(event.target.value)}
+          />
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              className={classNames(
+                "inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50",
+                savedBlocks.length === 0 && "cursor-not-allowed opacity-50",
+              )}
+              onClick={exportAll}
+              disabled={savedBlocks.length === 0}
+              title="Export all saved components"
+            >
+              <DownloadIcon className="h-4 w-4" />
+              Export
+            </button>
+            <button
+              type="button"
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+              onClick={() => fileInputRef.current?.click()}
+              title="Import components from JSON"
+            >
+              <UploadIcon className="h-4 w-4" />
+              Import
+            </button>
+          </div>
+          <input
+            ref={fileInputRef}
+            className="hidden"
+            type="file"
+            accept="application/json,.json"
+            onChange={importBlocks}
+          />
+          {message && <div className="mt-2 text-[11px] text-zinc-500">{message}</div>}
+        </div>
+        <div className="max-h-[720px] space-y-4 overflow-auto p-4">
+          {groupedBlocks.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-zinc-200 bg-zinc-50 px-4 py-6 text-sm text-zinc-500">
+              No saved components yet. Save a selection from the workflow builder or import a component JSON file.
+            </div>
+          ) : (
+            groupedBlocks.map((group) => (
+              <WorkflowComponentCategoryGroup key={group.category} category={group.category} count={group.items.length}>
+                {group.items.map((block) => {
+                  const active = selectedBlock?.id === block.id;
+                  return (
+                    <button
+                      key={block.id}
+                      type="button"
+                      className={classNames(
+                        "w-full rounded-lg border px-3 py-3 text-left transition",
+                        active
+                          ? "border-zinc-950 bg-zinc-950 text-white"
+                          : "border-zinc-200 bg-zinc-50 text-zinc-800 hover:border-zinc-300 hover:bg-white",
+                      )}
+                      onClick={() => setSelectedBlockId(block.id)}
+                      title={block.name}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold">{block.name}</div>
+                          <div className={classNames("mt-1 text-[11px]", active ? "text-zinc-200" : "text-zinc-500")}>
+                            {workflowKindName(workflowKindForSavedWorkflowBlock(block))} · {block.nodes.length} components
+                          </div>
+                        </div>
+                        <ComponentsIcon className="mt-0.5 h-4 w-4 shrink-0" />
+                      </div>
+                    </button>
+                  );
+                })}
+              </WorkflowComponentCategoryGroup>
+            ))
+          )}
+        </div>
+      </aside>
+
+      <div className="min-h-0 rounded-lg border border-zinc-200 bg-white shadow-sm">
+        <div className="border-b border-zinc-200 px-4 py-3">
+          <h2 className="text-sm font-semibold text-zinc-950">
+            {selectedBlock ? selectedBlock.name : "Select a component"}
+          </h2>
+          <p className="mt-1 text-xs text-zinc-500">
+            {selectedBlock
+              ? "Update metadata here, then open a workflow draft to modify or test the graph."
+              : "Choose a saved component from the library to inspect or edit it."}
+          </p>
+        </div>
+        {selectedBlock ? (
+          <div className="space-y-5 p-4">
+            <div className="grid gap-3 lg:grid-cols-2">
+              <Field label="Component name">
+                <input
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={nameDraft}
+                  placeholder="Component name"
+                  onChange={(event) => setNameDraft(event.target.value)}
+                />
+              </Field>
+              <Field label="Workflow type">
+                <select
+                  className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={kindDraft}
+                  onChange={(event) => setKindDraft(event.target.value as WorkflowKindId)}
+                >
+                  {workflowKinds.map((workflowKind) => (
+                    <option key={workflowKind.id} value={workflowKind.id}>
+                      {workflowKind.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Category">
+                <select
+                  className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={categoryDraft}
+                  onChange={(event) => setCategoryDraft(event.target.value as WorkflowComponentCategory)}
+                >
+                  {workflowComponentCategoryOrder.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Tags">
+                <input
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                  value={tagsDraft}
+                  placeholder="video, ingest, report"
+                  onChange={(event) => setTagsDraft(event.target.value)}
+                />
+              </Field>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              <Metric label="Components" value={String(selectedBlock.nodes.length)} />
+              <Metric label="Connections" value={String(selectedBlock.edges.length)} />
+              <Metric label="Open Inputs" value={String(selectedBlockInputs.length)} />
+              <Metric label="Open Outputs" value={String(selectedBlockOutputs.length)} />
+            </div>
+
+            <div className="grid gap-2 lg:grid-cols-5">
+              <button
+                type="button"
+                className={classNames(
+                  "inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-zinc-950 px-3 text-xs font-medium text-white shadow-sm hover:bg-zinc-800",
+                  !metadataDirty && "opacity-80",
+                )}
+                onClick={saveMetadata}
+                title={`Save metadata for ${selectedBlock.name}`}
+              >
+                <SaveIcon className="h-4 w-4" />
+                Save
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+                onClick={() => onEditComponent(selectedBlock)}
+                title={`Modify ${selectedBlock.name}`}
+              >
+                <WorkflowIcon className="h-4 w-4" />
+                Modify
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+                onClick={() => onTestComponent(selectedBlock)}
+                title={`Test ${selectedBlock.name}`}
+              >
+                <PlayIcon className="h-4 w-4" />
+                Test
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+                onClick={exportSelected}
+                title={`Export ${selectedBlock.name}`}
+              >
+                <DownloadIcon className="h-4 w-4" />
+                Export
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-rose-700 shadow-sm hover:bg-rose-50"
+                onClick={deleteSelected}
+                title={`Delete ${selectedBlock.name}`}
+              >
+                <CloseIcon className="h-4 w-4" />
+                Delete
+              </button>
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-2">
+              <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+                <div className="text-xs font-semibold uppercase text-zinc-500">Open Inputs</div>
+                <div className="mt-3 space-y-3">
+                  {selectedBlockInputs.length === 0 ? (
+                    <div className="rounded-md border border-dashed border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-500">
+                      No exposed inputs
+                    </div>
+                  ) : (
+                    selectedBlockInputs.map((input) => (
+                      <div key={`${input.nodeId}-${input.port.id}`} className="rounded-md border border-zinc-200 bg-white px-3 py-2">
+                        <div className="text-xs font-semibold text-zinc-900">{input.nodeTitle}</div>
+                        <div className="mt-1 text-[11px] text-zinc-500">{input.port.label}</div>
+                        <WorkflowTypeDetails spec={input.port.valueType} />
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+              <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+                <div className="text-xs font-semibold uppercase text-zinc-500">Open Outputs</div>
+                <div className="mt-3 space-y-3">
+                  {selectedBlockOutputs.length === 0 ? (
+                    <div className="rounded-md border border-dashed border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-500">
+                      No exposed outputs
+                    </div>
+                  ) : (
+                    selectedBlockOutputs.map((output) => (
+                      <div key={`${output.nodeId}-${output.port.id}`} className="rounded-md border border-zinc-200 bg-white px-3 py-2">
+                        <div className="text-xs font-semibold text-zinc-900">{output.nodeTitle}</div>
+                        <div className="mt-1 text-[11px] text-zinc-500">{output.port.label}</div>
+                        <WorkflowTypeDetails spec={output.port.valueType} />
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="p-6">
+            <div className="rounded-lg border border-dashed border-zinc-200 bg-zinc-50 px-4 py-8 text-sm text-zinc-500">
+              No component selected.
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function WorkflowDetailsPanel({
   workflowLibrary,
   activeWorkflow,
@@ -5054,6 +5566,7 @@ function WorkflowDetailsPanel({
   onToggleSelectedGroupOpen,
   onUngroupSelected,
   onSaveWorkflowVersion,
+  onUpdateDraftComponent,
   onRestoreWorkflowVersion,
   onFocusNode,
 }: {
@@ -5087,6 +5600,7 @@ function WorkflowDetailsPanel({
   onToggleSelectedGroupOpen: () => void;
   onUngroupSelected: () => void;
   onSaveWorkflowVersion: () => void;
+  onUpdateDraftComponent: () => void;
   onRestoreWorkflowVersion: (version: SavedWorkflowVersion) => void;
   onFocusNode: (nodeId: string) => void;
 }) {
@@ -5349,6 +5863,25 @@ function WorkflowDetailsPanel({
                 Delete
               </button>
             </div>
+            {activeWorkflow.componentDraft && (
+              <div className="rounded-lg border border-sky-200 bg-sky-50 p-3">
+                <div className="text-xs font-semibold uppercase text-sky-800">Component Draft</div>
+                <div className="mt-1 text-sm font-medium text-sky-950">{activeWorkflow.componentDraft.blockName}</div>
+                <p className="mt-1 text-xs leading-5 text-sky-900">
+                  This workflow was opened from the reusable component library. Save your graph back to update the
+                  original component.
+                </p>
+                <button
+                  type="button"
+                  className="mt-3 inline-flex h-8 w-full items-center justify-center gap-2 rounded-md bg-sky-950 px-3 text-xs font-medium text-white shadow-sm hover:bg-sky-900"
+                  onClick={onUpdateDraftComponent}
+                  title={`Update component ${activeWorkflow.componentDraft.blockName}`}
+                >
+                  <SaveIcon className="h-4 w-4" />
+                  Update Component
+                </button>
+              </div>
+            )}
             <div>
               <div className="mb-2 text-xs font-semibold uppercase text-zinc-500">Workflows</div>
               <div className="max-h-36 space-y-1 overflow-auto pr-1">
@@ -6093,14 +6626,28 @@ function PortTypeColorSettings({
   );
 }
 
-function createSavedWorkflowBlock(
+function buildSavedWorkflowBlock(
   selectedNodes: WorkflowNodeModel[],
   edges: Edge[],
-  requestedName: string,
-  requestedTags = "",
-  requestedCategory: WorkflowBlockCategoryDraft = "Auto",
+  {
+    requestedName,
+    requestedTags = "",
+    requestedCategory = "Auto",
+    requestedKind,
+    id,
+    createdAt,
+    minNodeCount = 2,
+  }: {
+    requestedName: string;
+    requestedTags?: string;
+    requestedCategory?: WorkflowBlockCategoryDraft | WorkflowComponentCategory;
+    requestedKind?: WorkflowKindId;
+    id?: string;
+    createdAt?: string;
+    minNodeCount?: number;
+  },
 ): SavedWorkflowBlock | null {
-  if (selectedNodes.length < 2) {
+  if (selectedNodes.length < minNodeCount) {
     return null;
   }
 
@@ -6113,9 +6660,10 @@ function createSavedWorkflowBlock(
     requestedCategory === "Auto" ? categoryForWorkflowNodes(selectedNodes) : workflowComponentCategory(requestedCategory);
 
   return {
-    id: createWorkflowBlockId(),
+    id: id ?? createWorkflowBlockId(),
     name,
-    createdAt: new Date().toISOString(),
+    createdAt: createdAt ?? new Date().toISOString(),
+    ...(requestedKind ? { kind: requestedKind } : {}),
     category,
     tags: tags.length > 0 ? tags : tagsForWorkflowNodes(selectedNodes),
     nodes: selectedNodes.map((node) => ({
@@ -6135,6 +6683,22 @@ function createSavedWorkflowBlock(
         targetHandle: edge.targetHandle,
     })),
   };
+}
+
+function createSavedWorkflowBlock(
+  selectedNodes: WorkflowNodeModel[],
+  edges: Edge[],
+  requestedName: string,
+  requestedTags = "",
+  requestedCategory: WorkflowBlockCategoryDraft = "Auto",
+  requestedKind?: WorkflowKindId,
+): SavedWorkflowBlock | null {
+  return buildSavedWorkflowBlock(selectedNodes, edges, {
+    requestedName,
+    requestedTags,
+    requestedCategory,
+    requestedKind,
+  });
 }
 
 function createWorkflowClipboardState(
@@ -6884,11 +7448,12 @@ function workflowInlineAttachmentForNode(
   }
 
   const existingEdgeIds = new Set(edges.map((edge) => edge.id));
+  const safeCandidates = candidates.filter(
+    (candidate) =>
+      !existingEdgeIds.has(candidate.edge.id) && !workflowGraphWouldCreateCycle(edges, candidate.edge),
+  );
   return (
-    candidates
-      .filter((candidate) => !existingEdgeIds.has(candidate.edge.id))
-      .sort((left, right) => left.score - right.score)[0] ??
-    candidates.sort((left, right) => left.score - right.score)[0] ??
+    safeCandidates.sort((left, right) => left.score - right.score)[0] ??
     null
   );
 }
@@ -7488,18 +8053,13 @@ function restoreWorkflowFile(file: SavedWorkflowFile): {
     throw new Error("Workflow contains duplicate component IDs");
   }
 
-  const edges = file.edges.map((edge) => restoreSavedWorkflowEdge(edge, nodes));
-  if (edges.some((edge) => edge === null)) {
-    throw new Error("Workflow contains invalid connections");
-  }
-
   return {
     lastUpdated: file.lastUpdated,
     workflowName: file.workflowName,
     workflowKind: file.workflowKind,
     workflowVersion: file.workflowVersion,
     nodes,
-    edges: dedupeEdges(edges.filter((edge): edge is Edge => edge !== null)),
+    edges: restoreValidWorkflowEdges(file.edges, nodes),
   };
 }
 
@@ -7536,6 +8096,21 @@ function restoreSavedWorkflowEdge(edge: SavedWorkflowBlockEdge, nodes: WorkflowN
     },
     sourcePort,
   );
+}
+
+const workflowLoopValidationMessage =
+  'Workflow contains a loop. Keep workflows acyclic and use "For Each Item" or "While Loop" for intentional iteration.';
+
+function restoreValidWorkflowEdges(serializedEdges: SavedWorkflowBlockEdge[], nodes: WorkflowNodeModel[]): Edge[] {
+  const restoredEdges = serializedEdges.map((edge) => restoreSavedWorkflowEdge(edge, nodes));
+  if (restoredEdges.some((edge) => edge === null)) {
+    throw new Error("Workflow contains invalid connections");
+  }
+  const edges = dedupeEdges(restoredEdges.filter((edge): edge is Edge => edge !== null));
+  if (workflowGraphHasCycle(edges)) {
+    throw new Error(workflowLoopValidationMessage);
+  }
+  return edges;
 }
 
 function hasUniqueWorkflowNodeIds(nodes: WorkflowNodeModel[]): boolean {
@@ -7983,10 +8558,29 @@ function workflowStateFromSavedWorkflow(workflow: SavedWorkflow): { nodes: Workf
     data: cloneWorkflowNodeData(node.data),
     selected: false,
   }));
-  const edges = workflow.edges
-    .map((edge) => restoreSavedWorkflowEdge(edge, nodes))
-    .filter((edge): edge is Edge => edge !== null);
-  return { nodes, edges: dedupeEdges(edges) };
+  return { nodes, edges: restoreValidWorkflowEdges(workflow.edges, nodes) };
+}
+
+function workflowStateFromSavedWorkflowBlock(block: SavedWorkflowBlock): { nodes: WorkflowNodeModel[]; edges: Edge[] } {
+  const nodes: WorkflowNodeModel[] = block.nodes.map((node) => ({
+    id: node.id,
+    type: "workflow" as const,
+    position: { ...node.position },
+    data: cloneWorkflowNodeData(node.data),
+    selected: false,
+  }));
+  return { nodes, edges: restoreValidWorkflowEdges(block.edges, nodes) };
+}
+
+function createComponentDraftWorkflow(block: SavedWorkflowBlock): SavedWorkflow {
+  const state = workflowStateFromSavedWorkflowBlock(block);
+  return {
+    ...createSavedWorkflow(`${block.name} Component Draft`, state.nodes, state.edges, workflowKindForSavedWorkflowBlock(block)),
+    componentDraft: {
+      blockId: block.id,
+      blockName: block.name,
+    },
+  };
 }
 
 function savedWorkflowHasValidGraph(workflow: SavedWorkflow): boolean {
@@ -7997,7 +8591,15 @@ function savedWorkflowHasValidGraph(workflow: SavedWorkflow): boolean {
     data: cloneWorkflowNodeData(node.data),
     selected: false,
   }));
-  return hasUniqueWorkflowNodeIds(nodes) && workflow.edges.every((edge) => restoreSavedWorkflowEdge(edge, nodes) !== null);
+  if (!hasUniqueWorkflowNodeIds(nodes)) {
+    return false;
+  }
+  try {
+    restoreValidWorkflowEdges(workflow.edges, nodes);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function savedWorkflowVersionHasValidGraph(version: SavedWorkflowVersion): boolean {
@@ -8008,7 +8610,34 @@ function savedWorkflowVersionHasValidGraph(version: SavedWorkflowVersion): boole
     data: cloneWorkflowNodeData(node.data),
     selected: false,
   }));
-  return hasUniqueWorkflowNodeIds(nodes) && version.edges.every((edge) => restoreSavedWorkflowEdge(edge, nodes) !== null);
+  if (!hasUniqueWorkflowNodeIds(nodes)) {
+    return false;
+  }
+  try {
+    restoreValidWorkflowEdges(version.edges, nodes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function savedWorkflowBlockHasValidGraph(block: SavedWorkflowBlock): boolean {
+  const nodes = block.nodes.map((node) => ({
+    id: node.id,
+    type: "workflow" as const,
+    position: { ...node.position },
+    data: cloneWorkflowNodeData(node.data),
+    selected: false,
+  }));
+  if (!hasUniqueWorkflowNodeIds(nodes)) {
+    return false;
+  }
+  try {
+    restoreValidWorkflowEdges(block.edges, nodes);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function loadSavedWorkflowRuns(): SavedWorkflowRun[] {
@@ -8082,7 +8711,7 @@ function loadSavedWorkflowBlocks(): SavedWorkflowBlock[] {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed.filter(isSavedWorkflowBlock).map(normalizeSavedWorkflowBlock);
+    return parsed.filter(isSavedWorkflowBlock).map(normalizeSavedWorkflowBlock).filter(savedWorkflowBlockHasValidGraph);
   } catch {
     return [];
   }
@@ -8677,7 +9306,12 @@ function parseSavedWorkflowBlocksJson(text: string): SavedWorkflowBlock[] {
   if (!candidates.every(isSavedWorkflowBlock)) {
     throw new Error("JSON does not match the component format");
   }
-  return candidates.map(cloneImportedSavedWorkflowBlock);
+  const blocks = candidates.map(cloneImportedSavedWorkflowBlock);
+  const invalidBlock = blocks.find((block) => !savedWorkflowBlockHasValidGraph(block));
+  if (invalidBlock) {
+    throw new Error(`Component "${invalidBlock.name}" contains a workflow loop`);
+  }
+  return blocks;
 }
 
 function savedWorkflowBlockJsonCandidates(value: unknown): unknown[] | null {
@@ -8701,6 +9335,7 @@ function cloneImportedSavedWorkflowBlock(block: SavedWorkflowBlock): SavedWorkfl
     id: createWorkflowBlockId(),
     name: block.name,
     createdAt: new Date().toISOString(),
+    ...(block.kind ? { kind: block.kind } : {}),
     category: workflowComponentCategory(block.category ?? categoryForSavedWorkflowBlock(block)),
     tags: normalizeWorkflowTags(block.tags ?? tagsForSavedWorkflowBlock(block)),
     nodes: block.nodes.map((node) => ({
@@ -8715,6 +9350,7 @@ function cloneImportedSavedWorkflowBlock(block: SavedWorkflowBlock): SavedWorkfl
 function normalizeSavedWorkflowBlock(block: SavedWorkflowBlock): SavedWorkflowBlock {
   return {
     ...block,
+    ...(block.kind ? { kind: block.kind } : {}),
     category: workflowComponentCategory(block.category ?? categoryForSavedWorkflowBlock(block)),
     tags: normalizeWorkflowTags(block.tags ?? tagsForSavedWorkflowBlock(block)),
     nodes: block.nodes.map((node) => ({
@@ -10350,6 +10986,21 @@ function compatibleConnection(nodes: WorkflowNodeModel[], connection: Connection
   return Boolean(sourcePort && targetPort && portsCompatible(sourcePort, targetPort));
 }
 
+function connectionCreatesLoop(
+  edges: Edge[],
+  connection: Pick<Connection, "source" | "target">,
+  ignoredEdgeId?: string | null,
+): boolean {
+  if (!connection.source || !connection.target) {
+    return false;
+  }
+  return workflowGraphWouldCreateCycle(
+    edges,
+    { source: connection.source, target: connection.target },
+    { ignoreEdgeId: ignoredEdgeId },
+  );
+}
+
 function portsCompatible(sourcePort: FlowPort, targetPort: FlowPort): boolean {
   const streamConnection = portIsStream(sourcePort) || portIsStream(targetPort);
   if (streamConnection) {
@@ -10364,6 +11015,12 @@ function connectionMismatchMessage(sourcePort: FlowPort | null, targetPort: Flow
   }
   const suggestions = [...(targetPort.suggestedAdapters ?? []), ...(sourcePort.suggestedAdapters ?? [])];
   return `${sourcePort.label} emits ${formatFlowPortType(sourcePort)}, but ${targetPort.label} expects ${formatFlowPortType(targetPort)}.${suggestions.length > 0 ? ` Try ${[...new Set(suggestions)].join(", ")}.` : ""}`;
+}
+
+function connectionLoopMessage(nodes: WorkflowNodeModel[], connection: Pick<Connection, "source" | "target">): string {
+  const sourceTitle = nodes.find((node) => node.id === connection.source)?.data.title ?? "This component";
+  const targetTitle = nodes.find((node) => node.id === connection.target)?.data.title ?? "that component";
+  return `Connecting ${sourceTitle} to ${targetTitle} would create a workflow loop. Keep workflows acyclic and use For Each Item or While Loop for intentional iteration.`;
 }
 
 function portIsStream(portValue: FlowPort): boolean {
@@ -12316,6 +12973,9 @@ function appLocationFromPath(pathname: string): AppLocation {
   if (pageSegment === "data-sources" || pageSegment === "datasources") {
     return { page: "data-sources", workflowId: null };
   }
+  if (pageSegment === "components" || pageSegment === "component-library") {
+    return { page: "components", workflowId: null };
+  }
   if (pageSegment === "settings") {
     return { page: "settings", workflowId: null };
   }
@@ -12326,6 +12986,8 @@ function pathForAppPage(page: AppPage, workflowId?: string | null): string {
   switch (page) {
     case "workflow":
       return workflowId ? `/workflow/${encodeURIComponent(workflowId)}` : "/workflow";
+    case "components":
+      return "/components";
     case "data-sources":
       return "/data-sources";
     case "settings":
@@ -12468,6 +13130,28 @@ function savedWorkflowBlockOpenInputs(block: SavedWorkflowBlock): WorkflowBlockO
         port: input,
       })),
   );
+}
+
+function savedWorkflowBlockExposedOutputs(block: SavedWorkflowBlock): WorkflowBlockOpenInput[] {
+  const outgoingHandles = new Set(
+    block.edges
+      .filter((edge) => edge.sourceHandle)
+      .map((edge) => `${edge.source}:${edge.sourceHandle}`),
+  );
+
+  return block.nodes.flatMap((node) =>
+    node.data.outputs
+      .filter((output) => !outgoingHandles.has(`${node.id}:${handleId("out", output)}`))
+      .map((output) => ({
+        nodeId: node.id,
+        nodeTitle: node.data.title,
+        port: output,
+      })),
+  );
+}
+
+function workflowKindForSavedWorkflowBlock(block: SavedWorkflowBlock): WorkflowKindId {
+  return workflowKindId(block.kind) ?? inferWorkflowKindFromName(block.name);
 }
 
 function filterSavedWorkflowBlocks(blocks: SavedWorkflowBlock[], query: string): SavedWorkflowBlock[] {
@@ -13054,6 +13738,19 @@ function WorkflowIcon({ className }: { className?: string }) {
       <path d="M7 5.5h6" strokeLinecap="round" />
       <path d="m6.3 7.2 2.6 5.1" strokeLinecap="round" />
       <path d="m13.7 7.2-2.6 5.1" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ComponentsIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className={className}>
+      <rect x="3.5" y="4" width="5.5" height="5.5" rx="1.2" />
+      <rect x="11" y="4" width="5.5" height="5.5" rx="1.2" />
+      <rect x="7.25" y="10.5" width="5.5" height="5.5" rx="1.2" />
+      <path d="M9 6.75h2" strokeLinecap="round" />
+      <path d="m10 9.5.25 1" strokeLinecap="round" />
+      <path d="m11 10.5 1.75-1" strokeLinecap="round" />
     </svg>
   );
 }
