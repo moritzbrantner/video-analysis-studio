@@ -90,6 +90,7 @@ import {
   workflowTypeSignature,
   workflowTypesAssignable,
 } from "./workflowTypeSpec";
+import { appendRunEvent, normalizeRunEvents } from "./runEvents";
 import {
   decodeWorkflowSharePayload,
   encodeWorkflowSharePayload,
@@ -261,6 +262,8 @@ const initialCollectionManifestPreview: CollectionManifestPreviewState = {
 };
 
 const mainSidebarCollapsedStorageKey = "video-analysis.mainSidebarCollapsed.v1";
+const workflowBuilderComponentsCollapsedStorageKey = "video-analysis.workflowBuilder.componentsCollapsed.v1";
+const workflowBuilderDetailsCollapsedStorageKey = "video-analysis.workflowBuilder.detailsCollapsed.v1";
 function App() {
   const [form, setForm] = useState<WorkflowRunForm>(initialForm);
   const [report, setReport] = useState<StudioReport>(sampleReport);
@@ -734,6 +737,11 @@ function App() {
     setViewMode("run");
   }, [navigateToPage, selectedWorkflowKind, transcriptionCatalog]);
 
+  const openWorkflowRunWorkspace = useCallback(() => {
+    navigateToPage("analysis");
+    setViewMode("run");
+  }, [navigateToPage]);
+
   const focusWorkflowInput = useCallback(
     (input: WorkflowRunInput) => {
       setWorkflowFocusTarget({
@@ -847,7 +855,7 @@ function App() {
           ]);
           setActiveRunRecord(record);
           setRunStatus(record.status);
-          setRunEvents(events);
+          setRunEvents(normalizeRunEvents(events));
           setLastRun(runRecordToCliRun(record, client.label, run.workflowName));
         } catch (error) {
           setRunEvents([
@@ -921,7 +929,7 @@ function App() {
       message: "cancel requested",
       timestamp: now,
     };
-    setRunEvents((events) => [...events, event]);
+    setRunEvents((events) => appendRunEvent(events, event));
     setRunStatus("canceled");
     setActiveRunRecord((record) =>
       record
@@ -1031,7 +1039,7 @@ function App() {
           setLastRun(runRecordToCliRun(run, client.label, activeWorkflow.name));
         },
         (event) => {
-          setRunEvents((events) => [...events, event]);
+          setRunEvents((events) => appendRunEvent(events, event));
           setRunOutput({ stdout: event.stdout ?? event.message, stderr: event.stderr ?? undefined });
         },
       );
@@ -1063,15 +1071,14 @@ function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setRunStatus("failed");
-      setRunEvents((events) => [
-        ...events,
-        {
+      setRunEvents((events) =>
+        appendRunEvent(events, {
           run_id: activeBackendRunId ?? localRun.id,
           status: "failed",
           message,
           timestamp: new Date().toISOString(),
-        },
-      ]);
+        }),
+      );
       updateWorkflowRun(localRun.id, (run) => ({
         ...run,
         status: "failed",
@@ -1446,6 +1453,7 @@ function App() {
                 hotkeyBindings={hotkeyBindings}
                 focusTarget={workflowFocusTarget?.workflowId === activeWorkflow.id ? workflowFocusTarget : null}
                 externalMessage={workflowBuilderMessage}
+                onOpenRunWorkspace={openWorkflowRunWorkspace}
               />
             ) : page === "components" ? (
               <ComponentsPage
@@ -3502,6 +3510,7 @@ function WorkflowBuilder({
   hotkeyBindings,
   focusTarget,
   externalMessage,
+  onOpenRunWorkspace,
 }: {
   workflowLibrary: SavedWorkflowLibrary;
   onWorkflowLibraryChange: React.Dispatch<React.SetStateAction<SavedWorkflowLibrary>>;
@@ -3513,6 +3522,7 @@ function WorkflowBuilder({
   hotkeyBindings: HotkeyBindings;
   focusTarget: WorkflowFocusTarget | null;
   externalMessage: string | null;
+  onOpenRunWorkspace: () => void;
 }) {
   const activeWorkflow = useMemo(() => activeSavedWorkflow(workflowLibrary), [workflowLibrary]);
   const initialWorkflowState = useMemo(
@@ -3533,6 +3543,12 @@ function WorkflowBuilder({
   const [sharingWorkflow, setSharingWorkflow] = useState(false);
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<WorkflowNodeModel, Edge> | null>(null);
   const [workflowNameDraft, setWorkflowNameDraft] = useState(activeWorkflow.name);
+  const [componentsCollapsed, setComponentsCollapsed] = useState(() =>
+    loadStoredBoolean(workflowBuilderComponentsCollapsedStorageKey, false),
+  );
+  const [detailsCollapsed, setDetailsCollapsed] = useState(() =>
+    loadStoredBoolean(workflowBuilderDetailsCollapsedStorageKey, false),
+  );
   const workflowAutosaveReadyRef = useRef(false);
   const workflowSelectionLoadingRef = useRef(false);
   const workflowFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -3551,6 +3567,14 @@ function WorkflowBuilder({
       setBlockLibraryMessage(externalMessage);
     }
   }, [externalMessage]);
+
+  useEffect(() => {
+    persistStoredBoolean(workflowBuilderComponentsCollapsedStorageKey, componentsCollapsed);
+  }, [componentsCollapsed]);
+
+  useEffect(() => {
+    persistStoredBoolean(workflowBuilderDetailsCollapsedStorageKey, detailsCollapsed);
+  }, [detailsCollapsed]);
 
   useEffect(() => {
     const nextState = workflowStateFromSavedWorkflow(activeWorkflow);
@@ -4671,7 +4695,19 @@ function WorkflowBuilder({
     <PortTypeColorContext.Provider value={portTypeColors}>
       <WorkflowFocusContext.Provider value={focusTarget}>
         <WorkflowOutputConnectorContext.Provider value={outputConnectorContextValue}>
-        <section className="grid min-h-[760px] gap-4 xl:grid-cols-[300px_minmax(0,1fr)_340px]" style={portTypeColorStyle}>
+        <section
+          className={classNames(
+            "grid min-h-[760px] gap-4",
+            componentsCollapsed && detailsCollapsed
+              ? "xl:grid-cols-[64px_minmax(0,1fr)_64px]"
+              : componentsCollapsed
+                ? "xl:grid-cols-[64px_minmax(0,1fr)_340px]"
+                : detailsCollapsed
+                  ? "xl:grid-cols-[300px_minmax(0,1fr)_64px]"
+                  : "xl:grid-cols-[300px_minmax(0,1fr)_340px]",
+          )}
+          style={portTypeColorStyle}
+        >
         <WorkflowComponentSelector
           search={componentSearch}
           onSearchChange={setComponentSearch}
@@ -4685,6 +4721,8 @@ function WorkflowBuilder({
           onExportSavedBlocks={exportSavedBlocks}
           onImportSavedBlocks={() => blockFileInputRef.current?.click()}
           savedBlockExportDisabled={savedBlocks.length === 0}
+          collapsed={componentsCollapsed}
+          onToggleCollapsed={() => setComponentsCollapsed((current) => !current)}
         />
         <input
           ref={blockFileInputRef}
@@ -4702,6 +4740,14 @@ function WorkflowBuilder({
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
+              <button
+                className="inline-flex h-9 items-center gap-2 rounded-lg bg-emerald-600 px-3 text-xs font-medium text-white shadow-sm hover:bg-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:ring-offset-2"
+                onClick={onOpenRunWorkspace}
+                title="Open run controls for this workflow"
+              >
+                <PlayIcon className="h-4 w-4" />
+                Run Workflow
+              </button>
               <button
                 className="inline-flex h-9 items-center gap-2 rounded-lg bg-zinc-950 px-3 text-xs font-medium text-white shadow-sm hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-2"
                 onClick={saveActiveWorkflowVersion}
@@ -4911,6 +4957,9 @@ function WorkflowBuilder({
           onUpdateDraftComponent={updateDraftComponent}
           onRestoreWorkflowVersion={restoreWorkflowVersion}
           onFocusNode={focusWorkflowNode}
+          collapsed={detailsCollapsed}
+          onToggleCollapsed={() => setDetailsCollapsed((current) => !current)}
+          onOpenRunWorkspace={onOpenRunWorkspace}
         />
       </section>
         </WorkflowOutputConnectorContext.Provider>
@@ -4932,6 +4981,8 @@ function WorkflowComponentSelector({
   onDeleteSavedBlock,
   onExportSavedBlocks,
   onImportSavedBlocks,
+  collapsed,
+  onToggleCollapsed,
 }: {
   search: string;
   onSearchChange: (value: string) => void;
@@ -4945,14 +4996,56 @@ function WorkflowComponentSelector({
   onDeleteSavedBlock: (blockId: string) => void;
   onExportSavedBlocks: () => void;
   onImportSavedBlocks: () => void;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 }) {
   const primitiveGroups = useMemo(() => groupWorkflowNodeTemplatesByCategory(primitiveNodes), [primitiveNodes]);
   const savedBlockGroups = useMemo(() => groupSavedWorkflowBlocksByCategory(savedBlocks), [savedBlocks]);
 
+  if (collapsed) {
+    return (
+      <aside className="min-h-0 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
+        <div className="flex h-full min-h-[160px] flex-row items-center justify-between gap-3 px-3 py-3 xl:min-h-0 xl:flex-col xl:justify-start xl:px-2">
+          <button
+            type="button"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-300 bg-white text-zinc-700 shadow-sm hover:bg-zinc-50"
+            onClick={onToggleCollapsed}
+            title="Expand components"
+            aria-label="Expand components"
+          >
+            <PanelExpandIcon className="h-4 w-4" />
+          </button>
+          <div className="min-w-0 flex-1 xl:flex xl:flex-1 xl:items-center xl:justify-center">
+            <div
+              className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500 xl:rotate-180"
+              style={{ writingMode: "vertical-rl" }}
+            >
+              Components
+            </div>
+          </div>
+          <span className="shrink-0 rounded bg-zinc-100 px-2 py-1 text-[11px] font-medium text-zinc-600">
+            {primitiveNodes.length + savedBlocks.length}
+          </span>
+        </div>
+      </aside>
+    );
+  }
+
   return (
     <aside className="min-h-0 rounded-lg border border-zinc-200 bg-white shadow-sm">
       <div className="border-b border-zinc-200 px-4 py-3">
-        <h2 className="text-sm font-semibold text-zinc-950">Components</h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-zinc-950">Components</h2>
+          <button
+            type="button"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-zinc-300 bg-white text-zinc-700 shadow-sm hover:bg-zinc-50"
+            onClick={onToggleCollapsed}
+            title="Collapse components"
+            aria-label="Collapse components"
+          >
+            <PanelCollapseIcon className="h-4 w-4" />
+          </button>
+        </div>
         <input
           className="mt-3 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
           value={search}
@@ -5569,6 +5662,9 @@ function WorkflowDetailsPanel({
   onUpdateDraftComponent,
   onRestoreWorkflowVersion,
   onFocusNode,
+  collapsed,
+  onToggleCollapsed,
+  onOpenRunWorkspace,
 }: {
   workflowLibrary: SavedWorkflowLibrary;
   activeWorkflow: SavedWorkflow;
@@ -5603,6 +5699,9 @@ function WorkflowDetailsPanel({
   onUpdateDraftComponent: () => void;
   onRestoreWorkflowVersion: (version: SavedWorkflowVersion) => void;
   onFocusNode: (nodeId: string) => void;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
+  onOpenRunWorkspace: () => void;
 }) {
   const selectedNode = selectedNodes.length === 1 ? selectedNodes[0] : null;
   const selectedGroupNode = selectedNode?.data.group ? selectedNode : null;
@@ -5615,19 +5714,67 @@ function WorkflowDetailsPanel({
     [edges, nodes, selectedNode],
   );
 
+  if (collapsed) {
+    return (
+      <aside className="min-h-0 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
+        <div className="flex h-full min-h-[160px] flex-row items-center justify-between gap-3 px-3 py-3 xl:min-h-0 xl:flex-col xl:justify-start xl:px-2">
+          <button
+            type="button"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-300 bg-white text-zinc-700 shadow-sm hover:bg-zinc-50"
+            onClick={onToggleCollapsed}
+            title="Expand details"
+            aria-label="Expand details"
+          >
+            <PanelExpandIcon className="h-4 w-4" />
+          </button>
+          <div className="min-w-0 flex-1 xl:flex xl:flex-1 xl:items-center xl:justify-center">
+            <div
+              className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500 xl:rotate-180"
+              style={{ writingMode: "vertical-rl" }}
+            >
+              Details
+            </div>
+          </div>
+          <button
+            type="button"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-300 bg-white text-zinc-700 shadow-sm hover:bg-zinc-50"
+            onClick={onOpenRunWorkspace}
+            title="Open run controls"
+            aria-label="Open run controls"
+          >
+            <PlayIcon className="h-4 w-4" />
+          </button>
+        </div>
+      </aside>
+    );
+  }
+
   return (
     <aside className="min-h-0 rounded-lg border border-zinc-200 bg-white shadow-sm">
       <div className="border-b border-zinc-200 px-4 py-3">
-        <h2 className="text-sm font-semibold text-zinc-950">
-          {selectedNode ? selectedNode.data.title : selectedNodes.length > 1 ? "Selection" : "Workflow Details"}
-        </h2>
-        <p className="mt-1 text-xs text-zinc-500">
-          {selectedNode
-            ? selectedNode.data.packageName
-            : selectedNodes.length > 1
-              ? `${selectedNodes.length} components selected`
-              : activeWorkflow.name}
-        </p>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-zinc-950">
+              {selectedNode ? selectedNode.data.title : selectedNodes.length > 1 ? "Selection" : "Workflow Details"}
+            </h2>
+            <p className="mt-1 text-xs text-zinc-500">
+              {selectedNode
+                ? selectedNode.data.packageName
+                : selectedNodes.length > 1
+                  ? `${selectedNodes.length} components selected`
+                  : activeWorkflow.name}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-zinc-300 bg-white text-zinc-700 shadow-sm hover:bg-zinc-50"
+            onClick={onToggleCollapsed}
+            title="Collapse details"
+            aria-label="Collapse details"
+          >
+            <PanelCollapseIcon className="h-4 w-4" />
+          </button>
+        </div>
       </div>
       <div className="max-h-[682px] space-y-5 overflow-auto p-4">
         {selectedNode ? (
@@ -5834,7 +5981,16 @@ function WorkflowDetailsPanel({
               <Metric label="Components" value={String(nodes.length)} />
               <Metric label="Connections" value={String(edges.length)} />
             </div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-4 gap-2">
+              <button
+                type="button"
+                className="inline-flex h-8 items-center justify-center gap-2 rounded-md bg-emerald-600 px-3 text-xs font-medium text-white shadow-sm hover:bg-emerald-500"
+                onClick={onOpenRunWorkspace}
+                title="Open run controls for this workflow"
+              >
+                <PlayIcon className="h-4 w-4" />
+                Run
+              </button>
               <button
                 type="button"
                 className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"

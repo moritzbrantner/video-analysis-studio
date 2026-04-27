@@ -1,0 +1,35 @@
+{
+  "workflow": "subtitle_generation",
+  "source": {
+    "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    "local_video": "/home/moenarch/moritzbrantner/video-analysis-studio/workflow-output/subtitle-generation/youtube-video.mp4"
+  },
+  "assets": {
+    "work_dir": "workflow-output/subtitle-generation",
+    "report_path": "workflow-output/subtitle-generation/subtitle-generation.json",
+    "audio_wav": "workflow-output/subtitle-generation/audio.wav",
+    "subtitle_path": "/home/moenarch/moritzbrantner/video-analysis-studio/workflow-output/subtitle-generation/youtube-video.srt"
+  },
+  "capabilities": {
+    "completed": [
+      "youtube_download",
+      "transcription",
+      "subtitle_srt"
+    ],
+    "skipped": [
+      "subtitle content: transcript contained no segments"
+    ]
+  },
+  "transcription": {
+    "status": "completed",
+    "text": null,
+    "segments": [],
+    "message": "/home/moenarch/.cache/video-analysis-studio/whisper-cpp/models/ggml-base.en.bin"
+  },
+  "subtitle": {
+    "format": "srt",
+    "path": "/home/moenarch/moritzbrantner/video-analysis-studio/workflow-output/subtitle-generation/youtube-video.srt",
+    "segments": 0,
+    "message": "written next to source video"
+  }
+}

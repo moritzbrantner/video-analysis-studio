@@ -708,10 +708,26 @@ impl RunManager {
 }
 
 fn push_event_history(history: &mut VecDeque<RunEvent>, event: RunEvent) {
+    if let Some(previous) = history.back_mut() {
+        if should_replace_progress_event(previous, &event) {
+            *previous = event;
+            return;
+        }
+    }
     if history.len() == MAX_RUN_EVENT_HISTORY {
         history.pop_front();
     }
     history.push_back(event);
+}
+
+fn should_replace_progress_event(previous: &RunEvent, next: &RunEvent) -> bool {
+    previous.progress.is_some()
+        && next.progress.is_some()
+        && previous.run_id == next.run_id
+        && previous.status == next.status
+        && previous.message == next.message
+        && previous.node == next.node
+        && previous.phase == next.phase
 }
 
 #[cfg(test)]
@@ -786,5 +802,38 @@ mod tests {
         assert!(!events
             .iter()
             .any(|event| event.status == RunStatus::Succeeded));
+    }
+
+    #[test]
+    fn matching_progress_events_replace_the_latest_history_entry() {
+        let mut history = VecDeque::new();
+        let run_id = Uuid::new_v4();
+        push_event_history(
+            &mut history,
+            RunEvent {
+                run_id,
+                status: RunStatus::Running,
+                message: "downloading whisper.cpp model `base.en`".to_string(),
+                timestamp: Utc::now(),
+                node: Some("transcription".to_string()),
+                phase: Some("downloading_model".to_string()),
+                progress: Some(0.12),
+            },
+        );
+        push_event_history(
+            &mut history,
+            RunEvent {
+                run_id,
+                status: RunStatus::Running,
+                message: "downloading whisper.cpp model `base.en`".to_string(),
+                timestamp: Utc::now(),
+                node: Some("transcription".to_string()),
+                phase: Some("downloading_model".to_string()),
+                progress: Some(0.38),
+            },
+        );
+
+        assert_eq!(history.len(), 1);
+        assert_eq!(history.back().and_then(|event| event.progress), Some(0.38));
     }
 }
