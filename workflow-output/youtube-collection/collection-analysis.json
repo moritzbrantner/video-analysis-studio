@@ -1,0 +1,42 @@
+{
+  "workflow": "youtube_collection_analysis",
+  "collection": {
+    "collection_id": "jNQXAC9IVRw",
+    "title": "Me at the zoo",
+    "source_url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    "discovered_items": 0,
+    "selected_items": 0,
+    "analyzed_items": 0,
+    "failed_items": 0,
+    "filtered_items": 0,
+    "skipped_items": 0,
+    "downloaded_items": 0,
+    "total_duration_seconds": null
+  },
+  "source": {
+    "kind": "youtube_url",
+    "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    "title": "Me at the zoo"
+  },
+  "filters": {
+    "metadata": [
+      "already downloaded: Reuse"
+    ],
+    "local_file": [
+      "extensions: mp4, mkv, webm, mov",
+      "failed probe: Failed"
+    ]
+  },
+  "items": [],
+  "assets": {
+    "work_dir": "workflow-output/youtube-collection",
+    "report_path": "workflow-output/youtube-collection/collection-analysis.json",
+    "manifest_path": "workflow-output/youtube-collection/manifest.json"
+  },
+  "capabilities": {
+    "completed": [
+      "collection_discovery"
+    ],
+    "skipped": []
+  }
+}

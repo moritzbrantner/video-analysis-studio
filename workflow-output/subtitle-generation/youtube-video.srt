@@ -1,0 +1,612 @@
+1
+00:00:00,000 --> 00:00:01,400
+Hey, you see this man right here?
+
+2
+00:00:01,400 --> 00:00:02,200
+Okay.
+
+3
+00:00:02,200 --> 00:00:03,100
+You know who it is?
+
+4
+00:00:03,100 --> 00:00:07,100
+Well, guess what, buddy, if you don't know who it is, you gotta go back to school, okay?
+
+5
+00:00:07,100 --> 00:00:10,400
+You gotta get a little bit of respect in you, because this right here is Chris Sawyer.
+
+6
+00:00:10,400 --> 00:00:15,200
+Now, you may not recognize even the name, which, hey, I don't blame you, but you should.
+
+7
+00:00:15,200 --> 00:00:19,600
+He's the man that can handcraft some assembly better than pretty much anybody else.
+
+8
+00:00:19,600 --> 00:00:22,600
+In fact, he handcrafted one of the greatest games ever.
+
+9
+00:00:22,600 --> 00:00:24,200
+Rollercoaster Tycoon.
+
+10
+00:00:24,200 --> 00:00:24,700
+Yes.
+
+11
+00:00:24,700 --> 00:00:26,900
+We all know rollercoaster Tycoon.
+
+12
+00:00:26,900 --> 00:00:27,100
+Okay.
+
+13
+00:00:27,100 --> 00:00:30,900
+That game has some serious aura as the zoomers say.
+
+14
+00:00:30,900 --> 00:00:35,000
+That game came out in 1999, six years after Doom.
+
+15
+00:00:35,000 --> 00:00:37,000
+Doom, written in C.
+
+16
+00:00:37,000 --> 00:00:39,600
+Chris Sawyer wrote his an assembly.
+
+17
+00:00:39,600 --> 00:00:41,900
+Absolutely diabolical man.
+
+18
+00:00:41,900 --> 00:00:47,300
+The rollercoaster Tycoon optimizations are insane and we're going to go over three of them in the third one.
+
+19
+00:00:47,300 --> 00:00:48,600
+It's kind of the craziest.
+
+20
+00:00:48,600 --> 00:00:51,200
+It's also just a very, very good idea.
+
+21
+00:00:51,200 --> 00:00:56,800
+Besides for being written in assembly, one thing about rollercoaster Tycoon is that it has insane
+
+22
+00:00:56,800 --> 00:00:57,700
+optimizations.
+
+23
+00:00:57,700 --> 00:01:02,100
+If you've ever played it, it was just creamy smooth on any system.
+
+24
+00:01:02,100 --> 00:01:07,000
+Now, remember, there's thousands of individual NPCs, all the little agents running through your park.
+
+25
+00:01:07,000 --> 00:01:08,100
+Yes, they were called agents at the time.
+
+26
+00:01:08,100 --> 00:01:10,700
+And look at this, the system requirements were nothing.
+
+27
+00:01:10,700 --> 00:01:14,300
+16 megabytes of RAM to put that in perspective.
+
+28
+00:01:14,300 --> 00:01:14,800
+Look at this.
+
+29
+00:01:14,800 --> 00:01:17,300
+This is node right here, a little wild true loop.
+
+30
+00:01:17,300 --> 00:01:18,100
+I'm going to do this.
+
+31
+00:01:18,100 --> 00:01:19,900
+I'm going to hit it with the old ampersand.
+
+32
+00:01:19,900 --> 00:01:26,200
+I'm going to grab that and go VM RSS and go to three, five, six, one, bam, a while loop in node.
+
+33
+00:01:27,100 --> 00:01:30,200
+Takes 57.3 megabytes of RAM.
+
+34
+00:01:30,200 --> 00:01:33,700
+Rollercoaster Tycoon less than 16.
+
+35
+00:01:33,700 --> 00:01:39,000
+Even the fabled the bud requires 41.41 megabytes for a while loop.
+
+36
+00:01:39,000 --> 00:01:41,800
+Here at Terminal, we love PlanetScale.
+
+37
+00:01:41,800 --> 00:01:48,600
+We've been using PlanetScale since day one of Terminal dot shop and had an amazing experience.
+
+38
+00:01:48,600 --> 00:01:52,300
+So if you want a database you don't have to worry about, choose PlanetScale.
+
+39
+00:01:52,300 --> 00:01:54,700
+Now, back to the video.
+
+40
+00:01:55,700 --> 00:01:58,500
+So let's go over this gold standard of optimization.
+
+41
+00:01:58,500 --> 00:02:02,500
+Now, I know a lot of you have never actually had to concern yourself with a little thing called memory.
+
+42
+00:02:02,500 --> 00:02:06,200
+Effectively unlimited and coding has largely been solved.
+
+43
+00:02:06,200 --> 00:02:08,300
+So you just don't think about these things.
+
+44
+00:02:08,300 --> 00:02:11,000
+But back in the day, you had to be a lot more careful.
+
+45
+00:02:11,000 --> 00:02:14,700
+Now, I want you to really think about something when it comes to roller coaster tycoon.
+
+46
+00:02:14,700 --> 00:02:19,700
+Every single one of the park adventurers had some sort of memory associated with them
+
+47
+00:02:19,700 --> 00:02:22,000
+because each individual one could become angry.
+
+48
+00:02:22,000 --> 00:02:23,300
+They could become nauseated.
+
+49
+00:02:23,300 --> 00:02:24,600
+They could become hungry.
+
+50
+00:02:24,700 --> 00:02:26,700
+Or they would just want to leave the park.
+
+51
+00:02:26,700 --> 00:02:30,700
+So that means every single person had to have its own memory.
+
+52
+00:02:30,700 --> 00:02:33,400
+And this is our first type of optimization.
+
+53
+00:02:33,400 --> 00:02:35,500
+It actually involves the size of money.
+
+54
+00:02:35,500 --> 00:02:41,200
+Now, individual little park adventurers, they would have a little bit less memory associated with their money.
+
+55
+00:02:41,200 --> 00:02:41,700
+Okay.
+
+56
+00:02:41,700 --> 00:02:43,100
+You don't got the memory.
+
+57
+00:02:43,100 --> 00:02:44,500
+You don't got the money.
+
+58
+00:02:44,500 --> 00:02:48,200
+And that's because the average park venture, they didn't need a ton of money.
+
+59
+00:02:48,200 --> 00:02:50,700
+They just needed something, say less than 256.
+
+60
+00:02:50,700 --> 00:02:56,200
+So you could just have one bite of memory associated with how much money that park adventure had.
+
+61
+00:02:56,200 --> 00:02:59,500
+Or in this case, it could be two bites associated with money.
+
+62
+00:02:59,500 --> 00:03:03,400
+Now remember, there could be somewhere between two to four thousand of these little guys walking around.
+
+63
+00:03:03,400 --> 00:03:08,300
+And so a singular bite saved is two to four K worth of memory.
+
+64
+00:03:08,300 --> 00:03:13,300
+You can see why that adds up a lot when you only have 16 megabytes.
+
+65
+00:03:13,300 --> 00:03:17,500
+And that is the system requirement, which means you still need to load up the source code.
+
+66
+00:03:17,500 --> 00:03:19,600
+You still need to load up all the graphic tiles.
+
+67
+00:03:19,600 --> 00:03:22,400
+You still need to have the operating system running somewhere.
+
+68
+00:03:22,400 --> 00:03:25,900
+Therefore, every single bite actually mattered.
+
+69
+00:03:25,900 --> 00:03:36,600
+So even the money representation, the position representation, everything would be squashed down such that each character could save the maximal amount of memory.
+
+70
+00:03:36,600 --> 00:03:39,900
+Now, the next one's a bit stranger, but it actually makes a ton of sense.
+
+71
+00:03:39,900 --> 00:03:44,900
+You'll see a bunch of these, these bit shifts of old value, say, by two.
+
+72
+00:03:44,900 --> 00:03:45,100
+All right.
+
+73
+00:03:45,100 --> 00:03:48,500
+So I know not all of you are going to have some binary knowledge out there.
+
+74
+00:03:48,500 --> 00:03:53,800
+Let's just face it, teaching you base two might take a bit of a moment, but you can see this right here.
+
+75
+00:03:53,800 --> 00:03:59,000
+Here is a value one zero one zero zero zero zero zero.
+
+76
+00:03:59,000 --> 00:04:01,000
+This value is actually technically five.
+
+77
+00:04:01,000 --> 00:04:02,600
+That's because this value is four.
+
+78
+00:04:02,600 --> 00:04:03,700
+This value is one.
+
+79
+00:04:03,700 --> 00:04:06,600
+You add those two together about a big, about a boom, you got yourself five.
+
+80
+00:04:06,600 --> 00:04:11,700
+Now a left shift or a shift that's represented like this is actually pretty easy to understand.
+
+81
+00:04:11,700 --> 00:04:16,300
+If I were to shift this by one, you just actually shift over all the binary.
+
+82
+00:04:16,300 --> 00:04:24,100
+So that means the original value one zero one would actually become zero one zero one because it's been shifted over by a singular bit.
+
+83
+00:04:24,100 --> 00:04:31,200
+Now this value right here is actually 10 and that's because a single left shift is the equivalent of multiplying by two.
+
+84
+00:04:31,200 --> 00:04:34,800
+A single right shift is the same thing as dividing by two.
+
+85
+00:04:34,800 --> 00:04:36,300
+Now you're probably asking, well, why would you do this?
+
+86
+00:04:36,300 --> 00:04:37,600
+Why not just multiply by two?
+
+87
+00:04:37,600 --> 00:04:39,700
+It's so much more clear for everybody.
+
+88
+00:04:39,700 --> 00:04:43,600
+Well, first off back then people knew how to kind of read a little bit of that binary.
+
+89
+00:04:43,600 --> 00:04:46,200
+But second off, the reason being is actually quite simple.
+
+90
+00:04:46,200 --> 00:04:54,300
+A singular multiplication could end up taking somewhere between three to eight cycles is what I've read on the internet to back on those machines.
+
+91
+00:04:54,300 --> 00:04:58,400
+And a divided by can take tens of cycles to be able to execute.
+
+92
+00:04:58,400 --> 00:05:08,000
+So if you can center your game around these divide by twos and multiply by twos, you can save many, many cycles, thus making your game feel much, much faster.
+
+93
+00:05:08,000 --> 00:05:11,200
+So in roller coaster, tycoon land, everything is going to be a left shift.
+
+94
+00:05:11,200 --> 00:05:16,100
+By two or the same thing as multiplying by two, multiplying by two or just multiplying by four.
+
+95
+00:05:16,100 --> 00:05:19,600
+Or you're going to see a lot of things like right shift three or divided by eight.
+
+96
+00:05:19,600 --> 00:05:31,600
+It is a very different world because everything we kind of live with today has just almost no bearing on what's actually happening underneath the hood or the CPU cycles that are being taken by individual instructions.
+
+97
+00:05:31,600 --> 00:05:37,600
+Instead, you just kind of have these really abstracted concepts and you just go, okay, I'm, hey, I'm going to create a new object.
+
+98
+00:05:37,600 --> 00:05:39,300
+I'm going to throw some keys and values in there.
+
+99
+00:05:39,300 --> 00:05:40,800
+One of those values is going to be a function.
+
+100
+00:05:40,800 --> 00:05:42,000
+I'm going to execute the function.
+
+101
+00:05:42,000 --> 00:05:50,400
+You don't actually think about all the individual little cycles and instructions that are going through your CPU at any one point, let alone the memory that you're actually taking up.
+
+102
+00:05:50,400 --> 00:05:54,600
+Now, the last optimizations, actually, the craziest optimization, which is pathfinding.
+
+103
+00:05:54,600 --> 00:06:00,700
+If you ever watch one of these little park adventurers kind of walk through the park, they just wander aimlessly.
+
+104
+00:06:00,700 --> 00:06:03,100
+They don't actually attempt to go anywhere.
+
+105
+00:06:03,100 --> 00:06:07,500
+They actually choose random directions until they find a ride that they're interested in.
+
+106
+00:06:07,500 --> 00:06:12,600
+Or if they're hungry, they actually continue to take random directions until they find food.
+
+107
+00:06:12,600 --> 00:06:17,300
+And the reason being is that pathfinding is actually really expensive.
+
+108
+00:06:17,300 --> 00:06:19,400
+Let's pretend we have the following graph right here.
+
+109
+00:06:19,400 --> 00:06:22,600
+And you are right here and you wanted to leave this park.
+
+110
+00:06:22,600 --> 00:06:23,900
+This is the exit right here.
+
+111
+00:06:23,900 --> 00:06:25,500
+How would you actually leave it?
+
+112
+00:06:25,500 --> 00:06:26,800
+For us, it's very easy.
+
+113
+00:06:26,800 --> 00:06:28,900
+We just look through and be like, "Dong, just go bam, bam, bam, bam!"
+
+114
+00:06:28,900 --> 00:06:30,900
+Well, unfortunately, computers can't do that.
+
+115
+00:06:30,900 --> 00:06:36,500
+So instead, you have to take every single one of these nodes, node being represented by one of these little circles,
+
+116
+00:06:36,500 --> 00:06:38,700
+and you have to put it into a list.
+
+117
+00:06:38,700 --> 00:06:42,700
+And then you're going to have to resolve slowly how to find the exit.
+
+118
+00:06:42,700 --> 00:06:44,700
+This is called Dijkstra's shortest path.
+
+119
+00:06:44,700 --> 00:06:51,300
+It's a decently complicated algorithm that involves a minimum heap, and you have to store a bunch of values and you have to look up stuff.
+
+120
+00:06:51,300 --> 00:06:58,900
+But for the sake of it, you can obviously see having to do this for, say, 2 to 4,000 individual agents every time they want to go somewhere
+
+121
+00:06:58,900 --> 00:07:03,800
+is clearly going to cause frame stuttering, especially on a 90 megahertz CPU.
+
+122
+00:07:03,800 --> 00:07:05,100
+So to put that into perspective,
+
+123
+00:07:05,100 --> 00:07:07,700
+that means without any instruction optimization.
+
+124
+00:07:07,700 --> 00:07:13,300
+These CPUs back then were over 30 times slower than the CPUs you have today.
+
+125
+00:07:13,300 --> 00:07:16,100
+Just peer, raw instruction power.
+
+126
+00:07:16,100 --> 00:07:19,900
+Not to mention reading from RAM significantly slower.
+
+127
+00:07:19,900 --> 00:07:26,700
+So doing this kind of thing over and over again for every single agent would just cause massive frame freezing.
+
+128
+00:07:26,700 --> 00:07:28,900
+But pathfinding did actually happen in the game.
+
+129
+00:07:28,900 --> 00:07:30,200
+It happened under two conditions.
+
+130
+00:07:30,200 --> 00:07:35,000
+One, if there was a mechanic, the mechanic would come in and try to find where in the park
+
+131
+00:07:35,000 --> 00:07:37,100
+is a ride actually broken at.
+
+132
+00:07:37,100 --> 00:07:41,900
+And they would get up to eight paths they could look into to go and find.
+
+133
+00:07:41,900 --> 00:07:47,500
+So they'd be able to go decently far, but sometimes even the mechanic couldn't find the ride and needed to go fix.
+
+134
+00:07:47,500 --> 00:07:54,200
+And two, when one of the little park adventurers needed to leave the park, they would get up to five depth to be able to leave the park.
+
+135
+00:07:54,200 --> 00:07:57,200
+And if they couldn't find that, you would end up seeing a picture like this.
+
+136
+00:07:57,200 --> 00:07:58,400
+This very familiar picture.
+
+137
+00:07:58,400 --> 00:07:59,100
+They're angry.
+
+138
+00:07:59,100 --> 00:08:00,800
+They can't find the park exit.
+
+139
+00:08:00,800 --> 00:08:11,300
+And did you know that if you sold individual customers maps, those that had maps, they'd get up to a depth of seven to be able to search for an exit, meaning you'd have happier customers not to find the rides.
+
+140
+00:08:11,300 --> 00:08:13,100
+No, no, no, no, no, which was always a little bit.
+
+141
+00:08:13,100 --> 00:08:14,700
+That is a very surprising fact.
+
+142
+00:08:14,700 --> 00:08:18,500
+They bought maps not to find rides, but to find exits.
+
+143
+00:08:18,500 --> 00:08:22,900
+And all of this was done just simply to be able to make roller coaster tycoon run.
+
+144
+00:08:22,900 --> 00:08:26,900
+The money size was to help reduce RAM usage.
+
+145
+00:08:26,900 --> 00:08:40,800
+The multiplication and division being ex-nade in favor of being able to multiply or divide by two CPU optimization, then pathfinding the ultimate CPU optimization was throughout the entire game to prevent frame stutter.
+
+146
+00:08:40,800 --> 00:08:47,300
+And all of this was done not in some high level JavaScript language, but just straight up in the Lord's language.
+
+147
+00:08:47,300 --> 00:08:47,600
+Okay.
+
+148
+00:08:47,600 --> 00:08:48,400
+Assembly.
+
+149
+00:08:48,400 --> 00:08:48,600
+All right.
+
+150
+00:08:48,600 --> 00:08:51,800
+So the next time you see this face, we're a little respect on it.
+
+151
+00:08:51,800 --> 00:08:56,800
+Okay, buddy, because this face right here, this is the face of a man who made not just one roller coaster.
+
+152
+00:08:56,800 --> 00:09:00,400
+Or tycoon, but two roller coaster tycoons in assembly.
+
+153
+00:09:00,400 --> 00:09:02,800
+The name is the prime agenda.
+

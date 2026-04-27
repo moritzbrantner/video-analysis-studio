@@ -16,20 +16,937 @@
       "transcription",
       "subtitle_srt"
     ],
-    "skipped": [
-      "subtitle content: transcript contained no segments"
-    ]
+    "skipped": []
   },
   "transcription": {
     "status": "completed",
-    "text": null,
-    "segments": [],
+    "text": "Hey, you see this man right here? Okay. You know who it is? Well, guess what, buddy, if you don't know who it is, you gotta go back to school, okay? You gotta get a little bit of respect in you, because this right here is Chris Sawyer. Now, you may not recognize even the name, which, hey, I don't blame you, but you should. He's the man that can handcraft some assembly better than pretty much anybody else. In fact, he handcrafted one of the greatest games ever. Rollercoaster Tycoon. Yes. We all know rollercoaster Tycoon. Okay. That game has some serious aura as the zoomers say. That game came out in 1999, six years after Doom. Doom, written in C. Chris Sawyer wrote his an assembly. Absolutely diabolical man. The rollercoaster Tycoon optimizations are insane and we're going to go over three of them in the third one. It's kind of the craziest. It's also just a very, very good idea. Besides for being written in assembly, one thing about rollercoaster Tycoon is that it has insane optimizations. If you've ever played it, it was just creamy smooth on any system. Now, remember, there's thousands of individual NPCs, all the little agents running through your park. Yes, they were called agents at the time. And look at this, the system requirements were nothing. 16 megabytes of RAM to put that in perspective. Look at this. This is node right here, a little wild true loop. I'm going to do this. I'm going to hit it with the old ampersand. I'm going to grab that and go VM RSS and go to three, five, six, one, bam, a while loop in node. Takes 57.3 megabytes of RAM. Rollercoaster Tycoon less than 16. Even the fabled the bud requires 41.41 megabytes for a while loop. Here at Terminal, we love PlanetScale. We've been using PlanetScale since day one of Terminal dot shop and had an amazing experience. So if you want a database you don't have to worry about, choose PlanetScale. Now, back to the video. So let's go over this gold standard of optimization. Now, I know a lot of you have never actually had to concern yourself with a little thing called memory. Effectively unlimited and coding has largely been solved. So you just don't think about these things. But back in the day, you had to be a lot more careful. Now, I want you to really think about something when it comes to roller coaster tycoon. Every single one of the park adventurers had some sort of memory associated with them because each individual one could become angry. They could become nauseated. They could become hungry. Or they would just want to leave the park. So that means every single person had to have its own memory. And this is our first type of optimization. It actually involves the size of money. Now, individual little park adventurers, they would have a little bit less memory associated with their money. Okay. You don't got the memory. You don't got the money. And that's because the average park venture, they didn't need a ton of money. They just needed something, say less than 256. So you could just have one bite of memory associated with how much money that park adventure had. Or in this case, it could be two bites associated with money. Now remember, there could be somewhere between two to four thousand of these little guys walking around. And so a singular bite saved is two to four K worth of memory. You can see why that adds up a lot when you only have 16 megabytes. And that is the system requirement, which means you still need to load up the source code. You still need to load up all the graphic tiles. You still need to have the operating system running somewhere. Therefore, every single bite actually mattered. So even the money representation, the position representation, everything would be squashed down such that each character could save the maximal amount of memory. Now, the next one's a bit stranger, but it actually makes a ton of sense. You'll see a bunch of these, these bit shifts of old value, say, by two. All right. So I know not all of you are going to have some binary knowledge out there. Let's just face it, teaching you base two might take a bit of a moment, but you can see this right here. Here is a value one zero one zero zero zero zero zero. This value is actually technically five. That's because this value is four. This value is one. You add those two together about a big, about a boom, you got yourself five. Now a left shift or a shift that's represented like this is actually pretty easy to understand. If I were to shift this by one, you just actually shift over all the binary. So that means the original value one zero one would actually become zero one zero one because it's been shifted over by a singular bit. Now this value right here is actually 10 and that's because a single left shift is the equivalent of multiplying by two. A single right shift is the same thing as dividing by two. Now you're probably asking, well, why would you do this? Why not just multiply by two? It's so much more clear for everybody. Well, first off back then people knew how to kind of read a little bit of that binary. But second off, the reason being is actually quite simple. A singular multiplication could end up taking somewhere between three to eight cycles is what I've read on the internet to back on those machines. And a divided by can take tens of cycles to be able to execute. So if you can center your game around these divide by twos and multiply by twos, you can save many, many cycles, thus making your game feel much, much faster. So in roller coaster, tycoon land, everything is going to be a left shift. By two or the same thing as multiplying by two, multiplying by two or just multiplying by four. Or you're going to see a lot of things like right shift three or divided by eight. It is a very different world because everything we kind of live with today has just almost no bearing on what's actually happening underneath the hood or the CPU cycles that are being taken by individual instructions. Instead, you just kind of have these really abstracted concepts and you just go, okay, I'm, hey, I'm going to create a new object. I'm going to throw some keys and values in there. One of those values is going to be a function. I'm going to execute the function. You don't actually think about all the individual little cycles and instructions that are going through your CPU at any one point, let alone the memory that you're actually taking up. Now, the last optimizations, actually, the craziest optimization, which is pathfinding. If you ever watch one of these little park adventurers kind of walk through the park, they just wander aimlessly. They don't actually attempt to go anywhere. They actually choose random directions until they find a ride that they're interested in. Or if they're hungry, they actually continue to take random directions until they find food. And the reason being is that pathfinding is actually really expensive. Let's pretend we have the following graph right here. And you are right here and you wanted to leave this park. This is the exit right here. How would you actually leave it? For us, it's very easy. We just look through and be like, \"Dong, just go bam, bam, bam, bam!\" Well, unfortunately, computers can't do that. So instead, you have to take every single one of these nodes, node being represented by one of these little circles, and you have to put it into a list. And then you're going to have to resolve slowly how to find the exit. This is called Dijkstra's shortest path. It's a decently complicated algorithm that involves a minimum heap, and you have to store a bunch of values and you have to look up stuff. But for the sake of it, you can obviously see having to do this for, say, 2 to 4,000 individual agents every time they want to go somewhere is clearly going to cause frame stuttering, especially on a 90 megahertz CPU. So to put that into perspective, that means without any instruction optimization. These CPUs back then were over 30 times slower than the CPUs you have today. Just peer, raw instruction power. Not to mention reading from RAM significantly slower. So doing this kind of thing over and over again for every single agent would just cause massive frame freezing. But pathfinding did actually happen in the game. It happened under two conditions. One, if there was a mechanic, the mechanic would come in and try to find where in the park is a ride actually broken at. And they would get up to eight paths they could look into to go and find. So they'd be able to go decently far, but sometimes even the mechanic couldn't find the ride and needed to go fix. And two, when one of the little park adventurers needed to leave the park, they would get up to five depth to be able to leave the park. And if they couldn't find that, you would end up seeing a picture like this. This very familiar picture. They're angry. They can't find the park exit. And did you know that if you sold individual customers maps, those that had maps, they'd get up to a depth of seven to be able to search for an exit, meaning you'd have happier customers not to find the rides. No, no, no, no, no, which was always a little bit. That is a very surprising fact. They bought maps not to find rides, but to find exits. And all of this was done just simply to be able to make roller coaster tycoon run. The money size was to help reduce RAM usage. The multiplication and division being ex-nade in favor of being able to multiply or divide by two CPU optimization, then pathfinding the ultimate CPU optimization was throughout the entire game to prevent frame stutter. And all of this was done not in some high level JavaScript language, but just straight up in the Lord's language. Okay. Assembly. All right. So the next time you see this face, we're a little respect on it. Okay, buddy, because this face right here, this is the face of a man who made not just one roller coaster. Or tycoon, but two roller coaster tycoons in assembly. The name is the prime agenda.",
+    "segments": [
+      {
+        "index": 0,
+        "start_seconds": 0.0,
+        "end_seconds": 1.4,
+        "text": "Hey, you see this man right here?"
+      },
+      {
+        "index": 1,
+        "start_seconds": 1.4,
+        "end_seconds": 2.2,
+        "text": "Okay."
+      },
+      {
+        "index": 2,
+        "start_seconds": 2.2,
+        "end_seconds": 3.1,
+        "text": "You know who it is?"
+      },
+      {
+        "index": 3,
+        "start_seconds": 3.1,
+        "end_seconds": 7.1,
+        "text": "Well, guess what, buddy, if you don't know who it is, you gotta go back to school, okay?"
+      },
+      {
+        "index": 4,
+        "start_seconds": 7.1,
+        "end_seconds": 10.4,
+        "text": "You gotta get a little bit of respect in you, because this right here is Chris Sawyer."
+      },
+      {
+        "index": 5,
+        "start_seconds": 10.4,
+        "end_seconds": 15.2,
+        "text": "Now, you may not recognize even the name, which, hey, I don't blame you, but you should."
+      },
+      {
+        "index": 6,
+        "start_seconds": 15.2,
+        "end_seconds": 19.6,
+        "text": "He's the man that can handcraft some assembly better than pretty much anybody else."
+      },
+      {
+        "index": 7,
+        "start_seconds": 19.6,
+        "end_seconds": 22.6,
+        "text": "In fact, he handcrafted one of the greatest games ever."
+      },
+      {
+        "index": 8,
+        "start_seconds": 22.6,
+        "end_seconds": 24.2,
+        "text": "Rollercoaster Tycoon."
+      },
+      {
+        "index": 9,
+        "start_seconds": 24.2,
+        "end_seconds": 24.7,
+        "text": "Yes."
+      },
+      {
+        "index": 10,
+        "start_seconds": 24.7,
+        "end_seconds": 26.9,
+        "text": "We all know rollercoaster Tycoon."
+      },
+      {
+        "index": 11,
+        "start_seconds": 26.9,
+        "end_seconds": 27.1,
+        "text": "Okay."
+      },
+      {
+        "index": 12,
+        "start_seconds": 27.1,
+        "end_seconds": 30.9,
+        "text": "That game has some serious aura as the zoomers say."
+      },
+      {
+        "index": 13,
+        "start_seconds": 30.9,
+        "end_seconds": 35.0,
+        "text": "That game came out in 1999, six years after Doom."
+      },
+      {
+        "index": 14,
+        "start_seconds": 35.0,
+        "end_seconds": 37.0,
+        "text": "Doom, written in C."
+      },
+      {
+        "index": 15,
+        "start_seconds": 37.0,
+        "end_seconds": 39.6,
+        "text": "Chris Sawyer wrote his an assembly."
+      },
+      {
+        "index": 16,
+        "start_seconds": 39.6,
+        "end_seconds": 41.9,
+        "text": "Absolutely diabolical man."
+      },
+      {
+        "index": 17,
+        "start_seconds": 41.9,
+        "end_seconds": 47.3,
+        "text": "The rollercoaster Tycoon optimizations are insane and we're going to go over three of them in the third one."
+      },
+      {
+        "index": 18,
+        "start_seconds": 47.3,
+        "end_seconds": 48.6,
+        "text": "It's kind of the craziest."
+      },
+      {
+        "index": 19,
+        "start_seconds": 48.6,
+        "end_seconds": 51.2,
+        "text": "It's also just a very, very good idea."
+      },
+      {
+        "index": 20,
+        "start_seconds": 51.2,
+        "end_seconds": 56.8,
+        "text": "Besides for being written in assembly, one thing about rollercoaster Tycoon is that it has insane"
+      },
+      {
+        "index": 21,
+        "start_seconds": 56.8,
+        "end_seconds": 57.7,
+        "text": "optimizations."
+      },
+      {
+        "index": 22,
+        "start_seconds": 57.7,
+        "end_seconds": 62.1,
+        "text": "If you've ever played it, it was just creamy smooth on any system."
+      },
+      {
+        "index": 23,
+        "start_seconds": 62.1,
+        "end_seconds": 67.0,
+        "text": "Now, remember, there's thousands of individual NPCs, all the little agents running through your park."
+      },
+      {
+        "index": 24,
+        "start_seconds": 67.0,
+        "end_seconds": 68.1,
+        "text": "Yes, they were called agents at the time."
+      },
+      {
+        "index": 25,
+        "start_seconds": 68.1,
+        "end_seconds": 70.7,
+        "text": "And look at this, the system requirements were nothing."
+      },
+      {
+        "index": 26,
+        "start_seconds": 70.7,
+        "end_seconds": 74.3,
+        "text": "16 megabytes of RAM to put that in perspective."
+      },
+      {
+        "index": 27,
+        "start_seconds": 74.3,
+        "end_seconds": 74.8,
+        "text": "Look at this."
+      },
+      {
+        "index": 28,
+        "start_seconds": 74.8,
+        "end_seconds": 77.3,
+        "text": "This is node right here, a little wild true loop."
+      },
+      {
+        "index": 29,
+        "start_seconds": 77.3,
+        "end_seconds": 78.1,
+        "text": "I'm going to do this."
+      },
+      {
+        "index": 30,
+        "start_seconds": 78.1,
+        "end_seconds": 79.9,
+        "text": "I'm going to hit it with the old ampersand."
+      },
+      {
+        "index": 31,
+        "start_seconds": 79.9,
+        "end_seconds": 86.2,
+        "text": "I'm going to grab that and go VM RSS and go to three, five, six, one, bam, a while loop in node."
+      },
+      {
+        "index": 32,
+        "start_seconds": 87.1,
+        "end_seconds": 90.2,
+        "text": "Takes 57.3 megabytes of RAM."
+      },
+      {
+        "index": 33,
+        "start_seconds": 90.2,
+        "end_seconds": 93.7,
+        "text": "Rollercoaster Tycoon less than 16."
+      },
+      {
+        "index": 34,
+        "start_seconds": 93.7,
+        "end_seconds": 99.0,
+        "text": "Even the fabled the bud requires 41.41 megabytes for a while loop."
+      },
+      {
+        "index": 35,
+        "start_seconds": 99.0,
+        "end_seconds": 101.8,
+        "text": "Here at Terminal, we love PlanetScale."
+      },
+      {
+        "index": 36,
+        "start_seconds": 101.8,
+        "end_seconds": 108.6,
+        "text": "We've been using PlanetScale since day one of Terminal dot shop and had an amazing experience."
+      },
+      {
+        "index": 37,
+        "start_seconds": 108.6,
+        "end_seconds": 112.3,
+        "text": "So if you want a database you don't have to worry about, choose PlanetScale."
+      },
+      {
+        "index": 38,
+        "start_seconds": 112.3,
+        "end_seconds": 114.7,
+        "text": "Now, back to the video."
+      },
+      {
+        "index": 39,
+        "start_seconds": 115.7,
+        "end_seconds": 118.5,
+        "text": "So let's go over this gold standard of optimization."
+      },
+      {
+        "index": 40,
+        "start_seconds": 118.5,
+        "end_seconds": 122.5,
+        "text": "Now, I know a lot of you have never actually had to concern yourself with a little thing called memory."
+      },
+      {
+        "index": 41,
+        "start_seconds": 122.5,
+        "end_seconds": 126.2,
+        "text": "Effectively unlimited and coding has largely been solved."
+      },
+      {
+        "index": 42,
+        "start_seconds": 126.2,
+        "end_seconds": 128.3,
+        "text": "So you just don't think about these things."
+      },
+      {
+        "index": 43,
+        "start_seconds": 128.3,
+        "end_seconds": 131.0,
+        "text": "But back in the day, you had to be a lot more careful."
+      },
+      {
+        "index": 44,
+        "start_seconds": 131.0,
+        "end_seconds": 134.7,
+        "text": "Now, I want you to really think about something when it comes to roller coaster tycoon."
+      },
+      {
+        "index": 45,
+        "start_seconds": 134.7,
+        "end_seconds": 139.7,
+        "text": "Every single one of the park adventurers had some sort of memory associated with them"
+      },
+      {
+        "index": 46,
+        "start_seconds": 139.7,
+        "end_seconds": 142.0,
+        "text": "because each individual one could become angry."
+      },
+      {
+        "index": 47,
+        "start_seconds": 142.0,
+        "end_seconds": 143.3,
+        "text": "They could become nauseated."
+      },
+      {
+        "index": 48,
+        "start_seconds": 143.3,
+        "end_seconds": 144.6,
+        "text": "They could become hungry."
+      },
+      {
+        "index": 49,
+        "start_seconds": 144.7,
+        "end_seconds": 146.7,
+        "text": "Or they would just want to leave the park."
+      },
+      {
+        "index": 50,
+        "start_seconds": 146.7,
+        "end_seconds": 150.7,
+        "text": "So that means every single person had to have its own memory."
+      },
+      {
+        "index": 51,
+        "start_seconds": 150.7,
+        "end_seconds": 153.4,
+        "text": "And this is our first type of optimization."
+      },
+      {
+        "index": 52,
+        "start_seconds": 153.4,
+        "end_seconds": 155.5,
+        "text": "It actually involves the size of money."
+      },
+      {
+        "index": 53,
+        "start_seconds": 155.5,
+        "end_seconds": 161.2,
+        "text": "Now, individual little park adventurers, they would have a little bit less memory associated with their money."
+      },
+      {
+        "index": 54,
+        "start_seconds": 161.2,
+        "end_seconds": 161.7,
+        "text": "Okay."
+      },
+      {
+        "index": 55,
+        "start_seconds": 161.7,
+        "end_seconds": 163.1,
+        "text": "You don't got the memory."
+      },
+      {
+        "index": 56,
+        "start_seconds": 163.1,
+        "end_seconds": 164.5,
+        "text": "You don't got the money."
+      },
+      {
+        "index": 57,
+        "start_seconds": 164.5,
+        "end_seconds": 168.2,
+        "text": "And that's because the average park venture, they didn't need a ton of money."
+      },
+      {
+        "index": 58,
+        "start_seconds": 168.2,
+        "end_seconds": 170.7,
+        "text": "They just needed something, say less than 256."
+      },
+      {
+        "index": 59,
+        "start_seconds": 170.7,
+        "end_seconds": 176.2,
+        "text": "So you could just have one bite of memory associated with how much money that park adventure had."
+      },
+      {
+        "index": 60,
+        "start_seconds": 176.2,
+        "end_seconds": 179.5,
+        "text": "Or in this case, it could be two bites associated with money."
+      },
+      {
+        "index": 61,
+        "start_seconds": 179.5,
+        "end_seconds": 183.4,
+        "text": "Now remember, there could be somewhere between two to four thousand of these little guys walking around."
+      },
+      {
+        "index": 62,
+        "start_seconds": 183.4,
+        "end_seconds": 188.3,
+        "text": "And so a singular bite saved is two to four K worth of memory."
+      },
+      {
+        "index": 63,
+        "start_seconds": 188.3,
+        "end_seconds": 193.3,
+        "text": "You can see why that adds up a lot when you only have 16 megabytes."
+      },
+      {
+        "index": 64,
+        "start_seconds": 193.3,
+        "end_seconds": 197.5,
+        "text": "And that is the system requirement, which means you still need to load up the source code."
+      },
+      {
+        "index": 65,
+        "start_seconds": 197.5,
+        "end_seconds": 199.6,
+        "text": "You still need to load up all the graphic tiles."
+      },
+      {
+        "index": 66,
+        "start_seconds": 199.6,
+        "end_seconds": 202.4,
+        "text": "You still need to have the operating system running somewhere."
+      },
+      {
+        "index": 67,
+        "start_seconds": 202.4,
+        "end_seconds": 205.9,
+        "text": "Therefore, every single bite actually mattered."
+      },
+      {
+        "index": 68,
+        "start_seconds": 205.9,
+        "end_seconds": 216.6,
+        "text": "So even the money representation, the position representation, everything would be squashed down such that each character could save the maximal amount of memory."
+      },
+      {
+        "index": 69,
+        "start_seconds": 216.6,
+        "end_seconds": 219.9,
+        "text": "Now, the next one's a bit stranger, but it actually makes a ton of sense."
+      },
+      {
+        "index": 70,
+        "start_seconds": 219.9,
+        "end_seconds": 224.9,
+        "text": "You'll see a bunch of these, these bit shifts of old value, say, by two."
+      },
+      {
+        "index": 71,
+        "start_seconds": 224.9,
+        "end_seconds": 225.1,
+        "text": "All right."
+      },
+      {
+        "index": 72,
+        "start_seconds": 225.1,
+        "end_seconds": 228.5,
+        "text": "So I know not all of you are going to have some binary knowledge out there."
+      },
+      {
+        "index": 73,
+        "start_seconds": 228.5,
+        "end_seconds": 233.8,
+        "text": "Let's just face it, teaching you base two might take a bit of a moment, but you can see this right here."
+      },
+      {
+        "index": 74,
+        "start_seconds": 233.8,
+        "end_seconds": 239.0,
+        "text": "Here is a value one zero one zero zero zero zero zero."
+      },
+      {
+        "index": 75,
+        "start_seconds": 239.0,
+        "end_seconds": 241.0,
+        "text": "This value is actually technically five."
+      },
+      {
+        "index": 76,
+        "start_seconds": 241.0,
+        "end_seconds": 242.6,
+        "text": "That's because this value is four."
+      },
+      {
+        "index": 77,
+        "start_seconds": 242.6,
+        "end_seconds": 243.7,
+        "text": "This value is one."
+      },
+      {
+        "index": 78,
+        "start_seconds": 243.7,
+        "end_seconds": 246.6,
+        "text": "You add those two together about a big, about a boom, you got yourself five."
+      },
+      {
+        "index": 79,
+        "start_seconds": 246.6,
+        "end_seconds": 251.7,
+        "text": "Now a left shift or a shift that's represented like this is actually pretty easy to understand."
+      },
+      {
+        "index": 80,
+        "start_seconds": 251.7,
+        "end_seconds": 256.3,
+        "text": "If I were to shift this by one, you just actually shift over all the binary."
+      },
+      {
+        "index": 81,
+        "start_seconds": 256.3,
+        "end_seconds": 264.1,
+        "text": "So that means the original value one zero one would actually become zero one zero one because it's been shifted over by a singular bit."
+      },
+      {
+        "index": 82,
+        "start_seconds": 264.1,
+        "end_seconds": 271.2,
+        "text": "Now this value right here is actually 10 and that's because a single left shift is the equivalent of multiplying by two."
+      },
+      {
+        "index": 83,
+        "start_seconds": 271.2,
+        "end_seconds": 274.8,
+        "text": "A single right shift is the same thing as dividing by two."
+      },
+      {
+        "index": 84,
+        "start_seconds": 274.8,
+        "end_seconds": 276.3,
+        "text": "Now you're probably asking, well, why would you do this?"
+      },
+      {
+        "index": 85,
+        "start_seconds": 276.3,
+        "end_seconds": 277.6,
+        "text": "Why not just multiply by two?"
+      },
+      {
+        "index": 86,
+        "start_seconds": 277.6,
+        "end_seconds": 279.7,
+        "text": "It's so much more clear for everybody."
+      },
+      {
+        "index": 87,
+        "start_seconds": 279.7,
+        "end_seconds": 283.6,
+        "text": "Well, first off back then people knew how to kind of read a little bit of that binary."
+      },
+      {
+        "index": 88,
+        "start_seconds": 283.6,
+        "end_seconds": 286.2,
+        "text": "But second off, the reason being is actually quite simple."
+      },
+      {
+        "index": 89,
+        "start_seconds": 286.2,
+        "end_seconds": 294.3,
+        "text": "A singular multiplication could end up taking somewhere between three to eight cycles is what I've read on the internet to back on those machines."
+      },
+      {
+        "index": 90,
+        "start_seconds": 294.3,
+        "end_seconds": 298.4,
+        "text": "And a divided by can take tens of cycles to be able to execute."
+      },
+      {
+        "index": 91,
+        "start_seconds": 298.4,
+        "end_seconds": 308.0,
+        "text": "So if you can center your game around these divide by twos and multiply by twos, you can save many, many cycles, thus making your game feel much, much faster."
+      },
+      {
+        "index": 92,
+        "start_seconds": 308.0,
+        "end_seconds": 311.2,
+        "text": "So in roller coaster, tycoon land, everything is going to be a left shift."
+      },
+      {
+        "index": 93,
+        "start_seconds": 311.2,
+        "end_seconds": 316.1,
+        "text": "By two or the same thing as multiplying by two, multiplying by two or just multiplying by four."
+      },
+      {
+        "index": 94,
+        "start_seconds": 316.1,
+        "end_seconds": 319.6,
+        "text": "Or you're going to see a lot of things like right shift three or divided by eight."
+      },
+      {
+        "index": 95,
+        "start_seconds": 319.6,
+        "end_seconds": 331.6,
+        "text": "It is a very different world because everything we kind of live with today has just almost no bearing on what's actually happening underneath the hood or the CPU cycles that are being taken by individual instructions."
+      },
+      {
+        "index": 96,
+        "start_seconds": 331.6,
+        "end_seconds": 337.6,
+        "text": "Instead, you just kind of have these really abstracted concepts and you just go, okay, I'm, hey, I'm going to create a new object."
+      },
+      {
+        "index": 97,
+        "start_seconds": 337.6,
+        "end_seconds": 339.3,
+        "text": "I'm going to throw some keys and values in there."
+      },
+      {
+        "index": 98,
+        "start_seconds": 339.3,
+        "end_seconds": 340.8,
+        "text": "One of those values is going to be a function."
+      },
+      {
+        "index": 99,
+        "start_seconds": 340.8,
+        "end_seconds": 342.0,
+        "text": "I'm going to execute the function."
+      },
+      {
+        "index": 100,
+        "start_seconds": 342.0,
+        "end_seconds": 350.4,
+        "text": "You don't actually think about all the individual little cycles and instructions that are going through your CPU at any one point, let alone the memory that you're actually taking up."
+      },
+      {
+        "index": 101,
+        "start_seconds": 350.4,
+        "end_seconds": 354.6,
+        "text": "Now, the last optimizations, actually, the craziest optimization, which is pathfinding."
+      },
+      {
+        "index": 102,
+        "start_seconds": 354.6,
+        "end_seconds": 360.7,
+        "text": "If you ever watch one of these little park adventurers kind of walk through the park, they just wander aimlessly."
+      },
+      {
+        "index": 103,
+        "start_seconds": 360.7,
+        "end_seconds": 363.1,
+        "text": "They don't actually attempt to go anywhere."
+      },
+      {
+        "index": 104,
+        "start_seconds": 363.1,
+        "end_seconds": 367.5,
+        "text": "They actually choose random directions until they find a ride that they're interested in."
+      },
+      {
+        "index": 105,
+        "start_seconds": 367.5,
+        "end_seconds": 372.6,
+        "text": "Or if they're hungry, they actually continue to take random directions until they find food."
+      },
+      {
+        "index": 106,
+        "start_seconds": 372.6,
+        "end_seconds": 377.3,
+        "text": "And the reason being is that pathfinding is actually really expensive."
+      },
+      {
+        "index": 107,
+        "start_seconds": 377.3,
+        "end_seconds": 379.4,
+        "text": "Let's pretend we have the following graph right here."
+      },
+      {
+        "index": 108,
+        "start_seconds": 379.4,
+        "end_seconds": 382.6,
+        "text": "And you are right here and you wanted to leave this park."
+      },
+      {
+        "index": 109,
+        "start_seconds": 382.6,
+        "end_seconds": 383.9,
+        "text": "This is the exit right here."
+      },
+      {
+        "index": 110,
+        "start_seconds": 383.9,
+        "end_seconds": 385.5,
+        "text": "How would you actually leave it?"
+      },
+      {
+        "index": 111,
+        "start_seconds": 385.5,
+        "end_seconds": 386.8,
+        "text": "For us, it's very easy."
+      },
+      {
+        "index": 112,
+        "start_seconds": 386.8,
+        "end_seconds": 388.9,
+        "text": "We just look through and be like, \"Dong, just go bam, bam, bam, bam!\""
+      },
+      {
+        "index": 113,
+        "start_seconds": 388.9,
+        "end_seconds": 390.9,
+        "text": "Well, unfortunately, computers can't do that."
+      },
+      {
+        "index": 114,
+        "start_seconds": 390.9,
+        "end_seconds": 396.5,
+        "text": "So instead, you have to take every single one of these nodes, node being represented by one of these little circles,"
+      },
+      {
+        "index": 115,
+        "start_seconds": 396.5,
+        "end_seconds": 398.7,
+        "text": "and you have to put it into a list."
+      },
+      {
+        "index": 116,
+        "start_seconds": 398.7,
+        "end_seconds": 402.7,
+        "text": "And then you're going to have to resolve slowly how to find the exit."
+      },
+      {
+        "index": 117,
+        "start_seconds": 402.7,
+        "end_seconds": 404.7,
+        "text": "This is called Dijkstra's shortest path."
+      },
+      {
+        "index": 118,
+        "start_seconds": 404.7,
+        "end_seconds": 411.3,
+        "text": "It's a decently complicated algorithm that involves a minimum heap, and you have to store a bunch of values and you have to look up stuff."
+      },
+      {
+        "index": 119,
+        "start_seconds": 411.3,
+        "end_seconds": 418.9,
+        "text": "But for the sake of it, you can obviously see having to do this for, say, 2 to 4,000 individual agents every time they want to go somewhere"
+      },
+      {
+        "index": 120,
+        "start_seconds": 418.9,
+        "end_seconds": 423.8,
+        "text": "is clearly going to cause frame stuttering, especially on a 90 megahertz CPU."
+      },
+      {
+        "index": 121,
+        "start_seconds": 423.8,
+        "end_seconds": 425.1,
+        "text": "So to put that into perspective,"
+      },
+      {
+        "index": 122,
+        "start_seconds": 425.1,
+        "end_seconds": 427.7,
+        "text": "that means without any instruction optimization."
+      },
+      {
+        "index": 123,
+        "start_seconds": 427.7,
+        "end_seconds": 433.3,
+        "text": "These CPUs back then were over 30 times slower than the CPUs you have today."
+      },
+      {
+        "index": 124,
+        "start_seconds": 433.3,
+        "end_seconds": 436.1,
+        "text": "Just peer, raw instruction power."
+      },
+      {
+        "index": 125,
+        "start_seconds": 436.1,
+        "end_seconds": 439.9,
+        "text": "Not to mention reading from RAM significantly slower."
+      },
+      {
+        "index": 126,
+        "start_seconds": 439.9,
+        "end_seconds": 446.7,
+        "text": "So doing this kind of thing over and over again for every single agent would just cause massive frame freezing."
+      },
+      {
+        "index": 127,
+        "start_seconds": 446.7,
+        "end_seconds": 448.9,
+        "text": "But pathfinding did actually happen in the game."
+      },
+      {
+        "index": 128,
+        "start_seconds": 448.9,
+        "end_seconds": 450.2,
+        "text": "It happened under two conditions."
+      },
+      {
+        "index": 129,
+        "start_seconds": 450.2,
+        "end_seconds": 455.0,
+        "text": "One, if there was a mechanic, the mechanic would come in and try to find where in the park"
+      },
+      {
+        "index": 130,
+        "start_seconds": 455.0,
+        "end_seconds": 457.1,
+        "text": "is a ride actually broken at."
+      },
+      {
+        "index": 131,
+        "start_seconds": 457.1,
+        "end_seconds": 461.9,
+        "text": "And they would get up to eight paths they could look into to go and find."
+      },
+      {
+        "index": 132,
+        "start_seconds": 461.9,
+        "end_seconds": 467.5,
+        "text": "So they'd be able to go decently far, but sometimes even the mechanic couldn't find the ride and needed to go fix."
+      },
+      {
+        "index": 133,
+        "start_seconds": 467.5,
+        "end_seconds": 474.2,
+        "text": "And two, when one of the little park adventurers needed to leave the park, they would get up to five depth to be able to leave the park."
+      },
+      {
+        "index": 134,
+        "start_seconds": 474.2,
+        "end_seconds": 477.2,
+        "text": "And if they couldn't find that, you would end up seeing a picture like this."
+      },
+      {
+        "index": 135,
+        "start_seconds": 477.2,
+        "end_seconds": 478.4,
+        "text": "This very familiar picture."
+      },
+      {
+        "index": 136,
+        "start_seconds": 478.4,
+        "end_seconds": 479.1,
+        "text": "They're angry."
+      },
+      {
+        "index": 137,
+        "start_seconds": 479.1,
+        "end_seconds": 480.8,
+        "text": "They can't find the park exit."
+      },
+      {
+        "index": 138,
+        "start_seconds": 480.8,
+        "end_seconds": 491.3,
+        "text": "And did you know that if you sold individual customers maps, those that had maps, they'd get up to a depth of seven to be able to search for an exit, meaning you'd have happier customers not to find the rides."
+      },
+      {
+        "index": 139,
+        "start_seconds": 491.3,
+        "end_seconds": 493.1,
+        "text": "No, no, no, no, no, which was always a little bit."
+      },
+      {
+        "index": 140,
+        "start_seconds": 493.1,
+        "end_seconds": 494.7,
+        "text": "That is a very surprising fact."
+      },
+      {
+        "index": 141,
+        "start_seconds": 494.7,
+        "end_seconds": 498.5,
+        "text": "They bought maps not to find rides, but to find exits."
+      },
+      {
+        "index": 142,
+        "start_seconds": 498.5,
+        "end_seconds": 502.9,
+        "text": "And all of this was done just simply to be able to make roller coaster tycoon run."
+      },
+      {
+        "index": 143,
+        "start_seconds": 502.9,
+        "end_seconds": 506.9,
+        "text": "The money size was to help reduce RAM usage."
+      },
+      {
+        "index": 144,
+        "start_seconds": 506.9,
+        "end_seconds": 520.8,
+        "text": "The multiplication and division being ex-nade in favor of being able to multiply or divide by two CPU optimization, then pathfinding the ultimate CPU optimization was throughout the entire game to prevent frame stutter."
+      },
+      {
+        "index": 145,
+        "start_seconds": 520.8,
+        "end_seconds": 527.3,
+        "text": "And all of this was done not in some high level JavaScript language, but just straight up in the Lord's language."
+      },
+      {
+        "index": 146,
+        "start_seconds": 527.3,
+        "end_seconds": 527.6,
+        "text": "Okay."
+      },
+      {
+        "index": 147,
+        "start_seconds": 527.6,
+        "end_seconds": 528.4,
+        "text": "Assembly."
+      },
+      {
+        "index": 148,
+        "start_seconds": 528.4,
+        "end_seconds": 528.6,
+        "text": "All right."
+      },
+      {
+        "index": 149,
+        "start_seconds": 528.6,
+        "end_seconds": 531.8,
+        "text": "So the next time you see this face, we're a little respect on it."
+      },
+      {
+        "index": 150,
+        "start_seconds": 531.8,
+        "end_seconds": 536.8,
+        "text": "Okay, buddy, because this face right here, this is the face of a man who made not just one roller coaster."
+      },
+      {
+        "index": 151,
+        "start_seconds": 536.8,
+        "end_seconds": 540.4,
+        "text": "Or tycoon, but two roller coaster tycoons in assembly."
+      },
+      {
+        "index": 152,
+        "start_seconds": 540.4,
+        "end_seconds": 542.8,
+        "text": "The name is the prime agenda."
+      }
+    ],
     "message": "/home/moenarch/.cache/video-analysis-studio/whisper-cpp/models/ggml-base.en.bin"
   },
   "subtitle": {
     "format": "srt",
     "path": "/home/moenarch/moritzbrantner/video-analysis-studio/workflow-output/subtitle-generation/youtube-video.srt",
-    "segments": 0,
+    "segments": 153,
     "message": "written next to source video"
   }
 }

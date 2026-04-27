@@ -1,0 +1,48 @@
+{
+  "workflow": "song_analysis",
+  "source": {
+    "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    "local_media": "/home/moenarch/moritzbrantner/video-analysis-studio/workflow-output/song-analysis/youtube-video.mp4"
+  },
+  "assets": {
+    "work_dir": "workflow-output/song-analysis",
+    "report_path": "workflow-output/song-analysis/song-analysis.json",
+    "transcription_wav": null,
+    "music_analysis_wav": null
+  },
+  "capabilities": {
+    "completed": [
+      "youtube_download",
+      "song_identification"
+    ],
+    "skipped": [
+      "lyrics transcription: video source error: downloaded model `medium.en` failed checksum verification",
+      "music analysis: video source error: music analyzer command `python3` failed: {\"status\": \"failed\", \"global\": null, \"segments\": [], \"message\": \"module 'scipy.signal' has no attribute 'hann'\"}"
+    ]
+  },
+  "identification": {
+    "status": "no_match",
+    "query": {
+      "duration_seconds": 19.02,
+      "fingerprint": "2879921854,2879926158,3148377486,3144220622,3106602574,3089821255,4163497669,4164447972,4164431268,4162600112,4166876337,4186338481,4186313873,4253159617,4253163713,3716309459,3717386978,3717645027,3751036519,3738458647,3730074119,3726502661,3728660757,3728656661,4286433541,4250244365,4258500879,4215443807,4215439574,4198540534,4194362486,4194329702",
+      "chunk_count": 1
+    },
+    "catalog_path": "./studio-data/song-catalog/catalog.sqlite3",
+    "top_match": null,
+    "candidates": [],
+    "message": null
+  },
+  "lyrics": {
+    "status": "skipped",
+    "text": null,
+    "segments": [],
+    "message": "video source error: downloaded model `medium.en` failed checksum verification"
+  },
+  "music": {
+    "status": "failed",
+    "global": null,
+    "segments": [],
+    "message": "video source error: music analyzer command `python3` failed: {\"status\": \"failed\", \"global\": null, \"segments\": [], \"message\": \"module 'scipy.signal' has no attribute 'hann'\"}"
+  },
+  "data_buckets": []
+}
