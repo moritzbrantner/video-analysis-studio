@@ -13,6 +13,10 @@ test("can navigate between core pages and toggle the sidebar", async ({ page }) 
   await expect(page).toHaveURL(/\/workflow\/[^/]+$/);
   await expect(page.getByRole("heading", { name: "Workflow Builder" })).toBeVisible();
 
+  await page.locator('button[aria-label="Runs"][title="Runs"]').click();
+  await expect(page).toHaveURL(/\/runs\/[^/]+$/);
+  await expect(page.getByRole("heading", { name: "Runs Overview" })).toBeVisible();
+
   await page.locator('button[aria-label="Components"][title="Components"]').click();
   await expect(page).toHaveURL(/\/components$/);
   await expect(page.getByRole("heading", { name: "Components" })).toBeVisible();
@@ -98,6 +102,19 @@ test("saved components can be opened for modification and testing", async ({ pag
 
   await page.goto("/components");
   await page.getByRole("button", { name: "Test" }).click();
-  await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: "New Run" })).toBeVisible();
+  await expect(page).toHaveURL(/\/runs\/[^/]+$/);
+  await expect(page.getByRole("heading", { name: "Runs Overview" })).toBeVisible();
+});
+
+test("workflow run workspace keeps the selected workflow in the url", async ({ page }) => {
+  await page.goto("/workflow");
+  await expect(page).toHaveURL(/\/workflow\/[^/]+$/);
+
+  const workflowUrl = page.url();
+  const workflowId = new URL(workflowUrl).pathname.split("/").at(-1);
+
+  await page.getByRole("button", { name: "Run Workflow" }).click();
+
+  await expect(page).toHaveURL(new RegExp(`/runs/${workflowId}$`));
+  await expect(page.getByRole("heading", { name: "Runs Overview" })).toBeVisible();
 });

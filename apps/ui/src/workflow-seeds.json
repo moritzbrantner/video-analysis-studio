@@ -29,6 +29,18 @@
         { "source": "collection-download-loop", "sourcePortId": "files", "target": "ffmpeg", "targetPortId": "file" }
       ]
     },
+    "video-red-cars": {
+      "nodes": [
+        { "id": "youtube-workflow", "x": 80, "y": 180 },
+        { "id": "download", "x": 470, "y": 180 },
+        { "id": "video-red-cars-workflow", "x": 860, "y": 180 }
+      ],
+      "edges": [
+        { "source": "youtube-workflow", "sourcePortId": "url", "target": "download", "targetPortId": "url" },
+        { "source": "download", "sourcePortId": "file", "target": "video-red-cars-workflow", "targetPortId": "file" },
+        { "source": "youtube-workflow", "sourcePortId": "config", "target": "video-red-cars-workflow", "targetPortId": "args" }
+      ]
+    },
     "song-analysis": {
       "nodes": [
         { "id": "song-workflow", "x": 80, "y": 180 },
@@ -103,6 +115,15 @@
       ],
       "edges": [
         { "source": "collection-manifest", "sourcePortId": "manifest", "target": "collection-download-loop", "targetPortId": "manifest" }
+      ]
+    },
+    "YouTube Red Cars Counter": {
+      "nodes": [
+        { "id": "download", "x": 80, "y": 180 },
+        { "id": "video-red-cars-workflow", "x": 470, "y": 180 }
+      ],
+      "edges": [
+        { "source": "download", "sourcePortId": "file", "target": "video-red-cars-workflow", "targetPortId": "file" }
       ]
     },
     "Song Analysis Quick Match": {

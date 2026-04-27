@@ -5,6 +5,8 @@ import type {
   SongCatalogImportRequest,
   SongCatalogImportResponse,
   TranscriptionEngine,
+  VideoRedCarsReport,
+  VideoRedCarsRunRequest,
   WhisperCppModel,
   SubtitleGenerationReport,
   SubtitleGenerationRunRequest,
@@ -21,7 +23,7 @@ export type RunStatus = "pending" | "running" | "succeeded" | "failed" | "cancel
 
 export interface RunRecord {
   run_id: string;
-  workflow: "youtube_video" | "youtube_collection" | "song_analysis" | "subtitle_generation";
+  workflow: "youtube_video" | "video_red_cars" | "youtube_collection" | "song_analysis" | "subtitle_generation";
   status: RunStatus;
   work_dir: string;
   report_path: string;
@@ -295,6 +297,7 @@ export interface WorkflowClient {
   createDataSourceDerivation(parentId: string, request: DataSourceDerivationInput): Promise<DataSourceRecord>;
   discoverYoutubeCollectionManifest(request: YoutubeCollectionManifestRequest): Promise<YoutubeCollectionManifest>;
   startYoutubeVideoRun(request: YoutubeRunRequest): Promise<RunRecord>;
+  startVideoRedCarsRun(request: VideoRedCarsRunRequest): Promise<RunRecord>;
   startYoutubeCollectionRun(request: YoutubeCollectionRunRequest): Promise<RunRecord>;
   startSongAnalysisRun(request: SongAnalysisRunRequest): Promise<RunRecord>;
   startSubtitleGenerationRun(request: SubtitleGenerationRunRequest): Promise<RunRecord>;
@@ -303,6 +306,7 @@ export interface WorkflowClient {
   getRunEvents(runId: string): Promise<RunEvent[]>;
   getReport(runId: string): Promise<StudioReport>;
   getYoutubeVideoReport(runId: string): Promise<YoutubeVideoReport>;
+  getVideoRedCarsReport(runId: string): Promise<VideoRedCarsReport>;
   getYoutubeCollectionReport(runId: string): Promise<YoutubeCollectionReport>;
   getSongAnalysisReport(runId: string): Promise<SongAnalysisReport>;
   getSubtitleGenerationReport(runId: string): Promise<SubtitleGenerationReport>;
@@ -321,6 +325,10 @@ export function isYoutubeCollectionReport(report: StudioReport): report is Youtu
 
 export function isYoutubeVideoReport(report: StudioReport): report is YoutubeVideoReport {
   return "video" in report && "source" in report && "data_buckets" in report;
+}
+
+export function isVideoRedCarsReport(report: StudioReport): report is VideoRedCarsReport {
+  return reportWorkflow(report) === "video-red-cars" && "video" in report && "capabilities" in report && !("data_buckets" in report);
 }
 
 export function isSongAnalysisReport(report: StudioReport): report is SongAnalysisReport {

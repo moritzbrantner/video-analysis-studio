@@ -158,6 +158,37 @@ export interface YoutubeVideoReport {
   data_buckets: DataBucketReport[];
 }
 
+export interface VideoRedCarsSceneReport {
+  index: number;
+  start_frame: number;
+  end_frame: number;
+  start_seconds: number;
+  end_seconds: number;
+  observations: AnalysisObservation[];
+  red_car_count: number;
+  peak_visible_red_cars: number;
+  sampled_frames: number;
+}
+
+export interface VideoRedCarsVideoReport {
+  width: number;
+  height: number;
+  frame_rate: string;
+  duration_seconds?: number | null;
+  frames_processed: number;
+  observations: AnalysisObservation[];
+  scenes: VideoRedCarsSceneReport[];
+}
+
+export interface VideoRedCarsReport {
+  workflow?: "video-red-cars" | string;
+  use_case?: "video-red-cars" | string;
+  source: SourceReport;
+  assets: AssetReport;
+  capabilities: CapabilityReport;
+  video: VideoRedCarsVideoReport;
+}
+
 export type TranscriptionEngine =
   | "whisper_cpp"
   | "whisper"
@@ -269,6 +300,21 @@ export interface YoutubeCollectionRunRequest {
   delete_filtered_downloads: boolean;
   work_dir?: string | null;
   max_items?: number | null;
+}
+
+export interface VideoRedCarsRunRequest {
+  source:
+    | { kind: "youtube_url"; url: string }
+    | { kind: "local_file"; path: string };
+  work_dir?: string | null;
+  scene_threshold: number;
+  min_scene_len: number;
+  max_frames?: number | null;
+  visual_sample_every: number;
+  vehicle_detector: {
+    command: string;
+    args: string[];
+  };
 }
 
 export type CollectionItemStatus =
@@ -508,7 +554,12 @@ export interface SubtitleGenerationReport {
   subtitle: SubtitleReport;
 }
 
-export type StudioReport = YoutubeVideoReport | YoutubeCollectionReport | SongAnalysisReport | SubtitleGenerationReport;
+export type StudioReport =
+  | YoutubeVideoReport
+  | VideoRedCarsReport
+  | YoutubeCollectionReport
+  | SongAnalysisReport
+  | SubtitleGenerationReport;
 
 export interface CollectionTableRow {
   id: string;

@@ -1,0 +1,741 @@
+{
+  "use_case": "youtube-video",
+  "source": {
+    "url": null,
+    "local_video": "/home/moenarch/moritzbrantner/video-analysis-studio/workflow-output/youtube-collection/items/CoPzNmWiZCk/media/CoPzNmWiZCk-CoPzNmWiZCk.mp4"
+  },
+  "assets": {
+    "work_dir": "workflow-output/youtube-collection/items/CoPzNmWiZCk/analysis-work",
+    "report_path": "workflow-output/youtube-collection/items/CoPzNmWiZCk/analysis.json",
+    "audio_wav": null
+  },
+  "capabilities": {
+    "completed": [
+      "scene_detection",
+      "audio_analysis"
+    ],
+    "skipped": [
+      "object/person detection: pass --object-command",
+      "on-screen text OCR: pass --ocr-command",
+      "transcription: disabled by --skip-transcription",
+      "transcript text analysis: no transcript available"
+    ]
+  },
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "frame_rate": "2989250/99741",
+    "duration_seconds": 398.964,
+    "frames_processed": 11957,
+    "scenes": [
+      {
+        "index": 0,
+        "start_frame": 0,
+        "end_frame": 11957,
+        "start_seconds": 0.0,
+        "end_seconds": 398.96399999999994,
+        "observations": []
+      }
+    ],
+    "observations": []
+  },
+  "transcription": {
+    "status": "skipped",
+    "text": null,
+    "segments": [],
+    "message": "disabled by --skip-transcription"
+  },
+  "audio": {
+    "status": "completed",
+    "frames_processed": 1169,
+    "events": [
+      {
+        "timestamp_seconds": 0.0,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.41733384
+      },
+      {
+        "timestamp_seconds": 0.6826666666666666,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.19032966
+      },
+      {
+        "timestamp_seconds": 5.461333333333333,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.35834908
+      },
+      {
+        "timestamp_seconds": 6.144,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.16327858
+      },
+      {
+        "timestamp_seconds": 10.922666666666666,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.3312785
+      },
+      {
+        "timestamp_seconds": 11.605333333333332,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.1803426
+      },
+      {
+        "timestamp_seconds": 16.384,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.31526983
+      },
+      {
+        "timestamp_seconds": 17.066666666666666,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.19331643
+      },
+      {
+        "timestamp_seconds": 19.114666666666665,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.22286032
+      },
+      {
+        "timestamp_seconds": 20.48,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.19283235
+      },
+      {
+        "timestamp_seconds": 20.82133333333333,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.21171768
+      },
+      {
+        "timestamp_seconds": 44.714666666666666,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.14670277
+      },
+      {
+        "timestamp_seconds": 60.75733333333333,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.2695337
+      },
+      {
+        "timestamp_seconds": 76.11733333333333,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.1888363
+      },
+      {
+        "timestamp_seconds": 76.45866666666666,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.31930184
+      },
+      {
+        "timestamp_seconds": 87.38133333333333,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.1891448
+      },
+      {
+        "timestamp_seconds": 88.064,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.3094297
+      },
+      {
+        "timestamp_seconds": 120.14933333333333,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.17590854
+      },
+      {
+        "timestamp_seconds": 120.49066666666667,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.25915936
+      },
+      {
+        "timestamp_seconds": 131.41333333333333,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.19025299
+      },
+      {
+        "timestamp_seconds": 132.43733333333333,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.40031785
+      },
+      {
+        "timestamp_seconds": 200.02133333333333,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.1516561
+      },
+      {
+        "timestamp_seconds": 210.26133333333334,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.26282826
+      },
+      {
+        "timestamp_seconds": 210.60266666666666,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.19903824
+      },
+      {
+        "timestamp_seconds": 216.40533333333332,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.21603522
+      },
+      {
+        "timestamp_seconds": 217.088,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.17378494
+      },
+      {
+        "timestamp_seconds": 222.54933333333332,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.24241224
+      },
+      {
+        "timestamp_seconds": 250.88,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.071090385
+      },
+      {
+        "timestamp_seconds": 251.22133333333332,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.26793545
+      },
+      {
+        "timestamp_seconds": 253.61066666666665,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.18739031
+      },
+      {
+        "timestamp_seconds": 253.952,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.30780956
+      },
+      {
+        "timestamp_seconds": 254.29333333333332,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.19264956
+      },
+      {
+        "timestamp_seconds": 254.63466666666665,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.32363254
+      },
+      {
+        "timestamp_seconds": 254.976,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.18904458
+      },
+      {
+        "timestamp_seconds": 255.65866666666665,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.2982394
+      },
+      {
+        "timestamp_seconds": 260.096,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.19854969
+      },
+      {
+        "timestamp_seconds": 260.4373333333333,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.3031081
+      },
+      {
+        "timestamp_seconds": 261.4613333333333,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.19472504
+      },
+      {
+        "timestamp_seconds": 261.80266666666665,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.30000323
+      },
+      {
+        "timestamp_seconds": 263.168,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.18377644
+      },
+      {
+        "timestamp_seconds": 263.5093333333333,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.30225837
+      },
+      {
+        "timestamp_seconds": 263.85066666666665,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.1908961
+      },
+      {
+        "timestamp_seconds": 264.192,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.32335857
+      },
+      {
+        "timestamp_seconds": 290.4746666666667,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.17674784
+      },
+      {
+        "timestamp_seconds": 290.816,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.25297996
+      },
+      {
+        "timestamp_seconds": 301.73866666666663,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.18674792
+      },
+      {
+        "timestamp_seconds": 302.76266666666663,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.39711618
+      },
+      {
+        "timestamp_seconds": 345.77066666666667,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.19555525
+      },
+      {
+        "timestamp_seconds": 346.79466666666667,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.3547036
+      },
+      {
+        "timestamp_seconds": 371.02933333333334,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.17548323
+      },
+      {
+        "timestamp_seconds": 371.37066666666664,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.20910987
+      },
+      {
+        "timestamp_seconds": 372.736,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.15190072
+      },
+      {
+        "timestamp_seconds": 373.41866666666664,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.2176245
+      },
+      {
+        "timestamp_seconds": 373.76,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.16215935
+      },
+      {
+        "timestamp_seconds": 374.10133333333334,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.21967137
+      },
+      {
+        "timestamp_seconds": 374.784,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.12904674
+      },
+      {
+        "timestamp_seconds": 377.17333333333335,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.27464804
+      },
+      {
+        "timestamp_seconds": 377.51466666666664,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.10500105
+      },
+      {
+        "timestamp_seconds": 379.904,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.23607098
+      },
+      {
+        "timestamp_seconds": 380.24533333333335,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.109340504
+      },
+      {
+        "timestamp_seconds": 382.63466666666665,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.2664249
+      },
+      {
+        "timestamp_seconds": 382.976,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.090612695
+      },
+      {
+        "timestamp_seconds": 385.3653333333333,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.23043805
+      },
+      {
+        "timestamp_seconds": 385.70666666666665,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.109632954
+      },
+      {
+        "timestamp_seconds": 388.096,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.26634517
+      },
+      {
+        "timestamp_seconds": 388.4373333333333,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.12881306
+      },
+      {
+        "timestamp_seconds": 390.144,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.20440769
+      },
+      {
+        "timestamp_seconds": 390.4853333333333,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.18465397
+      },
+      {
+        "timestamp_seconds": 395.94666666666666,
+        "analyzer": "audio_energy",
+        "label": "audio:silence",
+        "score": 0.008015904
+      }
+    ],
+    "separation": null,
+    "message": null
+  },
+  "text": {
+    "status": "skipped",
+    "segments_processed": 0,
+    "events": [],
+    "message": "no transcript available"
+  },
+  "data_buckets": [
+    {
+      "bucket_index": 0,
+      "records": 1000,
+      "estimated_bytes": 6220800000,
+      "streams": [
+        {
+          "stream_id": "video",
+          "records": 1000,
+          "estimated_bytes": 6220800000,
+          "payload_counts": {
+            "video": 1000
+          },
+          "video_frames": 1000,
+          "audio_frames": 0,
+          "text_segments": 0
+        }
+      ]
+    },
+    {
+      "bucket_index": 1,
+      "records": 1000,
+      "estimated_bytes": 6220800000,
+      "streams": [
+        {
+          "stream_id": "video",
+          "records": 1000,
+          "estimated_bytes": 6220800000,
+          "payload_counts": {
+            "video": 1000
+          },
+          "video_frames": 1000,
+          "audio_frames": 0,
+          "text_segments": 0
+        }
+      ]
+    },
+    {
+      "bucket_index": 2,
+      "records": 1000,
+      "estimated_bytes": 6220800000,
+      "streams": [
+        {
+          "stream_id": "video",
+          "records": 1000,
+          "estimated_bytes": 6220800000,
+          "payload_counts": {
+            "video": 1000
+          },
+          "video_frames": 1000,
+          "audio_frames": 0,
+          "text_segments": 0
+        }
+      ]
+    },
+    {
+      "bucket_index": 3,
+      "records": 1000,
+      "estimated_bytes": 6220800000,
+      "streams": [
+        {
+          "stream_id": "video",
+          "records": 1000,
+          "estimated_bytes": 6220800000,
+          "payload_counts": {
+            "video": 1000
+          },
+          "video_frames": 1000,
+          "audio_frames": 0,
+          "text_segments": 0
+        }
+      ]
+    },
+    {
+      "bucket_index": 4,
+      "records": 1000,
+      "estimated_bytes": 6220800000,
+      "streams": [
+        {
+          "stream_id": "video",
+          "records": 1000,
+          "estimated_bytes": 6220800000,
+          "payload_counts": {
+            "video": 1000
+          },
+          "video_frames": 1000,
+          "audio_frames": 0,
+          "text_segments": 0
+        }
+      ]
+    },
+    {
+      "bucket_index": 5,
+      "records": 1000,
+      "estimated_bytes": 6220800000,
+      "streams": [
+        {
+          "stream_id": "video",
+          "records": 1000,
+          "estimated_bytes": 6220800000,
+          "payload_counts": {
+            "video": 1000
+          },
+          "video_frames": 1000,
+          "audio_frames": 0,
+          "text_segments": 0
+        }
+      ]
+    },
+    {
+      "bucket_index": 6,
+      "records": 1000,
+      "estimated_bytes": 6220800000,
+      "streams": [
+        {
+          "stream_id": "video",
+          "records": 1000,
+          "estimated_bytes": 6220800000,
+          "payload_counts": {
+            "video": 1000
+          },
+          "video_frames": 1000,
+          "audio_frames": 0,
+          "text_segments": 0
+        }
+      ]
+    },
+    {
+      "bucket_index": 7,
+      "records": 1000,
+      "estimated_bytes": 6220800000,
+      "streams": [
+        {
+          "stream_id": "video",
+          "records": 1000,
+          "estimated_bytes": 6220800000,
+          "payload_counts": {
+            "video": 1000
+          },
+          "video_frames": 1000,
+          "audio_frames": 0,
+          "text_segments": 0
+        }
+      ]
+    },
+    {
+      "bucket_index": 8,
+      "records": 1000,
+      "estimated_bytes": 6220800000,
+      "streams": [
+        {
+          "stream_id": "video",
+          "records": 1000,
+          "estimated_bytes": 6220800000,
+          "payload_counts": {
+            "video": 1000
+          },
+          "video_frames": 1000,
+          "audio_frames": 0,
+          "text_segments": 0
+        }
+      ]
+    },
+    {
+      "bucket_index": 9,
+      "records": 1000,
+      "estimated_bytes": 6220800000,
+      "streams": [
+        {
+          "stream_id": "video",
+          "records": 1000,
+          "estimated_bytes": 6220800000,
+          "payload_counts": {
+            "video": 1000
+          },
+          "video_frames": 1000,
+          "audio_frames": 0,
+          "text_segments": 0
+        }
+      ]
+    },
+    {
+      "bucket_index": 10,
+      "records": 1000,
+      "estimated_bytes": 6220800000,
+      "streams": [
+        {
+          "stream_id": "video",
+          "records": 1000,
+          "estimated_bytes": 6220800000,
+          "payload_counts": {
+            "video": 1000
+          },
+          "video_frames": 1000,
+          "audio_frames": 0,
+          "text_segments": 0
+        }
+      ]
+    },
+    {
+      "bucket_index": 11,
+      "records": 1000,
+      "estimated_bytes": 5958941696,
+      "streams": [
+        {
+          "stream_id": "audio",
+          "records": 43,
+          "estimated_bytes": 5636096,
+          "payload_counts": {
+            "audio": 43
+          },
+          "video_frames": 0,
+          "audio_frames": 43,
+          "text_segments": 0
+        },
+        {
+          "stream_id": "video",
+          "records": 957,
+          "estimated_bytes": 5953305600,
+          "payload_counts": {
+            "video": 957
+          },
+          "video_frames": 957,
+          "audio_frames": 0,
+          "text_segments": 0
+        }
+      ]
+    },
+    {
+      "bucket_index": 12,
+      "records": 1000,
+      "estimated_bytes": 131072000,
+      "streams": [
+        {
+          "stream_id": "audio",
+          "records": 1000,
+          "estimated_bytes": 131072000,
+          "payload_counts": {
+            "audio": 1000
+          },
+          "video_frames": 0,
+          "audio_frames": 1000,
+          "text_segments": 0
+        }
+      ]
+    },
+    {
+      "bucket_index": 13,
+      "records": 126,
+      "estimated_bytes": 16505408,
+      "streams": [
+        {
+          "stream_id": "audio",
+          "records": 126,
+          "estimated_bytes": 16505408,
+          "payload_counts": {
+            "audio": 126
+          },
+          "video_frames": 0,
+          "audio_frames": 126,
+          "text_segments": 0
+        }
+      ]
+    }
+  ]
+}

@@ -12,6 +12,7 @@ use crate::data_sources::{
     DataSourceUpsert,
 };
 use crate::error::{Result, StudioError};
+use crate::red_cars::{run_video_red_cars_workflow, VideoRedCarsRunRequest};
 use crate::report::StudioReport;
 use crate::song::{
     import_song_catalog_items, run_song_analysis_workflow, SongAnalysisRunRequest,
@@ -30,6 +31,7 @@ const MAX_RUN_EVENT_HISTORY: usize = 500;
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowKind {
     YoutubeVideo,
+    VideoRedCars,
     YoutubeCollection,
     SongAnalysis,
     SubtitleGeneration,
@@ -202,6 +204,92 @@ impl RunManager {
                             .await;
                         manager
                             .emit(run_id, RunStatus::Succeeded, "analysis completed")
+                            .await;
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        manager
+                            .update_run(run_id, RunStatus::Failed, Some(message.clone()), true)
+                            .await;
+                        manager.emit(run_id, RunStatus::Failed, message).await;
+                    }
+                }
+            });
+        });
+
+        Ok(record)
+    }
+
+    pub async fn start_video_red_cars(&self, request: VideoRedCarsRunRequest) -> Result<RunRecord> {
+        request.validate()?;
+        let run_id = Uuid::new_v4();
+        let work_dir = request.resolved_work_dir(&self.data_dir, run_id);
+        let report_path = work_dir.join("video-red-cars.json");
+        let now = Utc::now();
+        let record = RunRecord {
+            run_id,
+            workflow: WorkflowKind::VideoRedCars,
+            status: RunStatus::Pending,
+            work_dir: work_dir.clone(),
+            report_path: report_path.clone(),
+            created_at: now,
+            updated_at: now,
+            started_at: None,
+            finished_at: None,
+            message: Some("queued".to_string()),
+        };
+        let (events, _) = broadcast::channel(128);
+        {
+            let mut runs = self.inner.runs.lock().await;
+            runs.insert(
+                run_id,
+                RunState {
+                    record: record.clone(),
+                    events: events.clone(),
+                    history: VecDeque::new(),
+                },
+            );
+        }
+        self.emit(run_id, RunStatus::Pending, "queued").await;
+
+        let manager = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(async {
+                manager
+                    .update_run(
+                        run_id,
+                        RunStatus::Running,
+                        Some("running red car workflow".to_string()),
+                        false,
+                    )
+                    .await;
+                manager
+                    .emit(run_id, RunStatus::Running, "running red car workflow")
+                    .await;
+            });
+
+            let mut progress = |event: WorkflowProgress| {
+                handle.block_on(async {
+                    manager
+                        .emit_workflow_progress(run_id, RunStatus::Running, event)
+                        .await;
+                });
+            };
+            let result = run_video_red_cars_workflow(request, work_dir, report_path, &mut progress);
+            handle.block_on(async {
+                match result {
+                    Ok(_) => {
+                        manager
+                            .update_run(
+                                run_id,
+                                RunStatus::Succeeded,
+                                Some("red car analysis completed".to_string()),
+                                true,
+                            )
+                            .await;
+                        manager
+                            .emit(run_id, RunStatus::Succeeded, "red car analysis completed")
                             .await;
                     }
                     Err(error) => {

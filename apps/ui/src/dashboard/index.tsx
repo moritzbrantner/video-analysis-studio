@@ -5,9 +5,15 @@ import { Panel } from "../shared/primitives";
 import {
   isSongAnalysisReport,
   isSubtitleGenerationReport,
+  isVideoRedCarsReport,
   isYoutubeCollectionReport,
   isYoutubeVideoReport,
 } from "../api/client";
+import {
+  VideoRedCarsOverviewDashboard,
+  VideoRedCarsScenesDashboard,
+  VideoRedCarsSignalsDashboard,
+} from "../redCars";
 import { SongDashboard, SongMusicPanel, SongSignals } from "../song";
 import type { StudioReport } from "../types";
 import { SubtitleDashboard } from "./subtitle";
@@ -31,10 +37,11 @@ export interface ReportDashboardProps {
 export function ReportDashboard({ report, mode, runId, layout, onLayoutChange }: ReportDashboardProps) {
   const songReport = isSongAnalysisReport(report) ? report : null;
   const subtitleReport = isSubtitleGenerationReport(report) ? report : null;
+  const redCarsReport = isVideoRedCarsReport(report) ? report : null;
   const collectionReport = isYoutubeCollectionReport(report) ? report : null;
   const videoReport = isYoutubeVideoReport(report) ? report : null;
 
-  if (!songReport && !subtitleReport && !collectionReport && !videoReport) {
+  if (!songReport && !subtitleReport && !redCarsReport && !collectionReport && !videoReport) {
     return (
       <section className="min-w-0 space-y-4">
         <Panel title="Unsupported report">
@@ -44,7 +51,7 @@ export function ReportDashboard({ report, mode, runId, layout, onLayoutChange }:
     );
   }
 
-  if (mode === "result") {
+  if (mode === "result" && !redCarsReport) {
     return (
       <section className="min-w-0 space-y-4">
         <ResultPageEditor report={report} runId={runId} layout={layout} onLayoutChange={onLayoutChange} />
@@ -67,6 +74,16 @@ export function ReportDashboard({ report, mode, runId, layout, onLayoutChange }:
     return (
       <section className="min-w-0 space-y-4">
         <SubtitleDashboard report={subtitleReport} runId={runId} />
+      </section>
+    );
+  }
+
+  if (redCarsReport) {
+    return (
+      <section className="min-w-0 space-y-4">
+        {(mode === "overview" || mode === "result") && <VideoRedCarsOverviewDashboard report={redCarsReport} runId={runId} />}
+        {mode === "scenes" && <VideoRedCarsScenesDashboard report={redCarsReport} runId={runId} />}
+        {mode === "signals" && <VideoRedCarsSignalsDashboard report={redCarsReport} runId={runId} />}
       </section>
     );
   }

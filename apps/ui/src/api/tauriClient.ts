@@ -8,13 +8,21 @@ import type {
   WorkflowClient,
   YoutubeRunRequest,
 } from "./client";
-import { isSongAnalysisReport, isSubtitleGenerationReport, isYoutubeCollectionReport, isYoutubeVideoReport } from "./client";
+import {
+  isSongAnalysisReport,
+  isSubtitleGenerationReport,
+  isVideoRedCarsReport,
+  isYoutubeCollectionReport,
+  isYoutubeVideoReport,
+} from "./client";
 import type {
   SongAnalysisRunRequest,
   SongCatalogImportRequest,
   SongCatalogImportResponse,
   StudioReport,
   SubtitleGenerationRunRequest,
+  VideoRedCarsReport,
+  VideoRedCarsRunRequest,
   YoutubeCollectionManifest,
 } from "../types";
 
@@ -44,6 +52,8 @@ export function createTauriClient(): WorkflowClient {
       invoke<YoutubeCollectionManifest>("discover_youtube_collection_manifest_command", { request }),
     startYoutubeVideoRun: async (request) =>
       invoke<RunRecord>("start_youtube_video_run", { request }),
+    startVideoRedCarsRun: async (request: VideoRedCarsRunRequest) =>
+      invoke<RunRecord>("start_video_red_cars_run", { request }),
     startYoutubeCollectionRun: async (request) =>
       invoke<RunRecord>("start_youtube_collection_run", { request }),
     startSongAnalysisRun: async (request: SongAnalysisRunRequest) =>
@@ -59,6 +69,13 @@ export function createTauriClient(): WorkflowClient {
       const report = await invoke<StudioReport>("get_report", { runId });
       if (!isYoutubeVideoReport(report)) {
         throw new Error("Run report is not a YouTube video report");
+      }
+      return report;
+    },
+    getVideoRedCarsReport: async (runId): Promise<VideoRedCarsReport> => {
+      const report = await invoke<StudioReport>("get_report", { runId });
+      if (!isVideoRedCarsReport(report)) {
+        throw new Error("Run report is not a red car report");
       }
       return report;
     },

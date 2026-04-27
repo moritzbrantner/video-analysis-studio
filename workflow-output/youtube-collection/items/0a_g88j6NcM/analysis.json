@@ -1,0 +1,159 @@
+{
+  "use_case": "youtube-video",
+  "source": {
+    "url": null,
+    "local_video": "/home/moenarch/moritzbrantner/video-analysis-studio/workflow-output/youtube-collection/items/0a_g88j6NcM/media/0a_g88j6NcM-0a_g88j6NcM.mp4"
+  },
+  "assets": {
+    "work_dir": "workflow-output/youtube-collection/items/0a_g88j6NcM/analysis-work",
+    "report_path": "workflow-output/youtube-collection/items/0a_g88j6NcM/analysis.json",
+    "audio_wav": null
+  },
+  "capabilities": {
+    "completed": [
+      "scene_detection",
+      "audio_analysis"
+    ],
+    "skipped": [
+      "object/person detection: pass --object-command",
+      "on-screen text OCR: pass --ocr-command",
+      "transcription: disabled by --skip-transcription",
+      "transcript text analysis: no transcript available"
+    ]
+  },
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "frame_rate": "2067000/68969",
+    "duration_seconds": 68.969,
+    "frames_processed": 2067,
+    "scenes": [
+      {
+        "index": 0,
+        "start_frame": 0,
+        "end_frame": 2067,
+        "start_seconds": 0.0,
+        "end_seconds": 68.96900000000001,
+        "observations": []
+      }
+    ],
+    "observations": []
+  },
+  "transcription": {
+    "status": "skipped",
+    "text": null,
+    "segments": [],
+    "message": "disabled by --skip-transcription"
+  },
+  "audio": {
+    "status": "completed",
+    "frames_processed": 203,
+    "events": [
+      {
+        "timestamp_seconds": 0.0,
+        "analyzer": "audio_energy",
+        "label": "audio:silence",
+        "score": 0.0
+      },
+      {
+        "timestamp_seconds": 0.3413333333333333,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.022662751
+      },
+      {
+        "timestamp_seconds": 20.138666666666666,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.24412899
+      },
+      {
+        "timestamp_seconds": 50.175999999999995,
+        "analyzer": "audio_energy",
+        "label": "audio:active",
+        "score": 0.15536498
+      },
+      {
+        "timestamp_seconds": 68.26666666666667,
+        "analyzer": "audio_energy",
+        "label": "audio:loud",
+        "score": 0.20248584
+      }
+    ],
+    "separation": null,
+    "message": null
+  },
+  "text": {
+    "status": "skipped",
+    "segments_processed": 0,
+    "events": [],
+    "message": "no transcript available"
+  },
+  "data_buckets": [
+    {
+      "bucket_index": 0,
+      "records": 1000,
+      "estimated_bytes": 6220800000,
+      "streams": [
+        {
+          "stream_id": "video",
+          "records": 1000,
+          "estimated_bytes": 6220800000,
+          "payload_counts": {
+            "video": 1000
+          },
+          "video_frames": 1000,
+          "audio_frames": 0,
+          "text_segments": 0
+        }
+      ]
+    },
+    {
+      "bucket_index": 1,
+      "records": 1000,
+      "estimated_bytes": 6220800000,
+      "streams": [
+        {
+          "stream_id": "video",
+          "records": 1000,
+          "estimated_bytes": 6220800000,
+          "payload_counts": {
+            "video": 1000
+          },
+          "video_frames": 1000,
+          "audio_frames": 0,
+          "text_segments": 0
+        }
+      ]
+    },
+    {
+      "bucket_index": 2,
+      "records": 270,
+      "estimated_bytes": 443279424,
+      "streams": [
+        {
+          "stream_id": "audio",
+          "records": 203,
+          "estimated_bytes": 26485824,
+          "payload_counts": {
+            "audio": 203
+          },
+          "video_frames": 0,
+          "audio_frames": 203,
+          "text_segments": 0
+        },
+        {
+          "stream_id": "video",
+          "records": 67,
+          "estimated_bytes": 416793600,
+          "payload_counts": {
+            "video": 67
+          },
+          "video_frames": 67,
+          "audio_frames": 0,
+          "text_segments": 0
+        }
+      ]
+    }
+  ]
+}

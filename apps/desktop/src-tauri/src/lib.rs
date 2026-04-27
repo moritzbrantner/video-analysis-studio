@@ -7,7 +7,8 @@ use commands::{
     delete_data_source, discover_youtube_collection_manifest_command, get_report, get_run,
     get_run_events, get_transcription_catalog, get_workflow_catalog, import_song_catalog_items,
     list_data_sources, start_song_analysis_run, start_subtitle_generation_run,
-    start_youtube_collection_run, start_youtube_video_run, update_data_source, StudioState,
+    start_video_red_cars_run, start_youtube_collection_run, start_youtube_video_run,
+    update_data_source, StudioState,
 };
 use studio_core::RunManager;
 use tauri::Manager;
@@ -37,6 +38,7 @@ pub fn run() {
             create_data_source_derivation,
             discover_youtube_collection_manifest_command,
             start_youtube_video_run,
+            start_video_red_cars_run,
             start_youtube_collection_run,
             start_song_analysis_run,
             start_subtitle_generation_run,

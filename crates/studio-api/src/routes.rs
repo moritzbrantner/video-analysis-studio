@@ -16,8 +16,9 @@ use studio_core::{
     check_system_dependencies, discover_youtube_collection_manifest, transcription_catalog,
     DataSourceDerivationInput, DataSourceRecord, DataSourceUpsert, RunEvent, RunId, RunManager,
     RunRecord, SongAnalysisRunRequest, SongCatalogImportRequest, StudioError, StudioReport,
-    SubtitleGenerationRunRequest, WorkflowKind, YoutubeCollectionManifestRequest,
-    YoutubeCollectionRunRequest, YoutubeRunRequest, YoutubeVideoReport,
+    SubtitleGenerationRunRequest, VideoRedCarsRunRequest, WorkflowKind,
+    YoutubeCollectionManifestRequest, YoutubeCollectionRunRequest, YoutubeRunRequest,
+    YoutubeVideoReport,
 };
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
@@ -61,6 +62,10 @@ pub fn build_app(manager: RunManager) -> Router {
         .route(
             "/api/workflows/youtube-video/runs",
             post(start_youtube_video_run),
+        )
+        .route(
+            "/api/workflows/video-red-cars/runs",
+            post(start_video_red_cars_run),
         )
         .route(
             "/api/workflows/youtube-collection/runs",
@@ -109,6 +114,11 @@ async fn workflows() -> Json<Vec<WorkflowDescriptor>> {
             id: "youtube-video",
             name: "YouTube Video",
             kind: WorkflowKind::YoutubeVideo,
+        },
+        WorkflowDescriptor {
+            id: "video-red-cars",
+            name: "Video Red Cars",
+            kind: WorkflowKind::VideoRedCars,
         },
         WorkflowDescriptor {
             id: "youtube-collection",
@@ -192,6 +202,13 @@ async fn start_youtube_collection_run(
     Json(request): Json<YoutubeCollectionRunRequest>,
 ) -> Result<Json<studio_core::RunRecord>, ApiError> {
     Ok(Json(state.manager.start_youtube_collection(request).await?))
+}
+
+async fn start_video_red_cars_run(
+    State(state): State<AppState>,
+    Json(request): Json<VideoRedCarsRunRequest>,
+) -> Result<Json<studio_core::RunRecord>, ApiError> {
+    Ok(Json(state.manager.start_video_red_cars(request).await?))
 }
 
 async fn start_song_analysis_run(
@@ -362,6 +379,9 @@ fn allowed_media_paths_for_report(run: &RunRecord, report: &StudioReport) -> Has
     let mut paths = HashSet::new();
     match report {
         StudioReport::YoutubeVideo(report) => add_video_report_paths(run, report, &mut paths),
+        StudioReport::VideoRedCars(report) => {
+            add_report_path(run, &mut paths, Some(&report.source.local_video));
+        }
         StudioReport::YoutubeCollection(report) => {
             for item in &report.items {
                 add_report_path(run, &mut paths, item.local_video.as_deref());
@@ -557,6 +577,26 @@ mod tests {
             .unwrap()
             .iter()
             .any(|item| item["id"] == "song-analysis" && item["kind"] == "song_analysis"));
+    }
+
+    #[tokio::test]
+    async fn workflows_include_video_red_cars() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = build_app(RunManager::new(dir.path().to_path_buf()));
+        let response = app
+            .oneshot(Request::get("/api/workflows").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(value
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| { item["id"] == "video-red-cars" && item["kind"] == "video_red_cars" }));
     }
 
     #[tokio::test]

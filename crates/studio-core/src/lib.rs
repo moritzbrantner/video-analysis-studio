@@ -1,6 +1,7 @@
 mod data_sources;
 mod error;
 mod media;
+mod red_cars;
 mod report;
 mod run_manager;
 mod song;
@@ -17,6 +18,7 @@ pub use data_sources::{
     DATA_SOURCE_CATALOG_FORMAT, DATA_SOURCE_CATALOG_VERSION,
 };
 pub use error::{Result, StudioError};
+pub use red_cars::{run_video_red_cars_workflow, VideoRedCarsRunRequest};
 pub use report::*;
 pub use run_manager::{
     RunEvent, RunId, RunManager, RunRecord, RunStatus, WorkflowKind, WorkflowProgress,

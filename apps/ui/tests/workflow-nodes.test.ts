@@ -274,6 +274,7 @@ describe("starter workflow templates", () => {
     expect(Object.keys(workflowStarterTemplates).sort()).toEqual([
       "song-analysis",
       "subtitle-generation",
+      "video-red-cars",
       "youtube-collection",
       "youtube-video",
     ]);
@@ -288,6 +289,7 @@ describe("starter workflow templates", () => {
       "Song Analysis Quick Match",
       "Subtitle SRT Starter",
       "YouTube Collection Spot Check",
+      "YouTube Red Cars Counter",
       "YouTube Video Quick Review",
     ]);
     for (const template of Object.values(exampleWorkflowStarterTemplates)) {

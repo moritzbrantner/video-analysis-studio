@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub enum StudioReport {
     YoutubeCollection(YoutubeCollectionReport),
     YoutubeVideo(YoutubeVideoReport),
+    VideoRedCars(VideoRedCarsReport),
     SongAnalysis(SongAnalysisReport),
     SubtitleGeneration(SubtitleGenerationReport),
 }
@@ -53,6 +54,40 @@ pub struct VideoReport {
     pub frames_processed: u64,
     pub scenes: Vec<SceneReport>,
     pub observations: Vec<ObservationReport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VideoRedCarsReport {
+    #[serde(alias = "use_case")]
+    pub workflow: String,
+    pub source: SourceReport,
+    pub assets: AssetReport,
+    pub capabilities: CapabilityReport,
+    pub video: VideoRedCarsVideoReport,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VideoRedCarsVideoReport {
+    pub width: u32,
+    pub height: u32,
+    pub frame_rate: String,
+    pub duration_seconds: Option<f64>,
+    pub frames_processed: u64,
+    pub observations: Vec<ObservationReport>,
+    pub scenes: Vec<VideoRedCarsSceneReport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VideoRedCarsSceneReport {
+    pub index: u64,
+    pub start_frame: u64,
+    pub end_frame: u64,
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+    pub observations: Vec<ObservationReport>,
+    pub red_car_count: u64,
+    pub peak_visible_red_cars: u64,
+    pub sampled_frames: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

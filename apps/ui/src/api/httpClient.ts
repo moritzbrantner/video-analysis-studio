@@ -15,9 +15,11 @@ import type {
   StudioReport,
   SubtitleGenerationReport,
   SubtitleGenerationRunRequest,
+  VideoRedCarsReport,
   YoutubeCollectionManifest,
 } from "../types";
 import {
+  isVideoRedCarsReport as redCarsReport,
   isSubtitleGenerationReport as subtitleReport,
   isSongAnalysisReport as songReport,
   isYoutubeCollectionReport as collectionReport,
@@ -62,6 +64,11 @@ export function createHttpClient(baseUrl = import.meta.env.VITE_STUDIO_API_URL ?
         method: "POST",
         body: JSON.stringify(payload),
       }),
+    startVideoRedCarsRun: (payload) =>
+      request<RunRecord>(baseUrl, "/api/workflows/video-red-cars/runs", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
     startYoutubeCollectionRun: (payload) =>
       request<RunRecord>(baseUrl, "/api/workflows/youtube-collection/runs", {
         method: "POST",
@@ -89,6 +96,13 @@ export function createHttpClient(baseUrl = import.meta.env.VITE_STUDIO_API_URL ?
       const report = await request<StudioReport>(baseUrl, `/api/runs/${runId}/report`);
       if (!videoReport(report)) {
         throw new Error("Run report is not a YouTube video report");
+      }
+      return report;
+    },
+    getVideoRedCarsReport: async (runId): Promise<VideoRedCarsReport> => {
+      const report = await request<StudioReport>(baseUrl, `/api/runs/${runId}/report`);
+      if (!redCarsReport(report)) {
+        throw new Error("Run report is not a red car report");
       }
       return report;
     },

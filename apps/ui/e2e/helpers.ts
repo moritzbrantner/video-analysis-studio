@@ -34,10 +34,9 @@ export async function openWorkflowBuilder(page: Page) {
 }
 
 export async function openRunPage(page: Page) {
-  await page.goto("/");
-  await expect(page).toHaveURL(/\/$/);
-  await page.getByRole("button", { name: "New Run" }).click();
-  await expect(page.getByRole("heading", { name: "New Run" })).toBeVisible();
+  await page.goto("/runs");
+  await expect(page).toHaveURL(/\/runs\/[^/]+$/);
+  await expect(page.getByRole("heading", { name: "Runs Overview" })).toBeVisible();
 }
 
 export async function graphCounts(page: Page): Promise<{ components: number; connections: number }> {

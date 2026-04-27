@@ -35,6 +35,7 @@ import {
   type StudioReport,
   type SubtitleGenerationRunRequest,
   type TranscriptionEngine,
+  type VideoRedCarsRunRequest,
   type WhisperCppModel,
   type YoutubeCollectionManifest,
   type YoutubeCollectionRunRequest,
@@ -99,14 +100,14 @@ import {
 } from "./workflowShare";
 import { workflowGraphHasCycle, workflowGraphWouldCreateCycle } from "./workflowGraph";
 
-type WorkflowKindId = "youtube-video" | "youtube-collection" | "song-analysis" | "subtitle-generation";
+type WorkflowKindId = "youtube-video" | "video-red-cars" | "youtube-collection" | "song-analysis" | "subtitle-generation";
 type SourceMode = "url" | "file" | "collection";
-type AppPage = "analysis" | "workflow" | "components" | "data-sources" | "settings";
+type AppPage = "analysis" | "runs" | "workflow" | "components" | "data-sources" | "settings";
 interface AppLocation {
   page: AppPage;
   workflowId: string | null;
 }
-type ViewMode = "home" | "run" | ReportDashboardMode;
+type ViewMode = "home" | ReportDashboardMode;
 type JsonSchemaScalar = "number" | "boolean" | "null" | "any";
 
 type DataSourceSchema =
@@ -187,6 +188,13 @@ const workflowKinds: Array<{
     status: "Ready",
   },
   {
+    id: "video-red-cars",
+    name: "Video Red Cars",
+    defaultWorkflowName: "Video Red Cars Workflow",
+    packageName: "studio-core",
+    status: "Ready",
+  },
+  {
     id: "youtube-collection",
     name: "YouTube Collection",
     defaultWorkflowName: "YouTube Collection Workflow",
@@ -211,6 +219,7 @@ const workflowKinds: Array<{
 
 const exampleWorkflowSeeds: Array<{ kind: WorkflowKindId; name: string }> = [
   { kind: "youtube-video", name: "YouTube Video Quick Review" },
+  { kind: "video-red-cars", name: "YouTube Red Cars Counter" },
   { kind: "youtube-collection", name: "YouTube Collection Spot Check" },
   { kind: "song-analysis", name: "Song Analysis Quick Match" },
   { kind: "subtitle-generation", name: "Subtitle SRT Starter" },
@@ -325,7 +334,6 @@ function App() {
   const analysisViewOptions: Array<[ViewMode, string]> = hasLoadedReport
     ? [
         ["home", "Home"],
-        ["run", "New Run"],
         ["overview", "Overview"],
         ["result", "Result"],
         ["scenes", "Scenes"],
@@ -334,7 +342,6 @@ function App() {
       ]
     : [
         ["home", "Home"],
-        ["run", "New Run"],
       ];
 
   useEffect(() => {
@@ -537,8 +544,9 @@ function App() {
     setActiveBackendRunId(null);
     setActiveRunRecord(null);
     setRunEvents([]);
+    navigateToPage("analysis");
     setViewMode("overview");
-  }, []);
+  }, [navigateToPage]);
 
   const loadReport = useCallback((nextReport: StudioReport) => {
     setReport(nextReport);
@@ -550,8 +558,9 @@ function App() {
     setActiveBackendRunId(null);
     setActiveRunRecord(null);
     setRunEvents([]);
+    navigateToPage("analysis");
     setViewMode("overview");
-  }, []);
+  }, [navigateToPage]);
 
   const commitWorkflowLibrary = useCallback((library: SavedWorkflowLibrary) => {
     persistSavedWorkflowLibrary(library);
@@ -559,7 +568,7 @@ function App() {
   }, []);
 
   const activateComponentDraft = useCallback(
-    (block: SavedWorkflowBlock, targetPage: "workflow" | "analysis") => {
+    (block: SavedWorkflowBlock, targetPage: "workflow" | "runs") => {
       const workflow = createComponentDraftWorkflow(block);
       const nextLibrary: SavedWorkflowLibrary = {
         ...workflowLibrary,
@@ -568,14 +577,14 @@ function App() {
       };
       commitWorkflowLibrary(nextLibrary);
       setWorkflowBuilderMessage(
-        targetPage === "analysis"
+        targetPage === "runs"
           ? `Testing component "${block.name}" in a workflow draft`
           : `Editing component "${block.name}" in a workflow draft`,
       );
-      setViewMode(targetPage === "analysis" ? "run" : "home");
+      setViewMode("home");
       navigateToPage(targetPage, {
         workflowId: workflow.id,
-        history: targetPage === "analysis" ? "replace" : undefined,
+        history: targetPage === "runs" ? "replace" : undefined,
       });
     },
     [commitWorkflowLibrary, navigateToPage, workflowLibrary],
@@ -733,14 +742,12 @@ function App() {
     setActiveRunRecord(null);
     setRunEvents([]);
     setCollectionManifestPreview(initialCollectionManifestPreview);
-    navigateToPage("analysis");
-    setViewMode("run");
-  }, [navigateToPage, selectedWorkflowKind, transcriptionCatalog]);
+    navigateToPage("runs", { workflowId: activeWorkflow.id });
+  }, [activeWorkflow.id, navigateToPage, selectedWorkflowKind, transcriptionCatalog]);
 
   const openWorkflowRunWorkspace = useCallback(() => {
-    navigateToPage("analysis");
-    setViewMode("run");
-  }, [navigateToPage]);
+    navigateToPage("runs", { workflowId: activeWorkflow.id });
+  }, [activeWorkflow.id, navigateToPage]);
 
   const focusWorkflowInput = useCallback(
     (input: WorkflowRunInput) => {
@@ -809,6 +816,9 @@ function App() {
   const openWorkflowRun = useCallback(
     async (run: SavedWorkflowRun) => {
       const workflowKind = workflowKindFromRunRequest(run.request);
+      const runWorkflowId = workflowLibrary.workflows.some((workflow) => workflow.id === run.workflowId)
+        ? run.workflowId
+        : activeWorkflow.id;
       if (workflowLibrary.workflows.some((workflow) => workflow.id === run.workflowId)) {
         commitWorkflowLibrary({
           ...workflowLibrary,
@@ -821,6 +831,8 @@ function App() {
       setForm(
         isYoutubeCollectionRunRequest(run.request)
           ? formFromYoutubeCollectionRunRequest(run.request, transcriptionCatalog)
+          : isVideoRedCarsRunRequest(run.request)
+            ? formFromVideoRedCarsRunRequest(run.request)
           : isSubtitleGenerationRunRequest(run.request)
             ? formFromSubtitleGenerationRunRequest(run.request, transcriptionCatalog)
           : isSongAnalysisRunRequest(run.request)
@@ -844,8 +856,7 @@ function App() {
       } else {
         setCollectionManifestPreview(initialCollectionManifestPreview);
       }
-      navigateToPage("analysis");
-      setViewMode("run");
+      navigateToPage("runs", { workflowId: runWorkflowId });
       if (run.backendRunId) {
         try {
           const client = getWorkflowClient();
@@ -869,7 +880,15 @@ function App() {
         }
       }
     },
-    [commitWorkflowLibrary, navigateToPage, transcriptionCatalog, workflowLibrary],
+    [activeWorkflow.id, commitWorkflowLibrary, navigateToPage, transcriptionCatalog, workflowLibrary],
+  );
+
+  const selectRunWorkflowDefinition = useCallback(
+    (workflowId: string) => {
+      activateWorkflowDefinition(workflowId);
+      navigateToPage("runs", { workflowId });
+    },
+    [activateWorkflowDefinition, navigateToPage],
   );
 
   const handleRunFormChange = useCallback(
@@ -958,11 +977,21 @@ function App() {
     const record = activeRunRecord ?? (await client.getRun(activeBackendRunId));
     const workflowKind = workflowKindFromRunRequest(
       workflowRuns.find((run) => run.backendRunId === activeBackendRunId)?.request ??
-        buildYoutubeRunRequest(form, activeWorkflowInputModel),
+        (selectedWorkflowKind === "youtube-collection"
+          ? buildYoutubeCollectionRunRequest(form, collectionManifestPreview)
+          : selectedWorkflowKind === "video-red-cars"
+            ? buildVideoRedCarsRunRequest(form, activeWorkflowInputModel)
+          : selectedWorkflowKind === "subtitle-generation"
+            ? buildSubtitleGenerationRunRequest(form, activeWorkflowInputModel)
+          : selectedWorkflowKind === "song-analysis"
+            ? buildSongAnalysisRunRequest(form, activeWorkflowInputModel)
+          : buildYoutubeRunRequest(form, activeWorkflowInputModel)),
     );
     setReport(
       workflowKind === "youtube-collection"
         ? await client.getYoutubeCollectionReport(record.run_id)
+        : workflowKind === "video-red-cars"
+          ? await client.getVideoRedCarsReport(record.run_id)
         : workflowKind === "subtitle-generation"
           ? await client.getSubtitleGenerationReport(record.run_id)
         : workflowKind === "song-analysis"
@@ -971,8 +1000,9 @@ function App() {
     );
     setHasLoadedReport(true);
     setActiveReportRunId(record.run_id);
+    navigateToPage("analysis");
     setViewMode("overview");
-  }, [activeBackendRunId, activeRunRecord, activeWorkflowInputModel, form, workflowRuns]);
+  }, [activeBackendRunId, activeRunRecord, activeWorkflowInputModel, collectionManifestPreview, form, navigateToPage, selectedWorkflowKind, workflowRuns]);
 
   async function runAnalysis() {
     const message = getRunValidation(form, activeWorkflowInputModel, selectedWorkflowKind);
@@ -994,6 +1024,8 @@ function App() {
     const request =
       workflowKind === "youtube-collection"
         ? buildYoutubeCollectionRunRequest(form, collectionManifestPreview)
+        : workflowKind === "video-red-cars"
+          ? buildVideoRedCarsRunRequest(form, activeWorkflowInputModel)
         : workflowKind === "subtitle-generation"
           ? buildSubtitleGenerationRunRequest(form, activeWorkflowInputModel)
         : workflowKind === "song-analysis"
@@ -1019,6 +1051,8 @@ function App() {
       const started =
         workflowKind === "youtube-collection"
           ? await client.startYoutubeCollectionRun(request as YoutubeCollectionRunRequest)
+          : workflowKind === "video-red-cars"
+            ? await client.startVideoRedCarsRun(request as VideoRedCarsRunRequest)
           : workflowKind === "subtitle-generation"
             ? await client.startSubtitleGenerationRun(request as SubtitleGenerationRunRequest)
           : workflowKind === "song-analysis"
@@ -1055,6 +1089,8 @@ function App() {
       setReport(
         workflowKind === "youtube-collection"
           ? await client.getYoutubeCollectionReport(finalRun.run_id)
+          : workflowKind === "video-red-cars"
+            ? await client.getVideoRedCarsReport(finalRun.run_id)
           : workflowKind === "subtitle-generation"
             ? await client.getSubtitleGenerationReport(finalRun.run_id)
           : workflowKind === "song-analysis"
@@ -1067,6 +1103,7 @@ function App() {
       setActiveRunRecord(finalRun);
       updateWorkflowRun(localRun.id, (run) => workflowRunFromRunRecord(run, finalRun));
       setLastRun(runRecordToCliRun(finalRun, client.label, activeWorkflow.name));
+      navigateToPage("analysis");
       setViewMode("overview");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1148,6 +1185,27 @@ function App() {
                   </span>
                 )}
                 <RunIcon className="h-4 w-4 shrink-0" />
+              </button>
+              <button
+                type="button"
+                className={classNames(
+                  "flex w-full items-center justify-between rounded-lg border px-3 py-3 text-left transition",
+                  mainSidebarCollapsed && "h-10 justify-center px-0 py-0",
+                  page === "runs"
+                    ? "border-zinc-950 bg-zinc-950 text-white"
+                    : "border-zinc-200 bg-white text-zinc-800 hover:border-zinc-300 hover:bg-zinc-50",
+                )}
+                onClick={() => navigateToPage("runs", { workflowId: activeWorkflow.id })}
+                title="Runs"
+                aria-label="Runs"
+              >
+                {!mainSidebarCollapsed && (
+                  <span>
+                    <span className="block text-sm font-medium">Runs</span>
+                    <span className="block text-xs opacity-70">Dependencies and inputs</span>
+                  </span>
+                )}
+                <PlayIcon className="h-4 w-4 shrink-0" />
               </button>
               <button
                 type="button"
@@ -1387,6 +1445,8 @@ function App() {
                   <h1 className="text-2xl font-semibold tracking-normal text-zinc-950">
                     {page === "workflow"
                       ? "Workflow Builder"
+                      : page === "runs"
+                        ? "Runs Overview"
                       : page === "components"
                         ? "Components"
                       : page === "data-sources"
@@ -1400,6 +1460,8 @@ function App() {
                   <p className="mt-1 text-sm text-zinc-500">
                     {page === "workflow"
                       ? workflowKindName(activeWorkflow.kind)
+                      : page === "runs"
+                        ? `${activeWorkflow.name} · Select a workflow, review dependencies, and configure input arguments.`
                       : page === "components"
                         ? "Import, export, edit, and test composed workflow components"
                       : page === "data-sources"
@@ -1460,7 +1522,41 @@ function App() {
                 savedBlocks={savedBlocks}
                 onSavedBlocksChange={setSavedBlocks}
                 onEditComponent={(block) => activateComponentDraft(block, "workflow")}
-                onTestComponent={(block) => activateComponentDraft(block, "analysis")}
+                onTestComponent={(block) => activateComponentDraft(block, "runs")}
+              />
+            ) : page === "runs" ? (
+              <RunWorkspace
+                form={form}
+                onFormChange={(next) => {
+                  handleRunFormChange(next);
+                }}
+                onRun={runAnalysis}
+                isRunning={runStatus === "running"}
+                runDisabled={runStatus === "running" || validationMessage !== null}
+                validationMessage={validationMessage}
+                cliRun={cliRun}
+                runOutput={runOutput}
+                activeRunId={activeBackendRunId}
+                activeRunRecord={activeRunRecord}
+                runEvents={runEvents}
+                collectionManifestPreview={collectionManifestPreview}
+                workflowLibrary={workflowLibrary}
+                activeWorkflow={activeWorkflow}
+                activeWorkflowInputModel={activeWorkflowInputModel}
+                transcriptionCatalog={transcriptionCatalog}
+                selectedWorkflowKind={selectedWorkflowKind}
+                onSelectWorkflow={selectRunWorkflowDefinition}
+                onCreateWorkflow={createWorkflowDefinition}
+                onEditWorkflow={() => navigateToPage("workflow", { workflowId: activeWorkflow.id })}
+                onFocusWorkflowInput={focusWorkflowInput}
+                onCancelRun={cancelActiveRun}
+                onRetryRun={runAnalysis}
+                onOpenReport={openActiveReport}
+                onPreviewCollectionManifest={previewYoutubeCollectionManifest}
+                onCollectionManifestSelectionChange={(selectedItemIds) =>
+                  setCollectionManifestPreview((current) => ({ ...current, selectedItemIds }))
+                }
+                onLoadReport={loadReport}
               />
             ) : page === "data-sources" ? (
               <WorkspaceDataSourcesPage
@@ -1500,43 +1596,9 @@ function App() {
             ) : viewMode === "home" ? (
               <AnalysisHomePage
                 activeWorkflow={activeWorkflow}
-                onStartRun={() => setViewMode("run")}
+                onStartRun={startNewWorkflowRun}
                 onEditWorkflow={() => navigateToPage("workflow")}
                 onLoadSample={loadSampleReport}
-                onLoadReport={loadReport}
-              />
-            ) : viewMode === "run" ? (
-              <RunWorkspace
-                form={form}
-                onFormChange={(next) => {
-                  handleRunFormChange(next);
-                }}
-                onRun={runAnalysis}
-                isRunning={runStatus === "running"}
-                runDisabled={runStatus === "running" || validationMessage !== null}
-                validationMessage={validationMessage}
-                cliRun={cliRun}
-                runOutput={runOutput}
-                activeRunId={activeBackendRunId}
-                activeRunRecord={activeRunRecord}
-                runEvents={runEvents}
-                collectionManifestPreview={collectionManifestPreview}
-                workflowLibrary={workflowLibrary}
-                activeWorkflow={activeWorkflow}
-                activeWorkflowInputModel={activeWorkflowInputModel}
-                transcriptionCatalog={transcriptionCatalog}
-                selectedWorkflowKind={selectedWorkflowKind}
-                onSelectWorkflow={activateWorkflowDefinition}
-                onCreateWorkflow={createWorkflowDefinition}
-                onEditWorkflow={() => navigateToPage("workflow")}
-                onFocusWorkflowInput={focusWorkflowInput}
-                onCancelRun={cancelActiveRun}
-                onRetryRun={runAnalysis}
-                onOpenReport={openActiveReport}
-                onPreviewCollectionManifest={previewYoutubeCollectionManifest}
-                onCollectionManifestSelectionChange={(selectedItemIds) =>
-                  setCollectionManifestPreview((current) => ({ ...current, selectedItemIds }))
-                }
                 onLoadReport={loadReport}
               />
             ) : (
@@ -2181,7 +2243,7 @@ interface SavedWorkflowRun {
   updatedAt: string;
   status: RunStatus;
   inputSummary: string;
-  request: YoutubeRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest;
+  request: YoutubeRunRequest | VideoRedCarsRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest;
   backendRunId?: string;
   reportPath?: string;
   message?: string | null;
@@ -2554,6 +2616,21 @@ const initialWorkflowNodes: WorkflowNodeModel[] = [
       port("file", "video file", "video_file"),
       port("config", "pipeline config", "run_config"),
     ],
+  }),
+  workflowNode("video-red-cars-workflow", 1080, 360, {
+    title: "Video Red Cars Workflow",
+    packageName: "video-analysis-use-cases",
+    description: "Detects red cars in sampled frames, groups them by scene, and writes per-scene counts.",
+    tone: "amber",
+    inputs: [
+      port("file", "video file", "video_file"),
+      port("args", "workflow config", "run_config"),
+    ],
+    outputs: [
+      port("file", "video file", "video_file"),
+      port("report", "video-red-cars.json", "json_report"),
+    ],
+    tags: ["video", "red-cars", "scene", "detection"],
   }),
   workflowNode("song-workflow", 720, 560, {
     title: "Song Workflow",
@@ -3431,6 +3508,8 @@ const initialWorkflowEdges: Edge[] = [
   workflowEdge("song-catalog-matcher", "matches", "song-report-writer", "matches"),
   workflowEdge("song-music-analyzer", "features", "song-report-writer", "features"),
   workflowEdge("youtube-workflow", "url", "download", "url"),
+  workflowEdge("download", "file", "video-red-cars-workflow", "file"),
+  workflowEdge("youtube-workflow", "config", "video-red-cars-workflow", "args"),
   workflowEdge("subtitle-workflow", "url", "download", "url"),
   workflowEdge("youtube-workflow", "collection", "collection-manifest", "url"),
   workflowEdge("collection-manifest", "manifest", "collection-download-loop", "manifest"),
@@ -9605,6 +9684,7 @@ function isSavedWorkflowRun(value: unknown): value is SavedWorkflowRun {
     isRunStatus(value.status) &&
     typeof value.inputSummary === "string" &&
     (isYoutubeRunRequest(value.request) ||
+      isVideoRedCarsRunRequest(value.request) ||
       isYoutubeCollectionRunRequest(value.request) ||
       isSongAnalysisRunRequest(value.request) ||
       isSubtitleGenerationRunRequest(value.request)) &&
@@ -9976,6 +10056,25 @@ function isYoutubeCollectionRunRequest(value: unknown): value is YoutubeCollecti
     isRecord(value.analysis.transcription) &&
     typeof value.analysis.transcription.enabled === "boolean" &&
     isRecord(value.analysis.models)
+  );
+}
+
+function isVideoRedCarsRunRequest(value: unknown): value is VideoRedCarsRunRequest {
+  if (!isRecord(value) || !isRecord(value.source) || !isRecord(value.vehicle_detector)) {
+    return false;
+  }
+  const sourceValid =
+    (value.source.kind === "youtube_url" && typeof value.source.url === "string") ||
+    (value.source.kind === "local_file" && typeof value.source.path === "string");
+  return (
+    sourceValid &&
+    (value.work_dir === undefined || value.work_dir === null || typeof value.work_dir === "string") &&
+    typeof value.scene_threshold === "number" &&
+    typeof value.min_scene_len === "number" &&
+    (value.max_frames === undefined || value.max_frames === null || typeof value.max_frames === "number") &&
+    typeof value.visual_sample_every === "number" &&
+    typeof value.vehicle_detector.command === "string" &&
+    Array.isArray(value.vehicle_detector.args)
   );
 }
 
@@ -11516,6 +11615,7 @@ function WorkflowRunControls({
   const canCancel = Boolean(activeRunId && (activeStatus === "pending" || activeStatus === "running" || isRunning));
   const canRetry = Boolean(activeRunRecord && ["failed", "canceled", "succeeded"].includes(activeRunRecord.status));
   const canOpenReport = activeRunRecord?.status === "succeeded";
+  const isRedCars = selectedWorkflowKind === "video-red-cars";
   const usesNativeWhisperCpp = form.transcriptionEngine === "whisper_cpp";
   const transcriptionModels = transcriptionCatalog?.whisper_cpp.models ?? [{ model: form.transcriptionModel, cached: false }];
 
@@ -11769,79 +11869,87 @@ function WorkflowRunControls({
               </Field>
             </div>
 
-            <label className="flex items-center gap-3 rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-800">
-              <input
-                type="checkbox"
-                className="h-4 w-4 rounded border-zinc-300 text-zinc-950 focus:ring-zinc-950"
-                checked={form.skipTranscription}
-                onChange={(event) => set("skipTranscription", event.target.checked)}
-              />
-              <span>Skip transcription</span>
-            </label>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field
-                label={workflowInputFieldLabel("Transcription engine", runConfigInput)}
-                action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
-              >
-                <TranscriptionEngineSelect
-                  value={form.transcriptionEngine}
-                  onChange={(value) => set("transcriptionEngine", value)}
-                />
-              </Field>
-              {usesNativeWhisperCpp ? (
-                <Field label={workflowInputFieldLabel("Whisper.cpp model", runConfigInput)}>
-                  <TranscriptionModelSelect
-                    value={form.transcriptionModel}
-                    models={transcriptionModels}
-                    onChange={(value) => set("transcriptionModel", value)}
-                  />
-                </Field>
-              ) : (
-                <Field label={workflowInputFieldLabel("Transcriber command", runConfigInput)}>
+            {!isRedCars && (
+              <>
+                <label className="flex items-center gap-3 rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-800">
                   <input
-                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-                    value={form.transcriptionCommand}
-                    placeholder={defaultTranscriptionCommand(form.transcriptionEngine)}
-                    onChange={(event) => set("transcriptionCommand", event.target.value)}
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-zinc-300 text-zinc-950 focus:ring-zinc-950"
+                    checked={form.skipTranscription}
+                    onChange={(event) => set("skipTranscription", event.target.checked)}
                   />
-                </Field>
-              )}
-            </div>
+                  <span>Skip transcription</span>
+                </label>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field
+                    label={workflowInputFieldLabel("Transcription engine", runConfigInput)}
+                    action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
+                  >
+                    <TranscriptionEngineSelect
+                      value={form.transcriptionEngine}
+                      onChange={(value) => set("transcriptionEngine", value)}
+                    />
+                  </Field>
+                  {usesNativeWhisperCpp ? (
+                    <Field label={workflowInputFieldLabel("Whisper.cpp model", runConfigInput)}>
+                      <TranscriptionModelSelect
+                        value={form.transcriptionModel}
+                        models={transcriptionModels}
+                        onChange={(value) => set("transcriptionModel", value)}
+                      />
+                    </Field>
+                  ) : (
+                    <Field label={workflowInputFieldLabel("Transcriber command", runConfigInput)}>
+                      <input
+                        className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                        value={form.transcriptionCommand}
+                        placeholder={defaultTranscriptionCommand(form.transcriptionEngine)}
+                        onChange={(event) => set("transcriptionCommand", event.target.value)}
+                      />
+                    </Field>
+                  )}
+                </div>
+              </>
+            )}
 
             <Field
-              label={workflowInputFieldLabel("Object command", runConfigInput)}
+              label={workflowInputFieldLabel(isRedCars ? "Vehicle detector command" : "Object command", runConfigInput)}
               action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
             >
               <input
                 className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
                 value={form.objectCommand}
-                placeholder="optional"
+                placeholder={isRedCars ? "required" : "optional"}
                 onChange={(event) => set("objectCommand", event.target.value)}
               />
             </Field>
-            <Field
-              label={workflowInputFieldLabel("OCR command", runConfigInput)}
-              action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
-            >
-              <input
-                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-                value={form.ocrCommand}
-                placeholder="optional"
-                onChange={(event) => set("ocrCommand", event.target.value)}
-              />
-            </Field>
-            <Field
-              label={workflowInputFieldLabel("Text command", runConfigInput)}
-              action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
-            >
-              <input
-                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
-                value={form.textCommand}
-                placeholder="optional"
-                onChange={(event) => set("textCommand", event.target.value)}
-              />
-            </Field>
+            {!isRedCars && (
+              <>
+                <Field
+                  label={workflowInputFieldLabel("OCR command", runConfigInput)}
+                  action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
+                >
+                  <input
+                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                    value={form.ocrCommand}
+                    placeholder="optional"
+                    onChange={(event) => set("ocrCommand", event.target.value)}
+                  />
+                </Field>
+                <Field
+                  label={workflowInputFieldLabel("Text command", runConfigInput)}
+                  action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
+                >
+                  <input
+                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                    value={form.textCommand}
+                    placeholder="optional"
+                    onChange={(event) => set("textCommand", event.target.value)}
+                  />
+                </Field>
+              </>
+            )}
               </>
             ) : (
               <>
@@ -12448,6 +12556,29 @@ function buildCommand(
     command.push("--write-to-video-folder");
     return command;
   }
+  if (workflowKind === "video-red-cars") {
+    const sourceMode = effectiveSourceMode(form, inputModel);
+    const command = [
+      "studio-api",
+      "POST",
+      "/api/workflows/video-red-cars/runs",
+      "--work-dir",
+      form.workDir,
+      "--scene-threshold",
+      String(form.sceneThreshold),
+      "--min-scene-len",
+      String(form.minSceneLen),
+      "--visual-sample-every",
+      String(form.visualSampleEvery),
+      "--vehicle-detector",
+      form.objectCommand || "required",
+    ];
+    command.push(sourceMode === "url" ? "--url" : "--input", sourceMode === "url" ? form.url : form.input);
+    if (form.maxFrames.trim()) {
+      command.push("--max-frames", form.maxFrames.trim());
+    }
+    return command;
+  }
   const sourceMode = effectiveSourceMode(form, inputModel);
   const command = [
     "studio-api",
@@ -12510,6 +12641,25 @@ function buildYoutubeRunRequest(form: WorkflowRunForm, inputModel?: WorkflowRunI
       object: commandConfig(form.objectCommand),
       ocr: commandConfig(form.ocrCommand),
       text: commandConfig(form.textCommand),
+    },
+  };
+}
+
+function buildVideoRedCarsRunRequest(form: WorkflowRunForm, inputModel?: WorkflowRunInputModel): VideoRedCarsRunRequest {
+  const sourceMode = effectiveSourceMode(form, inputModel);
+  return {
+    source:
+      sourceMode === "url"
+        ? { kind: "youtube_url", url: form.url.trim() }
+        : { kind: "local_file", path: form.input.trim() },
+    work_dir: form.workDir.trim() || null,
+    scene_threshold: form.sceneThreshold,
+    min_scene_len: form.minSceneLen,
+    max_frames: form.maxFrames.trim() ? Number(form.maxFrames.trim()) : null,
+    visual_sample_every: form.visualSampleEvery,
+    vehicle_detector: {
+      command: form.objectCommand.trim(),
+      args: [],
     },
   };
 }
@@ -12617,6 +12767,25 @@ function formFromYoutubeRunRequest(request: YoutubeRunRequest, catalog?: Transcr
     objectCommand: commandConfigToInput(request.models.object),
     ocrCommand: commandConfigToInput(request.models.ocr),
     textCommand: commandConfigToInput(request.models.text),
+  };
+}
+
+function formFromVideoRedCarsRunRequest(request: VideoRedCarsRunRequest): WorkflowRunForm {
+  return {
+    ...initialForm,
+    sourceMode: request.source.kind === "youtube_url" ? "url" : "file",
+    url: request.source.kind === "youtube_url" ? request.source.url : "",
+    input: request.source.kind === "local_file" ? request.source.path : initialForm.input,
+    workDir: request.work_dir ?? "workflow-output/video-red-cars",
+    output: request.work_dir
+      ? `${request.work_dir.replace(/\/$/, "")}/video-red-cars.json`
+      : "workflow-output/video-red-cars/video-red-cars.json",
+    sceneThreshold: request.scene_threshold,
+    minSceneLen: request.min_scene_len,
+    maxFrames: request.max_frames ? String(request.max_frames) : "",
+    visualSampleEvery: request.visual_sample_every,
+    skipTranscription: true,
+    objectCommand: request.vehicle_detector.command,
   };
 }
 
@@ -12911,7 +13080,9 @@ function workflowRunToCliRun(run: SavedWorkflowRun): CliRun {
   };
 }
 
-function reportPathForRequest(request: YoutubeRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest): string {
+function reportPathForRequest(
+  request: YoutubeRunRequest | VideoRedCarsRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest,
+): string {
   if (isYoutubeCollectionRunRequest(request)) {
     return request.work_dir ? `${request.work_dir.replace(/\/$/, "")}/collection-analysis.json` : "collection-analysis.json";
   }
@@ -12920,6 +13091,9 @@ function reportPathForRequest(request: YoutubeRunRequest | YoutubeCollectionRunR
   }
   if (isSongAnalysisRunRequest(request)) {
     return request.work_dir ? `${request.work_dir.replace(/\/$/, "")}/song-analysis.json` : "song-analysis.json";
+  }
+  if (isVideoRedCarsRunRequest(request)) {
+    return request.work_dir ? `${request.work_dir.replace(/\/$/, "")}/video-red-cars.json` : "video-red-cars.json";
   }
   return request.work_dir ? `${request.work_dir.replace(/\/$/, "")}/analysis.json` : initialForm.output;
 }
@@ -12939,6 +13113,7 @@ function getRunValidation(
   inputModel?: WorkflowRunInputModel,
   workflowKind: WorkflowKindId = "youtube-video",
 ): string | null {
+  const isRedCars = workflowKind === "video-red-cars";
   const isSong = workflowKind === "song-analysis";
   const isSubtitle = workflowKind === "subtitle-generation";
   if (workflowKind === "youtube-collection" && form.sourceMode === "collection") {
@@ -13035,6 +13210,9 @@ function getRunValidation(
   if (form.maxFrames.trim() && !/^[1-9]\d*$/.test(form.maxFrames.trim())) {
     return "Max frames must be a positive integer.";
   }
+  if (isRedCars && !form.objectCommand.trim()) {
+    return "Vehicle detector command is required.";
+  }
   if (inputModel) {
     for (const input of inputModel.genericInputs) {
       const message = validateWorkflowInputValue(input.port, form.workflowInputs[input.key] ?? "");
@@ -13070,6 +13248,9 @@ function inferWorkflowKindFromName(name: string): WorkflowKindId {
   if (normalized.includes("song") || normalized.includes("music")) {
     return "song-analysis";
   }
+  if (normalized.includes("red car")) {
+    return "video-red-cars";
+  }
   if (normalized.includes("subtitle") || normalized.includes("srt")) {
     return "subtitle-generation";
   }
@@ -13077,10 +13258,13 @@ function inferWorkflowKindFromName(name: string): WorkflowKindId {
 }
 
 function workflowKindFromRunRequest(
-  request: YoutubeRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest,
+  request: YoutubeRunRequest | VideoRedCarsRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest,
 ): WorkflowKindId {
   if (isYoutubeCollectionRunRequest(request)) {
     return "youtube-collection";
+  }
+  if (isVideoRedCarsRunRequest(request)) {
+    return "video-red-cars";
   }
   if (isSubtitleGenerationRunRequest(request)) {
     return "subtitle-generation";
@@ -13093,6 +13277,8 @@ function workflowKindFromRunRequest(
 
 function defaultWorkDirForWorkflowKind(id: WorkflowKindId): string {
   switch (id) {
+    case "video-red-cars":
+      return "workflow-output/video-red-cars";
     case "youtube-collection":
       return "workflow-output/youtube-collection";
     case "song-analysis":
@@ -13106,6 +13292,8 @@ function defaultWorkDirForWorkflowKind(id: WorkflowKindId): string {
 
 function defaultOutputForWorkflowKind(id: WorkflowKindId): string {
   switch (id) {
+    case "video-red-cars":
+      return "workflow-output/video-red-cars/video-red-cars.json";
     case "youtube-collection":
       return "workflow-output/youtube-collection/collection-analysis.json";
     case "song-analysis":
@@ -13126,6 +13314,12 @@ function appLocationFromPath(pathname: string): AppLocation {
       workflowId: decodePathSegment(workflowSegment),
     };
   }
+  if (pageSegment === "run" || pageSegment === "runs") {
+    return {
+      page: "runs",
+      workflowId: decodePathSegment(workflowSegment),
+    };
+  }
   if (pageSegment === "data-sources" || pageSegment === "datasources") {
     return { page: "data-sources", workflowId: null };
   }
@@ -13142,6 +13336,8 @@ function pathForAppPage(page: AppPage, workflowId?: string | null): string {
   switch (page) {
     case "workflow":
       return workflowId ? `/workflow/${encodeURIComponent(workflowId)}` : "/workflow";
+    case "runs":
+      return workflowId ? `/runs/${encodeURIComponent(workflowId)}` : "/runs";
     case "components":
       return "/components";
     case "data-sources":

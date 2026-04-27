@@ -3,7 +3,7 @@ use studio_core::{
     DataSourceDerivationInput, DataSourceRecord, DataSourceUpsert, RunEvent, RunId, RunManager,
     RunRecord, RunStatus, SongAnalysisRunRequest, SongCatalogImportRequest,
     SongCatalogImportResponse, StudioReport, SubtitleGenerationRunRequest, SystemDependencyReport,
-    TranscriptionCatalog, WorkflowCatalog, YoutubeCollectionManifest,
+    TranscriptionCatalog, VideoRedCarsRunRequest, WorkflowCatalog, YoutubeCollectionManifest,
     YoutubeCollectionManifestRequest, YoutubeCollectionRunRequest, YoutubeRunRequest,
 };
 use tauri::{AppHandle, Emitter, State};
@@ -116,6 +116,21 @@ pub async fn start_youtube_collection_run(
     let record = state
         .manager
         .start_youtube_collection(request)
+        .await
+        .map_err(error_string)?;
+    attach_run_event_forwarder(app, state.manager.clone(), record.run_id).await;
+    Ok(record)
+}
+
+#[tauri::command]
+pub async fn start_video_red_cars_run(
+    app: AppHandle,
+    state: State<'_, StudioState>,
+    request: VideoRedCarsRunRequest,
+) -> Result<RunRecord, String> {
+    let record = state
+        .manager
+        .start_video_red_cars(request)
         .await
         .map_err(error_string)?;
     attach_run_event_forwarder(app, state.manager.clone(), record.run_id).await;
