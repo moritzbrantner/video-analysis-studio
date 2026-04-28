@@ -618,7 +618,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn workflow_catalog_endpoint_returns_package_owned_nodes() {
+    async fn workflow_catalog_endpoint_returns_local_pipeline_nodes() {
         let dir = tempfile::tempdir().unwrap();
         let app = build_app(RunManager::new(dir.path().to_path_buf()));
         let response = app
@@ -635,9 +635,16 @@ mod tests {
             .unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert!(value["version"].as_i64().unwrap_or_default() >= 1);
-        assert!(value["nodes"].as_array().unwrap().iter().any(|node| {
-            node["id"] == "youtube-workflow" && node["package_name"] == "video-analysis-use-cases"
-        }));
+        assert!(value["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| { node["id"] == "download" && node["package_name"] == "yt-dlp" }));
+        assert!(value["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| { node["id"] == "content-detector" }));
     }
 
     #[tokio::test]

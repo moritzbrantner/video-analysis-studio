@@ -32,6 +32,7 @@ export function VideoRedCarsOverviewDashboard({
         report={adapted}
         runId={runId}
         activeSceneIndex={controls.activeSceneIndex}
+        activeObservationIndex={controls.activeObservationIndex}
         activeTimelineItemId={controls.activeTimelineItemId}
         onSelectTimelineItem={controls.selectTimelineItem}
       />
@@ -67,6 +68,7 @@ export function VideoRedCarsScenesDashboard({
         report={adapted}
         runId={runId}
         activeSceneIndex={controls.activeSceneIndex}
+        activeObservationIndex={controls.activeObservationIndex}
         activeTimelineItemId={controls.activeTimelineItemId}
         onSelectTimelineItem={controls.selectTimelineItem}
       />
@@ -96,12 +98,13 @@ export function VideoRedCarsSignalsDashboard({
         report={adapted}
         runId={runId}
         activeSceneIndex={controls.activeSceneIndex}
+        activeObservationIndex={controls.activeObservationIndex}
         activeTimelineItemId={controls.activeTimelineItemId}
         onSelectTimelineItem={controls.selectTimelineItem}
       />
       <ObservationList
         observations={report.video.observations}
-        title="Red Car Observations"
+        title={`${targetObjectTitle(report)} Observations`}
         activeObservationIndex={controls.activeObservationIndex}
         onSelectObservation={controls.selectObservation}
       />
@@ -155,9 +158,10 @@ function RedCarSummaryCards({ report }: { report: VideoRedCarsReport }) {
     (max, scene) => Math.max(max, scene.peak_visible_red_cars),
     0,
   );
+  const targetTitle = targetObjectTitle(report);
   return (
     <div className="grid gap-3 sm:grid-cols-3">
-      <StatCard label="Red Cars Counted" value={formatNumber(totalDistinctRedCars)} tone="rose" />
+      <StatCard label={`Distinct ${targetTitle}`} value={formatNumber(totalDistinctRedCars)} tone="rose" />
       <StatCard label="Peak Visible" value={formatNumber(peakVisibleRedCars)} tone="amber" />
       <StatCard label="Samples" value={formatNumber(report.video.observations.length)} tone="sky" />
     </div>
@@ -165,14 +169,18 @@ function RedCarSummaryCards({ report }: { report: VideoRedCarsReport }) {
 }
 
 function RedCarSceneMetrics({ report }: { report: VideoRedCarsReport }) {
+  const targetTitle = targetObjectTitle(report);
   return (
-    <Panel title="Scene Metrics" description={`${formatNumber(report.video.scenes.length)} scenes`}>
+    <Panel
+      title="Scene Metrics"
+      description={`${formatNumber(report.video.scenes.length)} scenes · target ${targetObjectLabel(report)}`}
+    >
       <div className="overflow-x-auto">
         <table className="min-w-full text-left text-sm">
           <thead className="border-b border-zinc-200 text-xs uppercase text-zinc-500">
             <tr>
               <th className="px-3 py-2 font-medium">Scene</th>
-              <th className="px-3 py-2 font-medium">Red Cars</th>
+              <th className="px-3 py-2 font-medium">{targetTitle}</th>
               <th className="px-3 py-2 font-medium">Peak Visible</th>
               <th className="px-3 py-2 font-medium">Sampled Frames</th>
             </tr>
@@ -191,4 +199,16 @@ function RedCarSceneMetrics({ report }: { report: VideoRedCarsReport }) {
       </div>
     </Panel>
   );
+}
+
+function targetObjectValue(report: VideoRedCarsReport): string {
+  return report.target_object?.trim() || "car";
+}
+
+function targetObjectLabel(report: VideoRedCarsReport): string {
+  return `red ${targetObjectValue(report)}`;
+}
+
+function targetObjectTitle(report: VideoRedCarsReport): string {
+  return targetObjectLabel(report).replace(/\b\w/g, (value) => value.toUpperCase());
 }

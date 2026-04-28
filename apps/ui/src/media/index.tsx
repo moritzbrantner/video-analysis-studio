@@ -1,9 +1,10 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 
-import { getWorkflowClient } from "../api/client";
+import { useMediaUrlQuery } from "../api/queries";
 import type {
   AnalysisEvent,
   AnalysisObservation,
+  BoundingBox,
   MusicSegmentReport,
   SceneReport,
   StudioReport,
@@ -11,7 +12,7 @@ import type {
   YoutubeVideoReport,
 } from "../types";
 import { Badge, EmptyState, Panel } from "../shared/primitives";
-import { cn, formatSeconds } from "../shared/utils";
+import { cn, formatSeconds, ratioPercent } from "../shared/utils";
 
 export interface MediaCandidate {
   path: string;
@@ -64,6 +65,7 @@ export interface MediaPreviewPanelProps {
   report: StudioReport;
   runId?: string | null;
   activeSceneIndex?: number | null;
+  activeObservationIndex?: number | null;
   activeTimelineItemId?: string | null;
   onSelectTimelineItem?: (item: MediaTimelineItem) => void;
   className?: string;
@@ -73,46 +75,28 @@ export const MediaPreviewPanel = forwardRef<MediaPreviewHandle, MediaPreviewPane
   report,
   runId,
   activeSceneIndex,
+  activeObservationIndex,
   activeTimelineItemId,
   onSelectTimelineItem,
   className,
 }, ref) {
   const candidates = useMemo(() => mediaCandidatesForReport(report), [report]);
   const [selectedPath, setSelectedPath] = useState(candidates[0]?.path ?? "");
-  const [mediaUrl, setMediaUrl] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const mediaUrlQuery = useMediaUrlQuery(runId, selectedPath);
   const mediaRef = useRef<HTMLMediaElement | null>(null);
 
   useEffect(() => {
     setSelectedPath(candidates[0]?.path ?? "");
   }, [candidates]);
 
-  useEffect(() => {
-    let canceled = false;
-    setError(null);
-    setMediaUrl(null);
-    if (!selectedPath) {
-      return;
-    }
-    getWorkflowClient()
-      .mediaUrl(runId ?? null, selectedPath)
-      .then((url) => {
-        if (!canceled) {
-          setMediaUrl(url);
-        }
-      })
-      .catch((errorValue) => {
-        if (!canceled) {
-          setError(errorValue instanceof Error ? errorValue.message : String(errorValue));
-        }
-      });
-    return () => {
-      canceled = true;
-    };
-  }, [runId, selectedPath]);
-
   const timeline = timelineItemsForReport(report);
   const selectedCandidate = candidates.find((candidate) => candidate.path === selectedPath) ?? candidates[0] ?? null;
+  const mediaUrl = mediaUrlQuery.data ?? null;
+  const error = mediaUrlQuery.error ? mediaUrlQuery.error.message : null;
+  const activeObservation = useMemo(
+    () => activeObservationForReport(report, activeObservationIndex),
+    [activeObservationIndex, report],
+  );
 
   const seek = useCallback((seconds?: number | null) => {
     if (seconds == null || !Number.isFinite(seconds) || !mediaRef.current) {
@@ -154,13 +138,24 @@ export const MediaPreviewPanel = forwardRef<MediaPreviewHandle, MediaPreviewPane
           ) : selectedCandidate.kind === "audio" ? (
             <audio ref={(node) => { mediaRef.current = node; }} src={mediaUrl} className="w-full" controls preload="metadata" />
           ) : (
-            <video
-              ref={(node) => { mediaRef.current = node; }}
-              src={mediaUrl}
-              className="aspect-video w-full rounded-lg bg-black"
-              controls
-              preload="metadata"
-            />
+            <div className="relative">
+              <video
+                ref={(node) => { mediaRef.current = node; }}
+                src={mediaUrl}
+                className="block h-auto max-h-[70vh] w-full rounded-lg bg-black"
+                controls
+                preload="metadata"
+              />
+              {"video" in report && activeObservation?.region ? (
+                <ObservationOverlay
+                  label={activeObservation.label ?? activeObservation.text ?? activeObservation.kind}
+                  region={activeObservation.region}
+                  videoWidth={report.video.width}
+                  videoHeight={report.video.height}
+                  tone={observationOverlayTone(activeObservation)}
+                />
+              ) : null}
+            </div>
           )}
         </div>
         <MediaTimelineList
@@ -343,4 +338,68 @@ function toneForTimelineKind(kind: MediaTimelineItem["kind"]): "neutral" | "sky"
     case "music":
       return "rose";
   }
+}
+
+function activeObservationForReport(report: StudioReport, activeObservationIndex?: number | null): AnalysisObservation | null {
+  if (!("video" in report) || activeObservationIndex == null) {
+    return null;
+  }
+  return report.video.observations[activeObservationIndex] ?? null;
+}
+
+function observationOverlayTone(observation: AnalysisObservation): "rose" | "violet" {
+  const color = observation.attributes?.color?.toLowerCase();
+  if (color === "red" || observation.label?.toLowerCase().includes("red")) {
+    return "rose";
+  }
+  return "violet";
+}
+
+function ObservationOverlay({
+  label,
+  region,
+  videoWidth,
+  videoHeight,
+  tone,
+}: {
+  label: string;
+  region: BoundingBox;
+  videoWidth: number;
+  videoHeight: number;
+  tone: "rose" | "violet";
+}) {
+  const left = ratioPercent(region.x, videoWidth);
+  const top = ratioPercent(region.y, videoHeight);
+  const width = Math.max(0, Math.min(100 - left, ratioPercent(region.width, videoWidth)));
+  const height = Math.max(0, Math.min(100 - top, ratioPercent(region.height, videoHeight)));
+  const palette =
+    tone === "rose"
+      ? {
+          border: "border-rose-400",
+          ring: "shadow-[0_0_0_2px_rgba(251,113,133,0.9),0_0_0_6px_rgba(251,113,133,0.18)]",
+          label: "bg-rose-500/90 text-white",
+        }
+      : {
+          border: "border-violet-400",
+          ring: "shadow-[0_0_0_2px_rgba(167,139,250,0.9),0_0_0_6px_rgba(167,139,250,0.18)]",
+          label: "bg-violet-500/90 text-white",
+        };
+
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-lg">
+      <div
+        className={cn("absolute rounded-md border-2", palette.border, palette.ring)}
+        style={{
+          left: `${left}%`,
+          top: `${top}%`,
+          width: `${width}%`,
+          height: `${height}%`,
+        }}
+      >
+        <div className="absolute left-0 top-0 max-w-full rounded-br-md px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em]">
+          <span className={cn("inline-block rounded px-1.5 py-0.5", palette.label)}>{label}</span>
+        </div>
+      </div>
+    </div>
+  );
 }

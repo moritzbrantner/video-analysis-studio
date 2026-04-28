@@ -105,7 +105,6 @@ const workflowNodeArrayNames = [
 const packageOnlyWorkflowNodeIds = new Set([
   "audio-voice-analysis-workflow",
   "image-person-edit-workflow",
-  "video-red-cars-workflow",
 ]);
 
 const allowedCategories = new Set([
@@ -142,7 +141,7 @@ const allowedTones = new Set([
 
 const workflowSource = readFileSync(join(import.meta.dir, "../src/main.tsx"), "utf8");
 const workflowCatalogJsonSource = readFileSync(
-  join(import.meta.dir, "../../../../rust-packages/prototypes/rust/video-analysis-use-cases/src/workflow_catalog.json"),
+  join(import.meta.dir, "../../../crates/studio-core/src/workflow_catalog.json"),
   "utf8",
 );
 const workflowCatalogDefinition = JSON.parse(workflowCatalogJsonSource) as {
@@ -280,7 +279,7 @@ describe("starter workflow templates", () => {
     ]);
     for (const template of Object.values(workflowStarterTemplates)) {
       expect(template.nodes.length).toBeGreaterThanOrEqual(2);
-      expect(template.nodes.length).toBeLessThanOrEqual(5);
+      expect(template.nodes.length).toBeLessThanOrEqual(16);
     }
   });
 
@@ -290,11 +289,12 @@ describe("starter workflow templates", () => {
       "Subtitle SRT Starter",
       "YouTube Collection Spot Check",
       "YouTube Red Cars Counter",
+      "YouTube Red Cars Only",
       "YouTube Video Quick Review",
     ]);
     for (const template of Object.values(exampleWorkflowStarterTemplates)) {
       expect(template.nodes.length).toBeGreaterThanOrEqual(2);
-      expect(template.nodes.length).toBeLessThanOrEqual(4);
+      expect(template.nodes.length).toBeLessThanOrEqual(6);
     }
   });
 

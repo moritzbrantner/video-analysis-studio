@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Panel } from "../shared/primitives";
 
@@ -27,6 +28,7 @@ export interface ResultPersistencePanelProps<T> {
 
 const resultDatabaseName = "video-analysis-studio";
 const resultStoreName = "analysis-results";
+const storedResultsQueryKey = ["stored-results"] as const;
 
 export function ReportShell({
   title = "Analysis Results",
@@ -178,40 +180,32 @@ export function DatabaseResultSaver<T>({
   result: T;
   defaultLabel?: string;
 }) {
+  const cache = useQueryClient();
   const [label, setLabel] = useState(defaultLabel);
-  const [records, setRecords] = useState<Array<StoredResultRecord<T>>>([]);
   const [message, setMessage] = useState<SaveMessage | null>(null);
+  const { data: records = [] } = useQuery({
+    queryKey: storedResultsQueryKey,
+    queryFn: () => listStoredResults<T>(),
+  });
+  const saveResultMutation = useMutation({
+    mutationFn: () => saveResultToIndexedDb(result, label.trim() || defaultLabel),
+    onSuccess: (record) => {
+      cache.setQueryData<Array<StoredResultRecord<T>>>(storedResultsQueryKey, (currentRecords = []) =>
+        [record, ...currentRecords.filter((current) => current.id !== record.id)].slice(0, 5),
+      );
+      setMessage({ tone: "success", text: `Saved ${record.label}` });
+    },
+    onError: (error) => {
+      setMessage({ tone: "error", text: errorMessage(error) });
+    },
+  });
 
   useEffect(() => {
     setLabel(defaultLabel);
   }, [defaultLabel]);
 
-  useEffect(() => {
-    let active = true;
-    listStoredResults<T>()
-      .then((nextRecords) => {
-        if (active) {
-          setRecords(nextRecords);
-        }
-      })
-      .catch((error: unknown) => {
-        if (active) {
-          setMessage({ tone: "error", text: errorMessage(error) });
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  async function saveToDatabase() {
-    try {
-      const record = await saveResultToIndexedDb(result, label.trim() || defaultLabel);
-      setRecords((currentRecords) => [record, ...currentRecords.filter((current) => current.id !== record.id)].slice(0, 5));
-      setMessage({ tone: "success", text: `Saved ${record.label}` });
-    } catch (error) {
-      setMessage({ tone: "error", text: errorMessage(error) });
-    }
+  function saveToDatabase() {
+    saveResultMutation.mutate();
   }
 
   return (

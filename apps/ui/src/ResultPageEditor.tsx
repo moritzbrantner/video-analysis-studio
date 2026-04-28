@@ -1012,6 +1012,7 @@ function renderWidget(
           report={report}
           runId={runId}
           activeSceneIndex={videoSelection?.activeSceneIndex}
+          activeObservationIndex={videoSelection?.activeObservationIndex}
           activeTimelineItemId={videoSelection?.activeTimelineItemId}
           onSelectTimelineItem={videoSelection?.selectTimelineItem}
         />

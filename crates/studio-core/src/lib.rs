@@ -9,6 +9,8 @@ mod subtitles;
 mod system;
 #[cfg(test)]
 mod test_support;
+mod workflow_catalog;
+mod workflow_support;
 mod youtube;
 
 pub use data_sources::{
@@ -33,7 +35,7 @@ pub use system::{
     check_system_dependencies, transcription_catalog, DependencyStatus, SystemDependencyReport,
     TranscriptionCatalog, TranscriptionEngineStatus,
 };
-pub use video_analysis_use_cases::workflow_catalog::{
+pub use workflow_catalog::{
     default_workflow_catalog, ports_compatible, workflow_types_assignable, NodeSpec,
     PortCompatibility, PortKind, PortSpec, WorkflowCatalog, WorkflowCategory, WorkflowInputSurface,
     WorkflowObjectProperty, WorkflowRuntimeValidation, WorkflowSemanticKind, WorkflowTypeSpec,

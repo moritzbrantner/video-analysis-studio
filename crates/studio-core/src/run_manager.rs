@@ -222,6 +222,14 @@ impl RunManager {
 
     pub async fn start_video_red_cars(&self, request: VideoRedCarsRunRequest) -> Result<RunRecord> {
         request.validate()?;
+        let target_object = request.target_object.trim().to_string();
+        let target_object = if target_object.is_empty() {
+            "car".to_string()
+        } else {
+            target_object
+        };
+        let running_message = format!("running red {} workflow", target_object);
+        let completed_message = format!("red {} analysis completed", target_object);
         let run_id = Uuid::new_v4();
         let work_dir = request.resolved_work_dir(&self.data_dir, run_id);
         let report_path = work_dir.join("video-red-cars.json");
@@ -260,12 +268,12 @@ impl RunManager {
                     .update_run(
                         run_id,
                         RunStatus::Running,
-                        Some("running red car workflow".to_string()),
+                        Some(running_message.clone()),
                         false,
                     )
                     .await;
                 manager
-                    .emit(run_id, RunStatus::Running, "running red car workflow")
+                    .emit(run_id, RunStatus::Running, &running_message)
                     .await;
             });
 
@@ -284,12 +292,12 @@ impl RunManager {
                             .update_run(
                                 run_id,
                                 RunStatus::Succeeded,
-                                Some("red car analysis completed".to_string()),
+                                Some(completed_message.clone()),
                                 true,
                             )
                             .await;
                         manager
-                            .emit(run_id, RunStatus::Succeeded, "red car analysis completed")
+                            .emit(run_id, RunStatus::Succeeded, &completed_message)
                             .await;
                     }
                     Err(error) => {

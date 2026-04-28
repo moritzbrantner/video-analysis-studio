@@ -183,6 +183,7 @@ export interface VideoRedCarsVideoReport {
 export interface VideoRedCarsReport {
   workflow?: "video-red-cars" | string;
   use_case?: "video-red-cars" | string;
+  target_object?: string;
   source: SourceReport;
   assets: AssetReport;
   capabilities: CapabilityReport;
@@ -311,6 +312,7 @@ export interface VideoRedCarsRunRequest {
   min_scene_len: number;
   max_frames?: number | null;
   visual_sample_every: number;
+  target_object?: string;
   vehicle_detector: {
     command: string;
     args: string[];

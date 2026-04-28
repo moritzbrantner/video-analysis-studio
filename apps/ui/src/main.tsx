@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { createRoot } from "react-dom/client";
 import {
   addEdge,
@@ -72,6 +73,7 @@ import {
   type RunStatus,
   type SystemDependencyReport,
   type WorkflowCatalog as RustWorkflowCatalog,
+  type WorkflowClient,
   type WorkflowInputSurface,
   type WorkflowRuntimeValidation,
   type WorkflowSemanticKind,
@@ -92,6 +94,20 @@ import {
   workflowTypesAssignable,
 } from "./workflowTypeSpec";
 import { appendRunEvent, normalizeRunEvents } from "./runEvents";
+import {
+  dataSourcesQueryOptions,
+  queryClient,
+  queryKeys,
+  reportQueryOptions,
+  runEventsQueryOptions,
+  runQueryOptions,
+  useDataSourceMutations,
+  useDataSourcesQuery,
+  useDiscoverYoutubeCollectionManifestMutation,
+  useSystemDependenciesQuery,
+  useTranscriptionCatalogQuery,
+  useWorkflowCatalogQuery,
+} from "./api/queries";
 import {
   decodeWorkflowSharePayload,
   encodeWorkflowSharePayload,
@@ -140,6 +156,7 @@ interface WorkflowRunForm {
   transcriptionEngine: Exclude<TranscriptionEngine, "fast_whisper">;
   transcriptionModel: WhisperCppModel;
   transcriptionCommand: string;
+  targetObject: string;
   objectCommand: string;
   ocrCommand: string;
   textCommand: string;
@@ -220,6 +237,7 @@ const workflowKinds: Array<{
 const exampleWorkflowSeeds: Array<{ kind: WorkflowKindId; name: string }> = [
   { kind: "youtube-video", name: "YouTube Video Quick Review" },
   { kind: "video-red-cars", name: "YouTube Red Cars Counter" },
+  { kind: "video-red-cars", name: "YouTube Red Cars Only" },
   { kind: "youtube-collection", name: "YouTube Collection Spot Check" },
   { kind: "song-analysis", name: "Song Analysis Quick Match" },
   { kind: "subtitle-generation", name: "Subtitle SRT Starter" },
@@ -239,6 +257,7 @@ const initialForm: WorkflowRunForm = {
   transcriptionEngine: "whisper_cpp",
   transcriptionModel: "base.en",
   transcriptionCommand: "",
+  targetObject: "car",
   objectCommand: "",
   ocrCommand: "",
   textCommand: "",
@@ -274,6 +293,12 @@ const mainSidebarCollapsedStorageKey = "video-analysis.mainSidebarCollapsed.v1";
 const workflowBuilderComponentsCollapsedStorageKey = "video-analysis.workflowBuilder.componentsCollapsed.v1";
 const workflowBuilderDetailsCollapsedStorageKey = "video-analysis.workflowBuilder.detailsCollapsed.v1";
 function App() {
+  const cache = useQueryClient();
+  const workflowCatalogQuery = useWorkflowCatalogQuery();
+  const transcriptionCatalogQuery = useTranscriptionCatalogQuery();
+  const dataSourcesQuery = useDataSourcesQuery();
+  const dataSourceMutations = useDataSourceMutations();
+  const discoverManifestMutation = useDiscoverYoutubeCollectionManifestMutation();
   const [form, setForm] = useState<WorkflowRunForm>(initialForm);
   const [report, setReport] = useState<StudioReport>(sampleReport);
   const [hasLoadedReport, setHasLoadedReport] = useState(false);
@@ -295,11 +320,7 @@ function App() {
   const [workflowLibrary, setWorkflowLibrary] = useState<SavedWorkflowLibrary>(loadSavedWorkflowLibrary);
   const [workflowRuns, setWorkflowRuns] = useState<SavedWorkflowRun[]>(loadSavedWorkflowRuns);
   const [savedBlocks, setSavedBlocks] = useState<SavedWorkflowBlock[]>(loadSavedWorkflowBlocks);
-  const [dataSources, setDataSources] = useState<DataSourceEntry[]>([]);
-  const [dataSourcesLoading, setDataSourcesLoading] = useState(true);
   const [legacyLocalDataSources, setLegacyLocalDataSources] = useState(() => loadLegacyLocalDataSources());
-  const [workflowCatalog, setWorkflowCatalog] = useState<RustWorkflowCatalog | null>(null);
-  const [transcriptionCatalog, setTranscriptionCatalog] = useState<TranscriptionCatalog | null>(null);
   const [portTypeColors, setPortTypeColors] = useState<PortTypeColors>(loadPortTypeColors);
   const [hotkeyBindings, setHotkeyBindings] = useState<HotkeyBindings>(loadHotkeyBindings);
   const [workflowFocusTarget, setWorkflowFocusTarget] = useState<WorkflowFocusTarget | null>(null);
@@ -312,6 +333,10 @@ function App() {
   );
 
   const activeWorkflow = useMemo(() => activeSavedWorkflow(workflowLibrary), [workflowLibrary]);
+  const dataSources = dataSourcesQuery.data ?? [];
+  const dataSourcesLoading = dataSourcesQuery.isLoading;
+  const workflowCatalog = workflowCatalogQuery.data ?? null;
+  const transcriptionCatalog = transcriptionCatalogQuery.data ?? null;
   const dataSourceReferences = useMemo(() => collectDataSourceReferences(workflowLibrary), [workflowLibrary]);
   const selectedWorkflowKind = activeWorkflow.kind;
   const activeWorkflowInputModel = useMemo(() => deriveWorkflowRunInputModel(activeWorkflow), [activeWorkflow]);
@@ -353,56 +378,23 @@ function App() {
   }, [portTypeColors]);
 
   useEffect(() => {
-    let canceled = false;
-    getWorkflowClient()
-      .getWorkflowCatalog()
-      .then((catalog) => {
-        if (!canceled) {
-          setWorkflowCatalog(catalog);
-        }
-      })
-      .catch(() => {
-        if (!canceled) {
-          setWorkflowCatalog(null);
-        }
-      });
-    return () => {
-      canceled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let canceled = false;
-    getWorkflowClient()
-      .getTranscriptionCatalog()
-      .then((catalog) => {
-        if (canceled) {
-          return;
-        }
-        setTranscriptionCatalog(catalog);
-        setForm((current) => {
-          const nextEngine =
-            current.transcriptionEngine === initialForm.transcriptionEngine
-              ? defaultTranscriptionEngine(catalog)
-              : current.transcriptionEngine;
-          const nextModel =
-            current.transcriptionModel === initialForm.transcriptionModel
-              ? defaultWhisperCppModel(catalog)
-              : current.transcriptionModel;
-          return nextEngine === current.transcriptionEngine && nextModel === current.transcriptionModel
-            ? current
-            : { ...current, transcriptionEngine: nextEngine, transcriptionModel: nextModel };
-        });
-      })
-      .catch(() => {
-        if (!canceled) {
-          setTranscriptionCatalog(null);
-        }
-      });
-    return () => {
-      canceled = true;
-    };
-  }, []);
+    if (!transcriptionCatalog) {
+      return;
+    }
+    setForm((current) => {
+      const nextEngine =
+        current.transcriptionEngine === initialForm.transcriptionEngine
+          ? defaultTranscriptionEngine(transcriptionCatalog)
+          : current.transcriptionEngine;
+      const nextModel =
+        current.transcriptionModel === initialForm.transcriptionModel
+          ? defaultWhisperCppModel(transcriptionCatalog)
+          : current.transcriptionModel;
+      return nextEngine === current.transcriptionEngine && nextModel === current.transcriptionModel
+        ? current
+        : { ...current, transcriptionEngine: nextEngine, transcriptionModel: nextModel };
+    });
+  }, [transcriptionCatalog]);
 
   useEffect(() => {
     persistHotkeyBindings(hotkeyBindings);
@@ -411,28 +403,6 @@ function App() {
   useEffect(() => {
     persistSavedWorkflowBlocks(savedBlocks);
   }, [savedBlocks]);
-
-  useEffect(() => {
-    let canceled = false;
-    setDataSourcesLoading(true);
-    getWorkflowClient()
-      .listDataSources()
-      .then((records) => {
-        if (!canceled) {
-          setDataSources(records);
-          setDataSourcesLoading(false);
-        }
-      })
-      .catch(() => {
-        if (!canceled) {
-          setDataSources([]);
-          setDataSourcesLoading(false);
-        }
-      });
-    return () => {
-      canceled = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -591,39 +561,35 @@ function App() {
   );
 
   const reloadDataSources = useCallback(async () => {
-    const records = await getWorkflowClient().listDataSources();
-    setDataSources(records);
-    setDataSourcesLoading(false);
+    await cache.invalidateQueries({ queryKey: queryKeys.dataSources });
+    const records = await cache.fetchQuery({
+      ...dataSourcesQueryOptions(),
+      staleTime: 0,
+    });
     return records;
-  }, []);
+  }, [cache]);
 
   const createWorkspaceDataSource = useCallback(async (request: DataSourceUpsert) => {
-    const created = await getWorkflowClient().createDataSource(request);
-    await reloadDataSources();
-    return created;
-  }, [reloadDataSources]);
+    return dataSourceMutations.createDataSource.mutateAsync(request);
+  }, [dataSourceMutations.createDataSource]);
 
   const updateWorkspaceDataSource = useCallback(async (currentId: string, request: DataSourceUpsert) => {
-    const updated = await getWorkflowClient().updateDataSource(currentId, request);
+    const updated = await dataSourceMutations.updateDataSource.mutateAsync({ currentId, request });
     if (currentId !== updated.id) {
       setWorkflowLibrary((currentLibrary) => renameWorkflowLibraryDataSourceId(currentLibrary, currentId, updated.id));
     }
-    await reloadDataSources();
     return updated;
-  }, [reloadDataSources]);
+  }, [dataSourceMutations.updateDataSource]);
 
   const deleteWorkspaceDataSource = useCallback(async (id: string) => {
-    await getWorkflowClient().deleteDataSource(id);
-    await reloadDataSources();
-  }, [reloadDataSources]);
+    await dataSourceMutations.deleteDataSource.mutateAsync(id);
+  }, [dataSourceMutations.deleteDataSource]);
 
   const createWorkspaceDataSourceDerivation = useCallback(
     async (parentId: string, request: DataSourceDerivationInput) => {
-      const created = await getWorkflowClient().createDataSourceDerivation(parentId, request);
-      await reloadDataSources();
-      return created;
+      return dataSourceMutations.createDataSourceDerivation.mutateAsync({ parentId, request });
     },
-    [reloadDataSources],
+    [dataSourceMutations.createDataSourceDerivation],
   );
 
   const importLegacyLocalDataSourcesToWorkspace = useCallback(async () => {
@@ -631,7 +597,7 @@ function App() {
       return;
     }
     const client = getWorkflowClient();
-    const existingIds = new Set((await client.listDataSources()).map((record) => record.id));
+    const existingIds = new Set((await cache.fetchQuery(dataSourcesQueryOptions())).map((record) => record.id));
     const importedIdMap = new Map<string, string>();
     const roots = legacyLocalDataSources.filter((record) => record.origin.mode === "root");
     const derived = legacyLocalDataSources.filter(isDerivedOriginRecord);
@@ -692,7 +658,7 @@ function App() {
     clearLegacyLocalDataSources();
     setLegacyLocalDataSources([]);
     await reloadDataSources();
-  }, [legacyLocalDataSources, reloadDataSources]);
+  }, [cache, legacyLocalDataSources, reloadDataSources]);
 
   const activateWorkflowDefinition = useCallback(
     (workflowId: string) => {
@@ -861,8 +827,8 @@ function App() {
         try {
           const client = getWorkflowClient();
           const [record, events] = await Promise.all([
-            client.getRun(run.backendRunId),
-            client.getRunEvents(run.backendRunId),
+            cache.fetchQuery(runQueryOptions(run.backendRunId)),
+            cache.fetchQuery(runEventsQueryOptions(run.backendRunId)),
           ]);
           setActiveRunRecord(record);
           setRunStatus(record.status);
@@ -880,7 +846,7 @@ function App() {
         }
       }
     },
-    [activeWorkflow.id, commitWorkflowLibrary, navigateToPage, transcriptionCatalog, workflowLibrary],
+    [activeWorkflow.id, cache, commitWorkflowLibrary, navigateToPage, transcriptionCatalog, workflowLibrary],
   );
 
   const selectRunWorkflowDefinition = useCallback(
@@ -915,9 +881,7 @@ function App() {
   const previewYoutubeCollectionManifest = useCallback(async () => {
     setCollectionManifestPreview((current) => ({ ...current, status: "loading", error: null }));
     try {
-      const manifest = await getWorkflowClient().discoverYoutubeCollectionManifest(
-        buildYoutubeCollectionManifestRequest(form),
-      );
+      const manifest = await discoverManifestMutation.mutateAsync(buildYoutubeCollectionManifestRequest(form));
       setCollectionManifestPreview({
         status: "ready",
         manifest,
@@ -933,7 +897,7 @@ function App() {
         error: error instanceof Error ? error.message : String(error),
       }));
     }
-  }, [form]);
+  }, [discoverManifestMutation, form]);
 
   const cancelActiveRun = useCallback(async () => {
     if (!activeBackendRunId) {
@@ -951,9 +915,15 @@ function App() {
     setRunEvents((events) => appendRunEvent(events, event));
     setRunStatus("canceled");
     setActiveRunRecord((record) =>
-      record
-        ? { ...record, status: "canceled", updated_at: now, finished_at: now, message: "canceled" }
-        : record,
+      {
+        const nextRecord = record
+          ? { ...record, status: "canceled" as const, updated_at: now, finished_at: now, message: "canceled" }
+          : record;
+        if (nextRecord) {
+          cache.setQueryData(queryKeys.run(nextRecord.run_id), nextRecord);
+        }
+        return nextRecord;
+      },
     );
     setLastRun((run) =>
       run ? { ...run, status: "canceled", exit_code: null, message: "canceled" } : run,
@@ -967,14 +937,14 @@ function App() {
       persistSavedWorkflowRuns(nextRuns);
       return nextRuns;
     });
-  }, [activeBackendRunId]);
+  }, [activeBackendRunId, cache]);
 
   const openActiveReport = useCallback(async () => {
     if (!activeBackendRunId) {
       return;
     }
     const client = getWorkflowClient();
-    const record = activeRunRecord ?? (await client.getRun(activeBackendRunId));
+    const record = activeRunRecord ?? (await cache.fetchQuery(runQueryOptions(activeBackendRunId)));
     const workflowKind = workflowKindFromRunRequest(
       workflowRuns.find((run) => run.backendRunId === activeBackendRunId)?.request ??
         (selectedWorkflowKind === "youtube-collection"
@@ -987,22 +957,15 @@ function App() {
             ? buildSongAnalysisRunRequest(form, activeWorkflowInputModel)
           : buildYoutubeRunRequest(form, activeWorkflowInputModel)),
     );
-    setReport(
-      workflowKind === "youtube-collection"
-        ? await client.getYoutubeCollectionReport(record.run_id)
-        : workflowKind === "video-red-cars"
-          ? await client.getVideoRedCarsReport(record.run_id)
-        : workflowKind === "subtitle-generation"
-          ? await client.getSubtitleGenerationReport(record.run_id)
-        : workflowKind === "song-analysis"
-          ? await client.getSongAnalysisReport(record.run_id)
-        : await client.getYoutubeVideoReport(record.run_id),
+    const nextReport = await cache.fetchQuery(
+      reportQueryOptions(record.run_id, workflowKind, () => fetchWorkflowReport(client, record.run_id, workflowKind)),
     );
+    setReport(nextReport);
     setHasLoadedReport(true);
     setActiveReportRunId(record.run_id);
     navigateToPage("analysis");
     setViewMode("overview");
-  }, [activeBackendRunId, activeRunRecord, activeWorkflowInputModel, collectionManifestPreview, form, navigateToPage, selectedWorkflowKind, workflowRuns]);
+  }, [activeBackendRunId, activeRunRecord, activeWorkflowInputModel, cache, collectionManifestPreview, form, navigateToPage, selectedWorkflowKind, workflowRuns]);
 
   async function runAnalysis() {
     const message = getRunValidation(form, activeWorkflowInputModel, selectedWorkflowKind);
@@ -1060,6 +1023,7 @@ function App() {
           : await client.startYoutubeVideoRun(request as YoutubeRunRequest);
       setActiveBackendRunId(started.run_id);
       setActiveRunRecord(started);
+      cache.setQueryData(queryKeys.run(started.run_id), started);
       updateWorkflowRun(localRun.id, (run) => workflowRunFromRunRecord(run, started));
       setLastRun(runRecordToCliRun(started, client.label, activeWorkflow.name));
 
@@ -1067,6 +1031,7 @@ function App() {
         client,
         started.run_id,
         (run) => {
+          cache.setQueryData(queryKeys.run(run.run_id), run);
           setRunStatus(run.status);
           setActiveRunRecord(run);
           updateWorkflowRun(localRun.id, (currentRun) => workflowRunFromRunRecord(currentRun, run));
@@ -1081,26 +1046,21 @@ function App() {
       if (finalRun.status !== "succeeded") {
         setRunStatus(finalRun.status);
         setActiveRunRecord(finalRun);
+        cache.setQueryData(queryKeys.run(finalRun.run_id), finalRun);
         updateWorkflowRun(localRun.id, (run) => workflowRunFromRunRecord(run, finalRun));
         setLastRun(runRecordToCliRun(finalRun, client.label, activeWorkflow.name));
         return;
       }
 
-      setReport(
-        workflowKind === "youtube-collection"
-          ? await client.getYoutubeCollectionReport(finalRun.run_id)
-          : workflowKind === "video-red-cars"
-            ? await client.getVideoRedCarsReport(finalRun.run_id)
-          : workflowKind === "subtitle-generation"
-            ? await client.getSubtitleGenerationReport(finalRun.run_id)
-          : workflowKind === "song-analysis"
-            ? await client.getSongAnalysisReport(finalRun.run_id)
-          : await client.getYoutubeVideoReport(finalRun.run_id),
+      const nextReport = await cache.fetchQuery(
+        reportQueryOptions(finalRun.run_id, workflowKind, () => fetchWorkflowReport(client, finalRun.run_id, workflowKind)),
       );
+      setReport(nextReport);
       setHasLoadedReport(true);
       setActiveReportRunId(finalRun.run_id);
       setRunStatus("succeeded");
       setActiveRunRecord(finalRun);
+      cache.setQueryData(queryKeys.run(finalRun.run_id), finalRun);
       updateWorkflowRun(localRun.id, (run) => workflowRunFromRunRecord(run, finalRun));
       setLastRun(runRecordToCliRun(finalRun, client.label, activeWorkflow.name));
       navigateToPage("analysis");
@@ -1962,29 +1922,29 @@ function RunWorkflowPicker({
   );
 }
 
-function DependencyStatusPanel() {
-  const [report, setReport] = useState<SystemDependencyReport | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+function fetchWorkflowReport(
+  client: WorkflowClient,
+  runId: string,
+  workflowKind: WorkflowKindId,
+): Promise<StudioReport> {
+  if (workflowKind === "youtube-collection") {
+    return client.getYoutubeCollectionReport(runId);
+  }
+  if (workflowKind === "video-red-cars") {
+    return client.getVideoRedCarsReport(runId);
+  }
+  if (workflowKind === "subtitle-generation") {
+    return client.getSubtitleGenerationReport(runId);
+  }
+  if (workflowKind === "song-analysis") {
+    return client.getSongAnalysisReport(runId);
+  }
+  return client.getYoutubeVideoReport(runId);
+}
 
-  useEffect(() => {
-    let active = true;
-    getWorkflowClient()
-      .checkDependencies()
-      .then((nextReport) => {
-        if (active) {
-          setReport(nextReport);
-          setMessage(null);
-        }
-      })
-      .catch((error: unknown) => {
-        if (active) {
-          setMessage(error instanceof Error ? error.message : String(error));
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
+function DependencyStatusPanel() {
+  const { data: report, error } = useSystemDependenciesQuery();
+  const message = error ? error.message : null;
 
   const dependencies = report?.dependencies ?? [];
   const requiredMissing = dependencies.filter((dependency) => dependency.required && !dependency.available).length;
@@ -2598,72 +2558,6 @@ const initialWorkflowNodes: WorkflowNodeModel[] = [
       port("config", "run config", "run_config"),
     ],
     outputs: [port("args", "cargo args", "run_config")],
-  }),
-  workflowNode("youtube-workflow", 720, 190, {
-    title: "YouTube Workflow",
-    packageName: "studio-core",
-    description: "Coordinates download, ingest, analysis, buckets, and report JSON.",
-    tone: "amber",
-    inputs: [
-      port("args", "cargo args", "run_config"),
-      port("url", "youtube url", "youtube_url"),
-      port("collection", "playlist/channel", "youtube_collection_url"),
-      port("file", "local file", "video_file"),
-    ],
-    outputs: [
-      port("url", "youtube url", "youtube_url"),
-      port("collection", "playlist/channel", "youtube_collection_url"),
-      port("file", "video file", "video_file"),
-      port("config", "pipeline config", "run_config"),
-    ],
-  }),
-  workflowNode("video-red-cars-workflow", 1080, 360, {
-    title: "Video Red Cars Workflow",
-    packageName: "video-analysis-use-cases",
-    description: "Detects red cars in sampled frames, groups them by scene, and writes per-scene counts.",
-    tone: "amber",
-    inputs: [
-      port("file", "video file", "video_file"),
-      port("args", "workflow config", "run_config"),
-    ],
-    outputs: [
-      port("file", "video file", "video_file"),
-      port("report", "video-red-cars.json", "json_report"),
-    ],
-    tags: ["video", "red-cars", "scene", "detection"],
-  }),
-  workflowNode("song-workflow", 720, 560, {
-    title: "Song Workflow",
-    packageName: "studio-core",
-    description: "Coordinates song source resolution, catalog matching, lyrics transcription, BPM, key, and report JSON.",
-    tone: "amber",
-    inputs: [
-      port("args", "cargo args", "run_config"),
-      port("url", "youtube url", "youtube_url"),
-      port("file", "local file", "video_file"),
-    ],
-    outputs: [
-      port("file", "media file", "video_file"),
-      port("config", "song config", "run_config"),
-    ],
-    tags: ["song", "music", "audio", "analysis"],
-  }),
-  workflowNode("subtitle-workflow", 720, 900, {
-    title: "Subtitle Workflow",
-    packageName: "studio-core",
-    description: "Coordinates source resolution, transcription, SRT writing next to the video, and JSON report output.",
-    tone: "amber",
-    inputs: [
-      port("args", "cargo args", "run_config"),
-      port("url", "youtube url", "youtube_url"),
-      port("file", "local file", "video_file"),
-    ],
-    outputs: [
-      port("url", "youtube url", "youtube_url"),
-      port("file", "video file", "video_file"),
-      port("config", "subtitle config", "run_config"),
-    ],
-    tags: ["subtitle", "srt", "transcription", "output"],
   }),
   workflowNode("song-fingerprinter", 1080, 720, {
     title: "Song Fingerprinter",
@@ -3489,44 +3383,31 @@ const workflowNodeTemplates: WorkflowNodeModel[] = initialWorkflowNodes.concat(
 const initialWorkflowEdges: Edge[] = [
   workflowEdge("react-page", "run", "vite-api", "run"),
   workflowEdge("react-page", "config", "vite-api", "config"),
-  workflowEdge("source", "url", "youtube-workflow", "url"),
-  workflowEdge("source", "collection", "youtube-workflow", "collection"),
-  workflowEdge("source", "file", "youtube-workflow", "file"),
-  workflowEdge("vite-api", "args", "youtube-workflow", "args"),
-  workflowEdge("source", "url", "song-workflow", "url"),
-  workflowEdge("source", "file", "song-workflow", "file"),
-  workflowEdge("vite-api", "args", "song-workflow", "args"),
-  workflowEdge("source", "url", "subtitle-workflow", "url"),
-  workflowEdge("source", "file", "subtitle-workflow", "file"),
-  workflowEdge("vite-api", "args", "subtitle-workflow", "args"),
-  workflowEdge("song-workflow", "file", "song-fingerprinter", "file"),
-  workflowEdge("song-workflow", "file", "song-music-analyzer", "file"),
-  workflowEdge("song-workflow", "file", "ffmpeg", "file"),
-  workflowEdge("song-workflow", "config", "song-catalog-matcher", "config"),
-  workflowEdge("song-workflow", "config", "song-music-analyzer", "config"),
+  workflowEdge("source", "url", "download", "url"),
+  workflowEdge("source", "collection", "collection-manifest", "url"),
+  workflowEdge("source", "file", "ffmpeg", "file"),
+  workflowEdge("source", "file", "song-fingerprinter", "file"),
+  workflowEdge("source", "file", "song-music-analyzer", "file"),
+  workflowEdge("source", "file", "subtitle-writer", "file"),
+  workflowEdge("vite-api", "args", "song-catalog-matcher", "config"),
+  workflowEdge("vite-api", "args", "song-music-analyzer", "config"),
+  workflowEdge("vite-api", "args", "collection-download-loop", "config"),
   workflowEdge("song-fingerprinter", "fingerprint", "song-catalog-matcher", "fingerprint"),
   workflowEdge("song-catalog-matcher", "matches", "song-report-writer", "matches"),
   workflowEdge("song-music-analyzer", "features", "song-report-writer", "features"),
-  workflowEdge("youtube-workflow", "url", "download", "url"),
-  workflowEdge("download", "file", "video-red-cars-workflow", "file"),
-  workflowEdge("youtube-workflow", "config", "video-red-cars-workflow", "args"),
-  workflowEdge("subtitle-workflow", "url", "download", "url"),
-  workflowEdge("youtube-workflow", "collection", "collection-manifest", "url"),
   workflowEdge("collection-manifest", "manifest", "collection-download-loop", "manifest"),
-  workflowEdge("youtube-workflow", "config", "collection-download-loop", "config"),
   workflowEdge("collection-download-loop", "files", "ffmpeg", "file"),
   workflowEdge("collection-download-loop", "items", "collection-report", "items"),
   workflowEdge("report-writer", "report", "collection-report", "reports"),
-  workflowEdge("youtube-workflow", "file", "ffmpeg", "file"),
-  workflowEdge("subtitle-workflow", "file", "ffmpeg", "file"),
-  workflowEdge("subtitle-workflow", "file", "subtitle-writer", "file"),
-  workflowEdge("subtitle-workflow", "config", "subtitle-writer", "config"),
   workflowEdge("download", "file", "ffmpeg", "file"),
+  workflowEdge("download", "file", "song-fingerprinter", "file"),
+  workflowEdge("download", "file", "song-music-analyzer", "file"),
   workflowEdge("download", "file", "subtitle-writer", "file"),
-  workflowEdge("youtube-workflow", "config", "video-pipeline", "config"),
-  workflowEdge("youtube-workflow", "config", "content-detector", "config"),
-  workflowEdge("youtube-workflow", "config", "model-sampler", "config"),
-  workflowEdge("youtube-workflow", "config", "text-pipeline", "config"),
+  workflowEdge("vite-api", "args", "subtitle-writer", "config"),
+  workflowEdge("vite-api", "args", "video-pipeline", "config"),
+  workflowEdge("vite-api", "args", "content-detector", "config"),
+  workflowEdge("vite-api", "args", "model-sampler", "config"),
+  workflowEdge("vite-api", "args", "text-pipeline", "config"),
   workflowEdge("ffmpeg", "metadata", "report-writer", "metadata"),
   workflowEdge("ffmpeg", "frames", "video-pipeline", "frames"),
   workflowEdge("ffmpeg", "frames", "content-detector", "frames"),
@@ -8413,7 +8294,7 @@ function loadSavedWorkflowLibrary(): SavedWorkflowLibrary {
       return fallback;
     }
 
-    const workflows = ensureWorkflowKindCoverage(parsed.workflows.filter(savedWorkflowHasValidGraph).map(normalizeSavedWorkflow));
+    const workflows = ensureBuiltInWorkflowCoverage(parsed.workflows.filter(savedWorkflowHasValidGraph).map(normalizeSavedWorkflow));
     if (workflows.length === 0) {
       persistSavedWorkflowLibrary(fallback);
       return fallback;
@@ -8649,9 +8530,9 @@ function normalizeSavedWorkflow(workflow: SavedWorkflow): SavedWorkflow {
   };
 }
 
-function ensureWorkflowKindCoverage(workflows: SavedWorkflow[]): SavedWorkflow[] {
+function ensureBuiltInWorkflowCoverage(workflows: SavedWorkflow[]): SavedWorkflow[] {
   const presentKinds = new Set(workflows.map((workflow) => workflow.kind));
-  const missingWorkflows = workflowKinds
+  const workflowKindSeeds = workflowKinds
     .filter((workflowKind) => !presentKinds.has(workflowKind.id))
     .map((workflowKind) =>
       createSeedSavedWorkflow(
@@ -8660,7 +8541,17 @@ function ensureWorkflowKindCoverage(workflows: SavedWorkflow[]): SavedWorkflow[]
         workflowSeedId(workflowKind.id, workflowKind.defaultWorkflowName),
       ),
     );
-  return workflows.concat(missingWorkflows);
+  const presentIds = new Set(workflows.map((workflow) => workflow.id));
+  const exampleSeeds = exampleWorkflowSeeds
+    .filter((workflow) => !presentIds.has(workflowSeedId(workflow.kind, workflow.name)))
+    .map((workflow) =>
+      createSeedSavedWorkflow(
+        workflow.name,
+        workflow.kind,
+        workflowSeedId(workflow.kind, workflow.name),
+      ),
+    );
+  return workflows.concat(workflowKindSeeds, exampleSeeds);
 }
 
 function createSavedWorkflow(
@@ -8903,7 +8794,7 @@ function persistSavedWorkflowRuns(runs: SavedWorkflowRun[]) {
 
 function createSavedWorkflowRun(
   workflow: SavedWorkflow,
-  request: YoutubeRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest,
+  request: YoutubeRunRequest | VideoRedCarsRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest,
   inputSummary: string,
 ): SavedWorkflowRun {
   const createdAt = new Date().toISOString();
@@ -10073,6 +9964,7 @@ function isVideoRedCarsRunRequest(value: unknown): value is VideoRedCarsRunReque
     typeof value.min_scene_len === "number" &&
     (value.max_frames === undefined || value.max_frames === null || typeof value.max_frames === "number") &&
     typeof value.visual_sample_every === "number" &&
+    (value.target_object === undefined || typeof value.target_object === "string") &&
     typeof value.vehicle_detector.command === "string" &&
     Array.isArray(value.vehicle_detector.args)
   );
@@ -11913,14 +11805,34 @@ function WorkflowRunControls({
               </>
             )}
 
+            {isRedCars && (
+              <>
+                <Field
+                  label={workflowInputFieldLabel("Thing to detect", runConfigInput)}
+                  action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
+                >
+                  <input
+                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                    value={form.targetObject}
+                    placeholder="car"
+                    onChange={(event) => set("targetObject", event.target.value)}
+                  />
+                </Field>
+                <p className="text-xs text-zinc-500">
+                  The built-in detector only supports car, vehicle, or automobile. Use a custom detector command for
+                  other targets.
+                </p>
+              </>
+            )}
+
             <Field
-              label={workflowInputFieldLabel(isRedCars ? "Vehicle detector command" : "Object command", runConfigInput)}
+              label={workflowInputFieldLabel(isRedCars ? "Vehicle detector command override" : "Object command", runConfigInput)}
               action={<RunInputFocusButton input={runConfigInput} onFocus={onFocusWorkflowInput} />}
             >
               <input
                 className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
                 value={form.objectCommand}
-                placeholder={isRedCars ? "required" : "optional"}
+                placeholder={isRedCars ? "auto: default detector + Facebook SAM bundle" : "optional"}
                 onChange={(event) => set("objectCommand", event.target.value)}
               />
             </Field>
@@ -12570,12 +12482,15 @@ function buildCommand(
       String(form.minSceneLen),
       "--visual-sample-every",
       String(form.visualSampleEvery),
-      "--vehicle-detector",
-      form.objectCommand || "required",
+      "--target-object",
+      form.targetObject.trim() || "car",
     ];
     command.push(sourceMode === "url" ? "--url" : "--input", sourceMode === "url" ? form.url : form.input);
     if (form.maxFrames.trim()) {
       command.push("--max-frames", form.maxFrames.trim());
+    }
+    if (form.objectCommand.trim()) {
+      command.push("--vehicle-detector", form.objectCommand.trim());
     }
     return command;
   }
@@ -12657,6 +12572,7 @@ function buildVideoRedCarsRunRequest(form: WorkflowRunForm, inputModel?: Workflo
     min_scene_len: form.minSceneLen,
     max_frames: form.maxFrames.trim() ? Number(form.maxFrames.trim()) : null,
     visual_sample_every: form.visualSampleEvery,
+    target_object: form.targetObject.trim() || "car",
     vehicle_detector: {
       command: form.objectCommand.trim(),
       args: [],
@@ -12785,6 +12701,7 @@ function formFromVideoRedCarsRunRequest(request: VideoRedCarsRunRequest): Workfl
     maxFrames: request.max_frames ? String(request.max_frames) : "",
     visualSampleEvery: request.visual_sample_every,
     skipTranscription: true,
+    targetObject: request.target_object ?? "car",
     objectCommand: request.vehicle_detector.command,
   };
 }
@@ -13209,9 +13126,6 @@ function getRunValidation(
   }
   if (form.maxFrames.trim() && !/^[1-9]\d*$/.test(form.maxFrames.trim())) {
     return "Max frames must be a positive integer.";
-  }
-  if (isRedCars && !form.objectCommand.trim()) {
-    return "Vehicle detector command is required.";
   }
   if (inputModel) {
     for (const input of inputModel.genericInputs) {
@@ -14302,6 +14216,8 @@ function SpinnerIcon({ className }: { className?: string }) {
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <QueryClientProvider client={queryClient}>
+      <App />
+    </QueryClientProvider>
   </React.StrictMode>,
 );

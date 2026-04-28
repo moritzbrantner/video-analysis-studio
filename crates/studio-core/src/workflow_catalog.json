@@ -1,0 +1,187 @@
+{
+  "version": 5,
+  "nodes": [
+    {
+      "id": "react-page",
+      "title": "React Page",
+      "package_name": "@video-analysis-studio/ui",
+      "category": "app",
+      "ui_owned": true,
+      "outputs": [
+        { "id": "run", "label": "Run", "kind": "run_trigger" },
+        {
+          "id": "config",
+          "label": "Config",
+          "kind": "run_config",
+          "exposable_input": true,
+          "input_surface": "config",
+          "runtime_validation": "external_input"
+        }
+      ]
+    },
+    {
+      "id": "source",
+      "title": "Source",
+      "package_name": "@video-analysis-studio/ui",
+      "category": "ingest",
+      "ui_owned": true,
+      "outputs": [
+        {
+          "id": "url",
+          "label": "YouTube URL",
+          "kind": "youtube_url",
+          "exposable_input": true,
+          "input_surface": "source_url",
+          "runtime_validation": "external_input"
+        },
+        {
+          "id": "collection",
+          "label": "Collection URL",
+          "kind": "youtube_collection_url",
+          "exposable_input": true,
+          "input_surface": "collection_url",
+          "runtime_validation": "external_input"
+        },
+        {
+          "id": "file",
+          "label": "Video File",
+          "kind": "video_file",
+          "exposable_input": true,
+          "input_surface": "file",
+          "runtime_validation": "external_input"
+        }
+      ]
+    },
+    {
+      "id": "vite-api",
+      "title": "Studio API",
+      "package_name": "studio-api",
+      "category": "app",
+      "inputs": [
+        { "id": "run", "label": "Run", "kind": "run_trigger" },
+        { "id": "config", "label": "Config", "kind": "run_config" }
+      ],
+      "outputs": [
+        { "id": "args", "label": "Arguments", "kind": "run_config" }
+      ]
+    },
+    {
+      "id": "collection-manifest",
+      "title": "Collection Manifest",
+      "package_name": "yt-dlp",
+      "category": "collection",
+      "inputs": [
+        { "id": "url", "label": "Collection URL", "kind": "youtube_collection_url" }
+      ],
+      "outputs": [
+        { "id": "manifest", "label": "Manifest", "kind": "collection_manifest" },
+        { "id": "items", "label": "Items", "kind": "collection_items" }
+      ]
+    },
+    {
+      "id": "download",
+      "title": "YouTube Downloader",
+      "package_name": "yt-dlp",
+      "category": "ingest",
+      "inputs": [
+        { "id": "url", "label": "URL", "kind": "youtube_url" }
+      ],
+      "outputs": [
+        { "id": "file", "label": "Video", "kind": "video_file" }
+      ]
+    },
+    {
+      "id": "ffmpeg",
+      "title": "FFmpeg Ingest",
+      "package_name": "video-analysis-ffmpeg",
+      "category": "video",
+      "inputs": [
+        { "id": "file", "label": "Video", "kind": "video_file" }
+      ],
+      "outputs": [
+        { "id": "metadata", "label": "Metadata", "kind": "object" },
+        { "id": "frames", "label": "Frames", "kind": "object" },
+        { "id": "audio", "label": "Audio", "kind": "object" },
+        { "id": "wav", "label": "Wav", "kind": "media_file" }
+      ]
+    },
+    {
+      "id": "video-pipeline",
+      "title": "Realtime Video Pipeline",
+      "package_name": "video-analysis-core",
+      "category": "video",
+      "inputs": [
+        { "id": "frames", "label": "Frames", "kind": "object" },
+        { "id": "config", "label": "Config", "kind": "run_config" }
+      ],
+      "outputs": [
+        { "id": "scenes", "label": "Scenes", "kind": "scene_list" },
+        { "id": "observations", "label": "Observations", "kind": "observation_list" },
+        { "id": "records", "label": "Records", "kind": "object" }
+      ]
+    },
+    {
+      "id": "content-detector",
+      "title": "Content Detector",
+      "package_name": "video-analysis-detectors",
+      "category": "video",
+      "inputs": [
+        { "id": "frames", "label": "Frames", "kind": "object" },
+        { "id": "config", "label": "Config", "kind": "run_config" }
+      ],
+      "outputs": [
+        { "id": "scenes", "label": "Scenes", "kind": "scene_list" }
+      ]
+    },
+    {
+      "id": "model-sampler",
+      "title": "Sampled Visual Models",
+      "package_name": "video-analysis-models",
+      "category": "video",
+      "inputs": [
+        { "id": "frames", "label": "Frames", "kind": "object" },
+        { "id": "config", "label": "Config", "kind": "run_config" }
+      ],
+      "outputs": [
+        { "id": "requests", "label": "Requests", "kind": "object" }
+      ]
+    },
+    {
+      "id": "external-models",
+      "title": "External Commands",
+      "package_name": "object / ocr / text command",
+      "category": "video",
+      "inputs": [
+        { "id": "requests", "label": "Requests", "kind": "object" }
+      ],
+      "outputs": [
+        { "id": "predictions", "label": "Predictions", "kind": "object" }
+      ]
+    },
+    {
+      "id": "observations",
+      "title": "Observation Normalizer",
+      "package_name": "video-analysis-core",
+      "category": "video",
+      "inputs": [
+        { "id": "predictions", "label": "Predictions", "kind": "object" },
+        { "id": "scenes", "label": "Scenes", "kind": "scene_list" }
+      ],
+      "outputs": [
+        { "id": "observations", "label": "Observations", "kind": "observation_list" }
+      ]
+    },
+    {
+      "id": "transcriber",
+      "title": "Transcriber",
+      "package_name": "text-analysis-transcription",
+      "category": "text",
+      "inputs": [
+        { "id": "wav", "label": "Wav", "kind": "media_file" }
+      ],
+      "outputs": [
+        { "id": "segments", "label": "Segments", "kind": "transcript" }
+      ]
+    }
+  ]
+}

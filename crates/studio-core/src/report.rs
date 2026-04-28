@@ -2,6 +2,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+fn default_video_red_target_object() -> String {
+    "car".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum StudioReport {
@@ -60,6 +64,8 @@ pub struct VideoReport {
 pub struct VideoRedCarsReport {
     #[serde(alias = "use_case")]
     pub workflow: String,
+    #[serde(default = "default_video_red_target_object")]
+    pub target_object: String,
     pub source: SourceReport,
     pub assets: AssetReport,
     pub capabilities: CapabilityReport,

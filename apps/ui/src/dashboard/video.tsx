@@ -22,6 +22,7 @@ export function VideoOverviewDashboard({ report, runId }: { report: YoutubeVideo
         report={report}
         runId={runId}
         activeSceneIndex={controls.activeSceneIndex}
+        activeObservationIndex={controls.activeObservationIndex}
         activeTimelineItemId={controls.activeTimelineItemId}
         onSelectTimelineItem={controls.selectTimelineItem}
       />
@@ -49,6 +50,7 @@ export function VideoScenesDashboard({ report, runId }: { report: YoutubeVideoRe
         report={report}
         runId={runId}
         activeSceneIndex={controls.activeSceneIndex}
+        activeObservationIndex={controls.activeObservationIndex}
         activeTimelineItemId={controls.activeTimelineItemId}
         onSelectTimelineItem={controls.selectTimelineItem}
       />
@@ -71,6 +73,7 @@ export function VideoSignalsDashboard({ report, runId }: { report: YoutubeVideoR
         report={report}
         runId={runId}
         activeSceneIndex={controls.activeSceneIndex}
+        activeObservationIndex={controls.activeObservationIndex}
         activeTimelineItemId={controls.activeTimelineItemId}
         onSelectTimelineItem={controls.selectTimelineItem}
       />

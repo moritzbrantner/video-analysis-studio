@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use video_analysis_use_cases::workflow_catalog::{
-    workflow_types_assignable, WorkflowSemanticKind, WorkflowTypeSpec,
-};
 
 use crate::error::{Result, StudioError};
+use crate::{
+    workflow_types_assignable, WorkflowObjectProperty, WorkflowSemanticKind, WorkflowTypeSpec,
+};
 
 pub const DATA_SOURCE_CATALOG_FORMAT: &str = "video-analysis.dataSources";
 pub const DATA_SOURCE_CATALOG_VERSION: u32 = 2;
@@ -572,9 +572,7 @@ fn migrate_legacy_type(value: &Value) -> Result<WorkflowTypeSpec> {
     }
 }
 
-fn migrate_legacy_properties(
-    properties: &[Value],
-) -> Result<Vec<video_analysis_use_cases::workflow_catalog::WorkflowObjectProperty>> {
+fn migrate_legacy_properties(properties: &[Value]) -> Result<Vec<WorkflowObjectProperty>> {
     let mut migrated = Vec::new();
     for property in properties {
         let Some(property_object) = property.as_object() else {
@@ -592,16 +590,14 @@ fn migrate_legacy_properties(
         let schema = property_object.get("schema").ok_or_else(|| {
             StudioError::InvalidRequest(format!("legacy property {} is missing schema", name))
         })?;
-        migrated.push(
-            video_analysis_use_cases::workflow_catalog::WorkflowObjectProperty {
-                name,
-                value: migrate_legacy_type(schema)?,
-                required: property_object
-                    .get("required")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-            },
-        );
+        migrated.push(WorkflowObjectProperty {
+            name,
+            value: migrate_legacy_type(schema)?,
+            required: property_object
+                .get("required")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        });
     }
     Ok(migrated)
 }

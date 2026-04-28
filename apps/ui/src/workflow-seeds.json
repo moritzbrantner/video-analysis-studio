@@ -2,75 +2,145 @@
   "starterTemplates": {
     "youtube-video": {
       "nodes": [
-        { "id": "youtube-workflow", "x": 80, "y": 180 },
-        { "id": "download", "x": 470, "y": 180 },
-        { "id": "ffmpeg", "x": 860, "y": 180 },
-        { "id": "content-detector", "x": 1250, "y": 180 }
+        { "id": "react-page", "x": 80, "y": 120 },
+        { "id": "source", "x": 80, "y": 320 },
+        { "id": "vite-api", "x": 420, "y": 120 },
+        { "id": "download", "x": 760, "y": 320 },
+        { "id": "ffmpeg", "x": 1120, "y": 320 },
+        { "id": "content-detector", "x": 1480, "y": 140 },
+        { "id": "model-sampler", "x": 1480, "y": 320 },
+        { "id": "external-models", "x": 1840, "y": 320 },
+        { "id": "observations", "x": 2200, "y": 240 },
+        { "id": "audio-pipeline", "x": 1480, "y": 500 },
+        { "id": "transcriber", "x": 1480, "y": 700 },
+        { "id": "text-pipeline", "x": 1840, "y": 700 },
+        { "id": "buckets", "x": 2200, "y": 520 },
+        { "id": "report-writer", "x": 2560, "y": 420 }
       ],
       "edges": [
-        { "source": "youtube-workflow", "sourcePortId": "url", "target": "download", "targetPortId": "url" },
-        { "source": "youtube-workflow", "sourcePortId": "file", "target": "ffmpeg", "targetPortId": "file" },
+        { "source": "react-page", "sourcePortId": "run", "target": "vite-api", "targetPortId": "run" },
+        { "source": "react-page", "sourcePortId": "config", "target": "vite-api", "targetPortId": "config" },
+        { "source": "source", "sourcePortId": "url", "target": "download", "targetPortId": "url" },
+        { "source": "source", "sourcePortId": "file", "target": "ffmpeg", "targetPortId": "file" },
         { "source": "download", "sourcePortId": "file", "target": "ffmpeg", "targetPortId": "file" },
-        { "source": "youtube-workflow", "sourcePortId": "config", "target": "content-detector", "targetPortId": "config" },
-        { "source": "ffmpeg", "sourcePortId": "frames", "target": "content-detector", "targetPortId": "frames" }
+        { "source": "vite-api", "sourcePortId": "args", "target": "content-detector", "targetPortId": "config" },
+        { "source": "vite-api", "sourcePortId": "args", "target": "model-sampler", "targetPortId": "config" },
+        { "source": "vite-api", "sourcePortId": "args", "target": "text-pipeline", "targetPortId": "config" },
+        { "source": "ffmpeg", "sourcePortId": "metadata", "target": "report-writer", "targetPortId": "metadata" },
+        { "source": "ffmpeg", "sourcePortId": "frames", "target": "content-detector", "targetPortId": "frames" },
+        { "source": "ffmpeg", "sourcePortId": "frames", "target": "model-sampler", "targetPortId": "frames" },
+        { "source": "ffmpeg", "sourcePortId": "audio", "target": "audio-pipeline", "targetPortId": "audio" },
+        { "source": "ffmpeg", "sourcePortId": "wav", "target": "transcriber", "targetPortId": "wav" },
+        { "source": "content-detector", "sourcePortId": "scenes", "target": "observations", "targetPortId": "scenes" },
+        { "source": "content-detector", "sourcePortId": "scenes", "target": "report-writer", "targetPortId": "scenes" },
+        { "source": "model-sampler", "sourcePortId": "requests", "target": "external-models", "targetPortId": "requests" },
+        { "source": "external-models", "sourcePortId": "predictions", "target": "observations", "targetPortId": "predictions" },
+        { "source": "observations", "sourcePortId": "observations", "target": "report-writer", "targetPortId": "observations" },
+        { "source": "audio-pipeline", "sourcePortId": "events", "target": "report-writer", "targetPortId": "audio" },
+        { "source": "audio-pipeline", "sourcePortId": "records", "target": "buckets", "targetPortId": "records" },
+        { "source": "transcriber", "sourcePortId": "segments", "target": "text-pipeline", "targetPortId": "segments" },
+        { "source": "transcriber", "sourcePortId": "segments", "target": "report-writer", "targetPortId": "segments" },
+        { "source": "text-pipeline", "sourcePortId": "events", "target": "report-writer", "targetPortId": "text" },
+        { "source": "text-pipeline", "sourcePortId": "records", "target": "buckets", "targetPortId": "records" },
+        { "source": "buckets", "sourcePortId": "buckets", "target": "report-writer", "targetPortId": "buckets" }
       ]
     },
     "youtube-collection": {
       "nodes": [
-        { "id": "youtube-workflow", "x": 80, "y": 180 },
-        { "id": "collection-manifest", "x": 470, "y": 180 },
-        { "id": "collection-download-loop", "x": 860, "y": 180 },
-        { "id": "ffmpeg", "x": 1250, "y": 180 }
+        { "id": "react-page", "x": 80, "y": 120 },
+        { "id": "source", "x": 80, "y": 320 },
+        { "id": "vite-api", "x": 420, "y": 120 },
+        { "id": "collection-manifest", "x": 760, "y": 320 },
+        { "id": "collection-download-loop", "x": 1120, "y": 320 },
+        { "id": "ffmpeg", "x": 1480, "y": 320 },
+        { "id": "report-writer", "x": 1840, "y": 320 },
+        { "id": "collection-report", "x": 2200, "y": 320 }
       ],
       "edges": [
-        { "source": "youtube-workflow", "sourcePortId": "collection", "target": "collection-manifest", "targetPortId": "url" },
+        { "source": "react-page", "sourcePortId": "run", "target": "vite-api", "targetPortId": "run" },
+        { "source": "react-page", "sourcePortId": "config", "target": "vite-api", "targetPortId": "config" },
+        { "source": "source", "sourcePortId": "collection", "target": "collection-manifest", "targetPortId": "url" },
         { "source": "collection-manifest", "sourcePortId": "manifest", "target": "collection-download-loop", "targetPortId": "manifest" },
-        { "source": "youtube-workflow", "sourcePortId": "config", "target": "collection-download-loop", "targetPortId": "config" },
-        { "source": "collection-download-loop", "sourcePortId": "files", "target": "ffmpeg", "targetPortId": "file" }
+        { "source": "vite-api", "sourcePortId": "args", "target": "collection-download-loop", "targetPortId": "config" },
+        { "source": "collection-download-loop", "sourcePortId": "files", "target": "ffmpeg", "targetPortId": "file" },
+        { "source": "ffmpeg", "sourcePortId": "metadata", "target": "report-writer", "targetPortId": "metadata" },
+        { "source": "report-writer", "sourcePortId": "report", "target": "collection-report", "targetPortId": "reports" },
+        { "source": "collection-download-loop", "sourcePortId": "items", "target": "collection-report", "targetPortId": "items" }
       ]
     },
     "video-red-cars": {
       "nodes": [
-        { "id": "youtube-workflow", "x": 80, "y": 180 },
-        { "id": "download", "x": 470, "y": 180 },
-        { "id": "video-red-cars-workflow", "x": 860, "y": 180 }
+        { "id": "source", "x": 80, "y": 180 },
+        { "id": "download", "x": 420, "y": 180 },
+        { "id": "ffmpeg", "x": 760, "y": 180 },
+        { "id": "content-detector", "x": 1100, "y": 90 },
+        { "id": "model-sampler", "x": 1100, "y": 270 },
+        { "id": "external-models", "x": 1440, "y": 270 },
+        { "id": "observations", "x": 1780, "y": 180 }
       ],
       "edges": [
-        { "source": "youtube-workflow", "sourcePortId": "url", "target": "download", "targetPortId": "url" },
-        { "source": "download", "sourcePortId": "file", "target": "video-red-cars-workflow", "targetPortId": "file" },
-        { "source": "youtube-workflow", "sourcePortId": "config", "target": "video-red-cars-workflow", "targetPortId": "args" }
+        { "source": "source", "sourcePortId": "url", "target": "download", "targetPortId": "url" },
+        { "source": "source", "sourcePortId": "file", "target": "ffmpeg", "targetPortId": "file" },
+        { "source": "download", "sourcePortId": "file", "target": "ffmpeg", "targetPortId": "file" },
+        { "source": "ffmpeg", "sourcePortId": "frames", "target": "content-detector", "targetPortId": "frames" },
+        { "source": "ffmpeg", "sourcePortId": "frames", "target": "model-sampler", "targetPortId": "frames" },
+        { "source": "model-sampler", "sourcePortId": "requests", "target": "external-models", "targetPortId": "requests" },
+        { "source": "external-models", "sourcePortId": "predictions", "target": "observations", "targetPortId": "predictions" },
+        { "source": "content-detector", "sourcePortId": "scenes", "target": "observations", "targetPortId": "scenes" }
       ]
     },
     "song-analysis": {
       "nodes": [
-        { "id": "song-workflow", "x": 80, "y": 180 },
-        { "id": "song-fingerprinter", "x": 470, "y": 120 },
-        { "id": "song-catalog-matcher", "x": 860, "y": 120 },
-        { "id": "song-music-analyzer", "x": 860, "y": 320 }
+        { "id": "react-page", "x": 80, "y": 120 },
+        { "id": "source", "x": 80, "y": 320 },
+        { "id": "vite-api", "x": 420, "y": 120 },
+        { "id": "download", "x": 760, "y": 320 },
+        { "id": "ffmpeg", "x": 1120, "y": 320 },
+        { "id": "transcriber", "x": 1460, "y": 320 },
+        { "id": "song-fingerprinter", "x": 1120, "y": 120 },
+        { "id": "song-catalog-matcher", "x": 1460, "y": 120 },
+        { "id": "song-music-analyzer", "x": 1460, "y": 520 },
+        { "id": "song-report-writer", "x": 1800, "y": 320 }
       ],
       "edges": [
-        { "source": "song-workflow", "sourcePortId": "file", "target": "song-fingerprinter", "targetPortId": "file" },
-        { "source": "song-workflow", "sourcePortId": "file", "target": "song-music-analyzer", "targetPortId": "file" },
-        { "source": "song-workflow", "sourcePortId": "config", "target": "song-catalog-matcher", "targetPortId": "config" },
-        { "source": "song-workflow", "sourcePortId": "config", "target": "song-music-analyzer", "targetPortId": "config" },
-        { "source": "song-fingerprinter", "sourcePortId": "fingerprint", "target": "song-catalog-matcher", "targetPortId": "fingerprint" }
+        { "source": "react-page", "sourcePortId": "run", "target": "vite-api", "targetPortId": "run" },
+        { "source": "react-page", "sourcePortId": "config", "target": "vite-api", "targetPortId": "config" },
+        { "source": "source", "sourcePortId": "url", "target": "download", "targetPortId": "url" },
+        { "source": "source", "sourcePortId": "file", "target": "ffmpeg", "targetPortId": "file" },
+        { "source": "source", "sourcePortId": "file", "target": "song-fingerprinter", "targetPortId": "file" },
+        { "source": "source", "sourcePortId": "file", "target": "song-music-analyzer", "targetPortId": "file" },
+        { "source": "download", "sourcePortId": "file", "target": "ffmpeg", "targetPortId": "file" },
+        { "source": "download", "sourcePortId": "file", "target": "song-fingerprinter", "targetPortId": "file" },
+        { "source": "download", "sourcePortId": "file", "target": "song-music-analyzer", "targetPortId": "file" },
+        { "source": "ffmpeg", "sourcePortId": "wav", "target": "transcriber", "targetPortId": "wav" },
+        { "source": "vite-api", "sourcePortId": "args", "target": "song-catalog-matcher", "targetPortId": "config" },
+        { "source": "vite-api", "sourcePortId": "args", "target": "song-music-analyzer", "targetPortId": "config" },
+        { "source": "song-fingerprinter", "sourcePortId": "fingerprint", "target": "song-catalog-matcher", "targetPortId": "fingerprint" },
+        { "source": "song-catalog-matcher", "sourcePortId": "matches", "target": "song-report-writer", "targetPortId": "matches" },
+        { "source": "song-music-analyzer", "sourcePortId": "features", "target": "song-report-writer", "targetPortId": "features" },
+        { "source": "transcriber", "sourcePortId": "segments", "target": "song-report-writer", "targetPortId": "segments" }
       ]
     },
     "subtitle-generation": {
       "nodes": [
-        { "id": "subtitle-workflow", "x": 80, "y": 180 },
-        { "id": "download", "x": 470, "y": 180 },
-        { "id": "ffmpeg", "x": 860, "y": 180 },
-        { "id": "transcriber", "x": 1250, "y": 180 },
-        { "id": "subtitle-writer", "x": 1640, "y": 180 }
+        { "id": "react-page", "x": 80, "y": 120 },
+        { "id": "source", "x": 80, "y": 320 },
+        { "id": "vite-api", "x": 420, "y": 120 },
+        { "id": "download", "x": 760, "y": 320 },
+        { "id": "ffmpeg", "x": 1120, "y": 320 },
+        { "id": "transcriber", "x": 1460, "y": 320 },
+        { "id": "subtitle-writer", "x": 1800, "y": 320 }
       ],
       "edges": [
-        { "source": "subtitle-workflow", "sourcePortId": "url", "target": "download", "targetPortId": "url" },
-        { "source": "subtitle-workflow", "sourcePortId": "file", "target": "ffmpeg", "targetPortId": "file" },
+        { "source": "react-page", "sourcePortId": "run", "target": "vite-api", "targetPortId": "run" },
+        { "source": "react-page", "sourcePortId": "config", "target": "vite-api", "targetPortId": "config" },
+        { "source": "source", "sourcePortId": "url", "target": "download", "targetPortId": "url" },
+        { "source": "source", "sourcePortId": "file", "target": "ffmpeg", "targetPortId": "file" },
+        { "source": "source", "sourcePortId": "file", "target": "subtitle-writer", "targetPortId": "file" },
         { "source": "download", "sourcePortId": "file", "target": "ffmpeg", "targetPortId": "file" },
+        { "source": "download", "sourcePortId": "file", "target": "subtitle-writer", "targetPortId": "file" },
         { "source": "ffmpeg", "sourcePortId": "wav", "target": "transcriber", "targetPortId": "wav" },
-        { "source": "subtitle-workflow", "sourcePortId": "file", "target": "subtitle-writer", "targetPortId": "file" },
-        { "source": "subtitle-workflow", "sourcePortId": "config", "target": "subtitle-writer", "targetPortId": "config" },
+        { "source": "vite-api", "sourcePortId": "args", "target": "subtitle-writer", "targetPortId": "config" },
         { "source": "transcriber", "sourcePortId": "segments", "target": "subtitle-writer", "targetPortId": "segments" }
       ]
     }
@@ -87,13 +157,12 @@
     },
     "Song Match Fan-In Smoke": {
       "nodes": [
-        { "id": "song-workflow", "x": 80, "y": 180 },
+        { "id": "download", "x": 80, "y": 180 },
         { "id": "song-fingerprinter", "x": 470, "y": 120 },
         { "id": "song-catalog-matcher", "x": 860, "y": 180 }
       ],
       "edges": [
-        { "source": "song-workflow", "sourcePortId": "file", "target": "song-fingerprinter", "targetPortId": "file" },
-        { "source": "song-workflow", "sourcePortId": "config", "target": "song-catalog-matcher", "targetPortId": "config" },
+        { "source": "download", "sourcePortId": "file", "target": "song-fingerprinter", "targetPortId": "file" },
         { "source": "song-fingerprinter", "sourcePortId": "fingerprint", "target": "song-catalog-matcher", "targetPortId": "fingerprint" }
       ]
     }
@@ -110,46 +179,73 @@
     },
     "YouTube Collection Spot Check": {
       "nodes": [
-        { "id": "collection-manifest", "x": 80, "y": 180 },
-        { "id": "collection-download-loop", "x": 470, "y": 180 }
+        { "id": "source", "x": 80, "y": 180 },
+        { "id": "collection-manifest", "x": 470, "y": 180 },
+        { "id": "collection-download-loop", "x": 860, "y": 180 }
       ],
       "edges": [
+        { "source": "source", "sourcePortId": "collection", "target": "collection-manifest", "targetPortId": "url" },
         { "source": "collection-manifest", "sourcePortId": "manifest", "target": "collection-download-loop", "targetPortId": "manifest" }
       ]
     },
     "YouTube Red Cars Counter": {
       "nodes": [
         { "id": "download", "x": 80, "y": 180 },
-        { "id": "video-red-cars-workflow", "x": 470, "y": 180 }
+        { "id": "ffmpeg", "x": 470, "y": 180 },
+        { "id": "content-detector", "x": 860, "y": 90 },
+        { "id": "model-sampler", "x": 860, "y": 270 },
+        { "id": "external-models", "x": 1250, "y": 270 },
+        { "id": "observations", "x": 1640, "y": 180 }
       ],
       "edges": [
-        { "source": "download", "sourcePortId": "file", "target": "video-red-cars-workflow", "targetPortId": "file" }
+        { "source": "download", "sourcePortId": "file", "target": "ffmpeg", "targetPortId": "file" },
+        { "source": "ffmpeg", "sourcePortId": "frames", "target": "content-detector", "targetPortId": "frames" },
+        { "source": "ffmpeg", "sourcePortId": "frames", "target": "model-sampler", "targetPortId": "frames" },
+        { "source": "model-sampler", "sourcePortId": "requests", "target": "external-models", "targetPortId": "requests" },
+        { "source": "external-models", "sourcePortId": "predictions", "target": "observations", "targetPortId": "predictions" },
+        { "source": "content-detector", "sourcePortId": "scenes", "target": "observations", "targetPortId": "scenes" }
+      ]
+    },
+    "YouTube Red Cars Only": {
+      "nodes": [
+        { "id": "download", "x": 80, "y": 180 },
+        { "id": "ffmpeg", "x": 470, "y": 180 },
+        { "id": "content-detector", "x": 860, "y": 90 },
+        { "id": "model-sampler", "x": 860, "y": 270 },
+        { "id": "external-models", "x": 1250, "y": 270 },
+        { "id": "observations", "x": 1640, "y": 180 }
+      ],
+      "edges": [
+        { "source": "download", "sourcePortId": "file", "target": "ffmpeg", "targetPortId": "file" },
+        { "source": "ffmpeg", "sourcePortId": "frames", "target": "content-detector", "targetPortId": "frames" },
+        { "source": "ffmpeg", "sourcePortId": "frames", "target": "model-sampler", "targetPortId": "frames" },
+        { "source": "model-sampler", "sourcePortId": "requests", "target": "external-models", "targetPortId": "requests" },
+        { "source": "external-models", "sourcePortId": "predictions", "target": "observations", "targetPortId": "predictions" },
+        { "source": "content-detector", "sourcePortId": "scenes", "target": "observations", "targetPortId": "scenes" }
       ]
     },
     "Song Analysis Quick Match": {
       "nodes": [
-        { "id": "song-workflow", "x": 80, "y": 180 },
+        { "id": "download", "x": 80, "y": 180 },
         { "id": "song-fingerprinter", "x": 470, "y": 180 },
         { "id": "song-catalog-matcher", "x": 860, "y": 180 }
       ],
       "edges": [
-        { "source": "song-workflow", "sourcePortId": "file", "target": "song-fingerprinter", "targetPortId": "file" },
-        { "source": "song-workflow", "sourcePortId": "config", "target": "song-catalog-matcher", "targetPortId": "config" },
+        { "source": "download", "sourcePortId": "file", "target": "song-fingerprinter", "targetPortId": "file" },
         { "source": "song-fingerprinter", "sourcePortId": "fingerprint", "target": "song-catalog-matcher", "targetPortId": "fingerprint" }
       ]
     },
     "Subtitle SRT Starter": {
       "nodes": [
-        { "id": "subtitle-workflow", "x": 80, "y": 180 },
+        { "id": "download", "x": 80, "y": 180 },
         { "id": "ffmpeg", "x": 470, "y": 180 },
         { "id": "transcriber", "x": 860, "y": 180 },
         { "id": "subtitle-writer", "x": 1250, "y": 180 }
       ],
       "edges": [
-        { "source": "subtitle-workflow", "sourcePortId": "file", "target": "ffmpeg", "targetPortId": "file" },
+        { "source": "download", "sourcePortId": "file", "target": "ffmpeg", "targetPortId": "file" },
+        { "source": "download", "sourcePortId": "file", "target": "subtitle-writer", "targetPortId": "file" },
         { "source": "ffmpeg", "sourcePortId": "wav", "target": "transcriber", "targetPortId": "wav" },
-        { "source": "subtitle-workflow", "sourcePortId": "file", "target": "subtitle-writer", "targetPortId": "file" },
-        { "source": "subtitle-workflow", "sourcePortId": "config", "target": "subtitle-writer", "targetPortId": "config" },
         { "source": "transcriber", "sourcePortId": "segments", "target": "subtitle-writer", "targetPortId": "segments" }
       ]
     }
