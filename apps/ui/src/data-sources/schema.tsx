@@ -2,7 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { WorkflowTypeSpec } from "../api/client";
 import { formatWorkflowTypeSpec, formatWorkflowTypeSpecJson, isWorkflowTypeSpec } from "../workflowTypeSpec";
+import { formatWorkflowTypeScriptType, parseWorkflowTypeScriptType } from "../workflowTypeScript";
 import { cn } from "../shared/utils";
+
+type WorkflowTypeEditorMode = "typescript" | "json";
 
 export function WorkflowTypeEditor({
   value,
@@ -11,14 +14,32 @@ export function WorkflowTypeEditor({
   value: WorkflowTypeSpec;
   onChange: (value: WorkflowTypeSpec, jsonError: string | null) => void;
 }) {
-  const [text, setText] = useState(() => formatWorkflowTypeSpecJson(value));
+  const [mode, setMode] = useState<WorkflowTypeEditorMode>("typescript");
+  const [text, setText] = useState(() => formatWorkflowTypeScriptType(value));
   const [error, setError] = useState<string | null>(null);
   const summary = useMemo(() => formatWorkflowTypeSpec(value), [value]);
 
   useEffect(() => {
-    setText(formatWorkflowTypeSpecJson(value));
+    setText(mode === "typescript" ? formatWorkflowTypeScriptType(value) : formatWorkflowTypeSpecJson(value));
     setError(null);
-  }, [value]);
+  }, [mode, value]);
+
+  const changeMode = (nextMode: WorkflowTypeEditorMode) => {
+    setMode(nextMode);
+    setText(nextMode === "typescript" ? formatWorkflowTypeScriptType(value) : formatWorkflowTypeSpecJson(value));
+    setError(null);
+  };
+
+  const parseText = (nextText: string): WorkflowTypeSpec => {
+    if (mode === "typescript") {
+      return parseWorkflowTypeScriptType(nextText);
+    }
+    const nextValue = JSON.parse(nextText) as unknown;
+    if (!isWorkflowTypeSpec(nextValue)) {
+      throw new Error("Type JSON does not match WorkflowTypeSpec");
+    }
+    return nextValue;
+  };
 
   return (
     <div className="space-y-3">
@@ -28,6 +49,21 @@ export function WorkflowTypeEditor({
           <div className="mt-1 text-xs text-zinc-600">{summary}</div>
         </div>
         {error ? <div className="text-xs text-rose-700">{error}</div> : null}
+      </div>
+      <div className="inline-flex rounded-lg border border-zinc-200 bg-zinc-100 p-1">
+        {(["typescript", "json"] as const).map((candidate) => (
+          <button
+            key={candidate}
+            type="button"
+            className={cn(
+              "h-8 rounded-md px-3 text-xs font-medium",
+              mode === candidate ? "bg-white text-zinc-950 shadow-sm" : "text-zinc-600 hover:text-zinc-950",
+            )}
+            onClick={() => changeMode(candidate)}
+          >
+            {candidate === "typescript" ? "TypeScript" : "JSON"}
+          </button>
+        ))}
       </div>
       <textarea
         className={cn(
@@ -42,10 +78,7 @@ export function WorkflowTypeEditor({
           const nextText = event.target.value;
           setText(nextText);
           try {
-            const nextValue = JSON.parse(nextText) as unknown;
-            if (!isWorkflowTypeSpec(nextValue)) {
-              throw new Error("Type JSON does not match WorkflowTypeSpec");
-            }
+            const nextValue = parseText(nextText);
             setError(null);
             onChange(nextValue, null);
           } catch (nextError) {

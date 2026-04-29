@@ -7,6 +7,8 @@ import {
   parseImportedDataSourcesJson,
   dataSourcePopulationOptions,
 } from "../src/data-sources/types";
+import { workflowTypesAssignable } from "../src/workflowTypeSpec";
+import { parseWorkflowTypeScriptType } from "../src/workflowTypeScript";
 
 describe("data source import parsing", () => {
   test("converts legacy schema payloads into workflow type specs", () => {
@@ -131,5 +133,27 @@ describe("data source creation helpers", () => {
       "location",
       "metadata",
     ]);
+  });
+
+  test("TypeScript type input produces workflow type specs for source contracts", () => {
+    expect(parseWorkflowTypeScriptType("{ id: string; score?: number }")).toEqual({
+      type: "object",
+      properties: [
+        { name: "id", value: { type: "string" }, required: true },
+        { name: "score", value: { type: "number" }, required: false },
+      ],
+      additional_properties: false,
+    });
+  });
+
+  test("invalid TypeScript type input reports useful parser errors", () => {
+    expect(() => parseWorkflowTypeScriptType("() => string")).toThrow("Function types");
+  });
+
+  test("derived source compatibility uses compiled TypeScript contracts", () => {
+    const parent = parseWorkflowTypeScriptType("Record<string, number>");
+    const derived = parseWorkflowTypeScriptType("{ score: number; [key: string]: number }");
+
+    expect(workflowTypesAssignable(parent, derived)).toBe(true);
   });
 });

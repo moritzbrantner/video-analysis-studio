@@ -43,8 +43,10 @@ export function workflowTypesAssignable(source: WorkflowTypeSpec, target: Workfl
         objectPropertiesAssignable(
           source.properties ?? [],
           source.additional_properties ?? false,
+          source.additional_property_value,
           target.properties ?? [],
           target.additional_properties ?? false,
+          target.additional_property_value,
         )
       );
   }
@@ -83,6 +85,9 @@ export function canonicalizeWorkflowTypeSpec(spec: WorkflowTypeSpec): WorkflowTy
           }))
           .sort((left, right) => left.name.localeCompare(right.name)),
         additional_properties: Boolean(spec.additional_properties),
+        ...(spec.additional_property_value
+          ? { additional_property_value: canonicalizeWorkflowTypeSpec(spec.additional_property_value) }
+          : {}),
         ...(spec.semantic ? { semantic: spec.semantic } : {}),
       };
     case "union":
@@ -126,6 +131,7 @@ export function isWorkflowTypeSpec(value: unknown): value is WorkflowTypeSpec {
       return (
         (value.properties === undefined || (Array.isArray(value.properties) && value.properties.every(isWorkflowObjectProperty))) &&
         (value.additional_properties === undefined || typeof value.additional_properties === "boolean") &&
+        (value.additional_property_value === undefined || isWorkflowTypeSpec(value.additional_property_value)) &&
         (value.semantic === undefined || typeof value.semantic === "string")
       );
     case "union":
@@ -197,15 +203,21 @@ export function validateWorkflowValue(spec: WorkflowTypeSpec, value: unknown, pa
           return issue;
         }
       }
-      if (spec.additional_properties === false) {
-        const allowed = new Set(properties.map((property) => property.name));
-        for (const key of Object.keys(value)) {
-          if (!allowed.has(key)) {
+      const allowed = new Set(properties.map((property) => property.name));
+      for (const key of Object.keys(value)) {
+        if (!allowed.has(key)) {
+          if (spec.additional_properties === false) {
             return {
               path: `${path}.${key}`,
               expected: "no additional properties",
               actual: describeWorkflowRuntimeValue(value[key]),
             };
+          }
+          if (spec.additional_property_value) {
+            const issue = validateWorkflowValue(spec.additional_property_value, value[key], `${path}.${key}`);
+            if (issue) {
+              return issue;
+            }
           }
         }
       }
@@ -256,6 +268,9 @@ function formatWorkflowType(spec: WorkflowTypeSpec): string {
       const properties = (spec.properties ?? []).slice(0, 3).map((property) => property.name.trim()).filter(Boolean);
       const preview = properties.length > 0 ? `{${properties.join(", ")}${(spec.properties ?? []).length > properties.length ? ", ..." : ""}}` : "{}";
       const base = spec.semantic ? `${semanticLabel(spec.semantic)} ${preview}` : `Object${preview}`;
+      if (spec.additional_property_value) {
+        return `${base}<string, ${formatWorkflowType(spec.additional_property_value)}>`;
+      }
       return spec.additional_properties === false ? base : `${base}+`;
     }
     case "union":
@@ -291,19 +306,23 @@ function maxItemsAssignable(source?: number, target?: number): boolean {
 function objectPropertiesAssignable(
   sourceProperties: WorkflowObjectProperty[],
   sourceAdditionalProperties: boolean,
+  sourceAdditionalPropertyValue: WorkflowTypeSpec | undefined,
   targetProperties: WorkflowObjectProperty[],
   targetAdditionalProperties: boolean,
+  targetAdditionalPropertyValue: WorkflowTypeSpec | undefined,
 ): boolean {
   for (const targetProperty of targetProperties) {
     const sourceProperty = sourceProperties.find((property) => property.name === targetProperty.name);
-    if (!sourceProperty) {
-      if (targetProperty.required) {
+    if (sourceProperty) {
+      if (!workflowTypesAssignable(sourceProperty.value, targetProperty.value)) {
         return false;
       }
       continue;
     }
-    if (!workflowTypesAssignable(sourceProperty.value, targetProperty.value)) {
-      return false;
+    if (targetProperty.required) {
+      if (!sourceAdditionalPropertyValue || !workflowTypesAssignable(sourceAdditionalPropertyValue, targetProperty.value)) {
+        return false;
+      }
     }
   }
 
@@ -315,6 +334,23 @@ function objectPropertiesAssignable(
       if (!targetProperties.some((targetProperty) => targetProperty.name === sourceProperty.name)) {
         return false;
       }
+    }
+  }
+
+  if (targetAdditionalPropertyValue) {
+    for (const sourceProperty of sourceProperties) {
+      if (
+        !targetProperties.some((targetProperty) => targetProperty.name === sourceProperty.name) &&
+        !workflowTypesAssignable(sourceProperty.value, targetAdditionalPropertyValue)
+      ) {
+        return false;
+      }
+    }
+    if (sourceAdditionalProperties && !sourceAdditionalPropertyValue) {
+      return false;
+    }
+    if (sourceAdditionalPropertyValue && !workflowTypesAssignable(sourceAdditionalPropertyValue, targetAdditionalPropertyValue)) {
+      return false;
     }
   }
 

@@ -1,6 +1,6 @@
 import { CollectionDashboard } from "../collection";
 import { DataBucketOverview } from "../data";
-import { ResultPageEditor, type DashboardLayout } from "../ResultPageEditor";
+import { ResultPageEditor, type DashboardLayout, type DashboardWidgetBindingSummary } from "../ResultPageEditor";
 import { Panel } from "../shared/primitives";
 import {
   isSongAnalysisReport,
@@ -31,10 +31,11 @@ export interface ReportDashboardProps {
   mode: ReportDashboardMode;
   runId?: string | null;
   layout: DashboardLayout;
+  bindingSummaries?: DashboardWidgetBindingSummary[];
   onLayoutChange: (layout: DashboardLayout) => void;
 }
 
-export function ReportDashboard({ report, mode, runId, layout, onLayoutChange }: ReportDashboardProps) {
+export function ReportDashboard({ report, mode, runId, layout, bindingSummaries = [], onLayoutChange }: ReportDashboardProps) {
   const songReport = isSongAnalysisReport(report) ? report : null;
   const subtitleReport = isSubtitleGenerationReport(report) ? report : null;
   const redCarsReport = isVideoRedCarsReport(report) ? report : null;
@@ -51,10 +52,16 @@ export function ReportDashboard({ report, mode, runId, layout, onLayoutChange }:
     );
   }
 
-  if (mode === "result" && !redCarsReport) {
+  if (mode === "result") {
     return (
       <section className="min-w-0 space-y-4">
-        <ResultPageEditor report={report} runId={runId} layout={layout} onLayoutChange={onLayoutChange} />
+        <ResultPageEditor
+          report={report}
+          runId={runId}
+          layout={layout}
+          bindingSummaries={bindingSummaries}
+          onLayoutChange={onLayoutChange}
+        />
       </section>
     );
   }
@@ -81,7 +88,7 @@ export function ReportDashboard({ report, mode, runId, layout, onLayoutChange }:
   if (redCarsReport) {
     return (
       <section className="min-w-0 space-y-4">
-        {(mode === "overview" || mode === "result") && <VideoRedCarsOverviewDashboard report={redCarsReport} runId={runId} />}
+        {mode === "overview" && <VideoRedCarsOverviewDashboard report={redCarsReport} runId={runId} />}
         {mode === "scenes" && <VideoRedCarsScenesDashboard report={redCarsReport} runId={runId} />}
         {mode === "signals" && <VideoRedCarsSignalsDashboard report={redCarsReport} runId={runId} />}
       </section>

@@ -46,8 +46,17 @@ import "./index.css";
 import "@xyflow/react/dist/style.css";
 import { sampleReport } from "./sampleReport";
 import {
+  dashboardWidgetIdsForLayout,
+  dashboardWidgetLabel,
+  dashboardWidgetOptionsForReportKind,
   defaultDashboardLayout,
+  defaultDashboardLayoutForReportKind,
+  sanitizeDashboardLayout,
   type DashboardLayout,
+  type DashboardDataKind,
+  type DashboardWidgetBindingSummary,
+  type DashboardWidgetId,
+  type ReportKind,
 } from "./ResultPageEditor";
 import { ReportDashboard, type ReportDashboardMode } from "./dashboard";
 import {
@@ -56,6 +65,12 @@ import {
   loadLegacyLocalDataSources,
 } from "./data-sources/types";
 import { DataSourcesPage as WorkspaceDataSourcesPage } from "./data-sources/page";
+import {
+  loadTypeDefinitions,
+  persistTypeDefinitions,
+  TypeLibraryPage,
+  type TypeDefinition,
+} from "./type-library/page";
 import { collectDataSourceReferences } from "./data-sources/references";
 import {
   DataSourceDerivationInput,
@@ -93,6 +108,7 @@ import {
   workflowTypeSignature,
   workflowTypesAssignable,
 } from "./workflowTypeSpec";
+import { formatWorkflowTypeScriptType } from "./workflowTypeScript";
 import { appendRunEvent, normalizeRunEvents } from "./runEvents";
 import {
   dataSourcesQueryOptions,
@@ -118,7 +134,7 @@ import { workflowGraphHasCycle, workflowGraphWouldCreateCycle } from "./workflow
 
 type WorkflowKindId = "youtube-video" | "video-red-cars" | "youtube-collection" | "song-analysis" | "subtitle-generation";
 type SourceMode = "url" | "file" | "collection";
-type AppPage = "analysis" | "runs" | "workflow" | "components" | "data-sources" | "settings";
+type AppPage = "analysis" | "runs" | "workflow" | "components" | "data-sources" | "types" | "settings";
 interface AppLocation {
   page: AppPage;
   workflowId: string | null;
@@ -131,7 +147,13 @@ type DataSourceSchema =
   | { type: "string"; semantic?: WorkflowSemanticKind }
   | { type: "binary"; mediaType: string; portType: DataSourceType; semantic?: WorkflowSemanticKind }
   | { type: "array"; items: DataSourceSchema; minItems?: number; maxItems?: number }
-  | { type: "object"; properties: DataSourceSchemaProperty[]; additionalProperties?: boolean; semantic?: WorkflowSemanticKind }
+  | {
+      type: "object";
+      properties: DataSourceSchemaProperty[];
+      additionalProperties?: boolean;
+      additionalPropertySchema?: DataSourceSchema;
+      semantic?: WorkflowSemanticKind;
+    }
   | { type: "union"; variants: DataSourceSchema[] }
   | { type: JsonSchemaScalar };
 
@@ -320,6 +342,7 @@ function App() {
   const [workflowLibrary, setWorkflowLibrary] = useState<SavedWorkflowLibrary>(loadSavedWorkflowLibrary);
   const [workflowRuns, setWorkflowRuns] = useState<SavedWorkflowRun[]>(loadSavedWorkflowRuns);
   const [savedBlocks, setSavedBlocks] = useState<SavedWorkflowBlock[]>(loadSavedWorkflowBlocks);
+  const [typeDefinitions, setTypeDefinitions] = useState<TypeDefinition[]>(loadTypeDefinitions);
   const [legacyLocalDataSources, setLegacyLocalDataSources] = useState(() => loadLegacyLocalDataSources());
   const [portTypeColors, setPortTypeColors] = useState<PortTypeColors>(loadPortTypeColors);
   const [hotkeyBindings, setHotkeyBindings] = useState<HotkeyBindings>(loadHotkeyBindings);
@@ -333,11 +356,25 @@ function App() {
   );
 
   const activeWorkflow = useMemo(() => activeSavedWorkflow(workflowLibrary), [workflowLibrary]);
+  const activeWorkflowResultPanel = useMemo(
+    () => normalizeWorkflowResultPanel(activeWorkflow.resultPanel, activeWorkflow.kind, activeWorkflow.name),
+    [activeWorkflow],
+  );
   const dataSources = dataSourcesQuery.data ?? [];
   const dataSourcesLoading = dataSourcesQuery.isLoading;
   const workflowCatalog = workflowCatalogQuery.data ?? null;
   const transcriptionCatalog = transcriptionCatalogQuery.data ?? null;
   const dataSourceReferences = useMemo(() => collectDataSourceReferences(workflowLibrary), [workflowLibrary]);
+  const resultPanelBindingSummariesForActiveWorkflow = useMemo(
+    () =>
+      resultPanelBindingSummaries(
+        activeWorkflowResultPanel,
+        workflowStateFromSavedWorkflow(activeWorkflow).nodes,
+        dataSources,
+        typeDefinitions,
+      ),
+    [activeWorkflow, activeWorkflowResultPanel, dataSources, typeDefinitions],
+  );
   const selectedWorkflowKind = activeWorkflow.kind;
   const activeWorkflowInputModel = useMemo(() => deriveWorkflowRunInputModel(activeWorkflow), [activeWorkflow]);
   const validationMessage = getRunValidation(form, activeWorkflowInputModel, selectedWorkflowKind);
@@ -403,6 +440,10 @@ function App() {
   useEffect(() => {
     persistSavedWorkflowBlocks(savedBlocks);
   }, [savedBlocks]);
+
+  useEffect(() => {
+    persistTypeDefinitions(typeDefinitions);
+  }, [typeDefinitions]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -535,6 +576,31 @@ function App() {
   const commitWorkflowLibrary = useCallback((library: SavedWorkflowLibrary) => {
     persistSavedWorkflowLibrary(library);
     setWorkflowLibrary(library);
+  }, []);
+
+  const updateAttachedDashboardLayout = useCallback((layout: DashboardLayout) => {
+    setDashboardLayout(layout);
+    setWorkflowLibrary((currentLibrary) => {
+      const currentWorkflow = activeSavedWorkflow(currentLibrary);
+      const panel = normalizeWorkflowResultPanel(currentWorkflow.resultPanel, currentWorkflow.kind, currentWorkflow.name);
+      const nextLibrary: SavedWorkflowLibrary = {
+        ...currentLibrary,
+        workflows: currentLibrary.workflows.map((workflow) =>
+          workflow.id === currentWorkflow.id
+            ? {
+                ...workflow,
+                updatedAt: new Date().toISOString(),
+                resultPanel: {
+                  ...panel,
+                  layout: sanitizeDashboardLayout(layout, workflowReportKind(workflow.kind)),
+                },
+              }
+            : workflow,
+        ),
+      };
+      persistSavedWorkflowLibrary(nextLibrary);
+      return nextLibrary;
+    });
   }, []);
 
   const activateComponentDraft = useCallback(
@@ -960,12 +1026,16 @@ function App() {
     const nextReport = await cache.fetchQuery(
       reportQueryOptions(record.run_id, workflowKind, () => fetchWorkflowReport(client, record.run_id, workflowKind)),
     );
+    const reportWorkflow =
+      workflowRuns.find((run) => run.backendRunId === activeBackendRunId && run.workflowId)?.workflowId ?? activeWorkflow.id;
+    const attachedWorkflow = workflowLibrary.workflows.find((workflow) => workflow.id === reportWorkflow) ?? activeWorkflow;
+    setDashboardLayout(normalizeWorkflowResultPanel(attachedWorkflow.resultPanel, attachedWorkflow.kind, attachedWorkflow.name).layout);
     setReport(nextReport);
     setHasLoadedReport(true);
     setActiveReportRunId(record.run_id);
     navigateToPage("analysis");
-    setViewMode("overview");
-  }, [activeBackendRunId, activeRunRecord, activeWorkflowInputModel, cache, collectionManifestPreview, form, navigateToPage, selectedWorkflowKind, workflowRuns]);
+    setViewMode("result");
+  }, [activeBackendRunId, activeRunRecord, activeWorkflow, activeWorkflowInputModel, cache, collectionManifestPreview, form, navigateToPage, selectedWorkflowKind, workflowLibrary.workflows, workflowRuns]);
 
   async function runAnalysis() {
     const message = getRunValidation(form, activeWorkflowInputModel, selectedWorkflowKind);
@@ -1058,13 +1128,14 @@ function App() {
       setReport(nextReport);
       setHasLoadedReport(true);
       setActiveReportRunId(finalRun.run_id);
+      setDashboardLayout(normalizeWorkflowResultPanel(activeWorkflow.resultPanel, activeWorkflow.kind, activeWorkflow.name).layout);
       setRunStatus("succeeded");
       setActiveRunRecord(finalRun);
       cache.setQueryData(queryKeys.run(finalRun.run_id), finalRun);
       updateWorkflowRun(localRun.id, (run) => workflowRunFromRunRecord(run, finalRun));
       setLastRun(runRecordToCliRun(finalRun, client.label, activeWorkflow.name));
       navigateToPage("analysis");
-      setViewMode("overview");
+      setViewMode("result");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setRunStatus("failed");
@@ -1229,6 +1300,27 @@ function App() {
                   </span>
                 )}
                 <DataSourceIcon className="h-4 w-4 shrink-0" />
+              </button>
+              <button
+                type="button"
+                className={classNames(
+                  "flex w-full items-center justify-between rounded-lg border px-3 py-3 text-left transition",
+                  mainSidebarCollapsed && "h-10 justify-center px-0 py-0",
+                  page === "types"
+                    ? "border-zinc-950 bg-zinc-950 text-white"
+                    : "border-zinc-200 bg-white text-zinc-800 hover:border-zinc-300 hover:bg-zinc-50",
+                )}
+                onClick={() => navigateToPage("types")}
+                title="Types"
+                aria-label="Types"
+              >
+                {!mainSidebarCollapsed && (
+                  <span>
+                    <span className="block text-sm font-medium">Types</span>
+                    <span className="block text-xs opacity-70">Contracts and usage</span>
+                  </span>
+                )}
+                <TypeIcon className="h-4 w-4 shrink-0" />
               </button>
               <button
                 type="button"
@@ -1411,6 +1503,8 @@ function App() {
                         ? "Components"
                       : page === "data-sources"
                         ? "Data Sources"
+                      : page === "types"
+                        ? "Types"
                       : page === "settings"
                         ? "Settings"
                         : viewMode === "home"
@@ -1426,6 +1520,8 @@ function App() {
                         ? "Import, export, edit, and test composed workflow components"
                       : page === "data-sources"
                         ? "Catalogs, indices, references, and datasets for workflow nodes"
+                      : page === "types"
+                        ? "Define reusable type contracts and inspect their usage"
                       : page === "settings"
                         ? "Hotkeys and workflow type colors"
                         : viewMode === "home"
@@ -1471,6 +1567,7 @@ function App() {
                 onSavedBlocksChange={setSavedBlocks}
                 workflowCatalog={workflowCatalog}
                 dataSources={dataSources}
+                typeDefinitions={typeDefinitions}
                 portTypeColors={portTypeColors}
                 hotkeyBindings={hotkeyBindings}
                 focusTarget={workflowFocusTarget?.workflowId === activeWorkflow.id ? workflowFocusTarget : null}
@@ -1480,6 +1577,7 @@ function App() {
             ) : page === "components" ? (
               <ComponentsPage
                 savedBlocks={savedBlocks}
+                typeDefinitions={typeDefinitions}
                 onSavedBlocksChange={setSavedBlocks}
                 onEditComponent={(block) => activateComponentDraft(block, "workflow")}
                 onTestComponent={(block) => activateComponentDraft(block, "runs")}
@@ -1534,6 +1632,12 @@ function App() {
                   navigateToPage("workflow", { workflowId });
                 }}
               />
+            ) : page === "types" ? (
+              <TypeLibraryPage
+                workflowLibrary={workflowLibrary}
+                definitions={typeDefinitions}
+                onDefinitionsChange={setTypeDefinitions}
+              />
             ) : page === "settings" ? (
               <SettingsPage
                 portTypeColors={portTypeColors}
@@ -1567,7 +1671,8 @@ function App() {
                 mode={viewMode}
                 runId={activeReportRunId}
                 layout={dashboardLayout}
-                onLayoutChange={setDashboardLayout}
+                bindingSummaries={resultPanelBindingSummariesForActiveWorkflow}
+                onLayoutChange={updateAttachedDashboardLayout}
               />
             )}
           </div>
@@ -2167,8 +2272,27 @@ interface SavedWorkflowFile {
   workflowName?: string;
   workflowKind?: WorkflowKindId;
   workflowVersion?: number;
+  resultPanel?: WorkflowResultPanel;
   nodes: SavedWorkflowBlockNode[];
   edges: SavedWorkflowBlockEdge[];
+}
+
+type ResultPanelSourceKind = "completed_report" | "workflow_output" | "workspace_data_source";
+
+interface ResultPanelSourceBinding {
+  componentId: DashboardWidgetId;
+  dataKind: DashboardDataKind;
+  sourceKind: ResultPanelSourceKind;
+  nodeId?: string;
+  portId?: string;
+  dataSourceId?: string;
+  reportPath?: string;
+}
+
+interface WorkflowResultPanel {
+  name: string;
+  layout: DashboardLayout;
+  bindings: ResultPanelSourceBinding[];
 }
 
 interface SavedWorkflowVersion {
@@ -2189,6 +2313,7 @@ interface SavedWorkflow {
   version: number;
   versions: SavedWorkflowVersion[];
   componentDraft?: SavedWorkflowComponentDraft;
+  resultPanel?: WorkflowResultPanel;
   nodes: SavedWorkflowBlockNode[];
   edges: SavedWorkflowBlockEdge[];
 }
@@ -3466,6 +3591,7 @@ function WorkflowBuilder({
   onSavedBlocksChange,
   workflowCatalog,
   dataSources,
+  typeDefinitions,
   portTypeColors,
   hotkeyBindings,
   focusTarget,
@@ -3478,6 +3604,7 @@ function WorkflowBuilder({
   onSavedBlocksChange: React.Dispatch<React.SetStateAction<SavedWorkflowBlock[]>>;
   workflowCatalog: RustWorkflowCatalog | null;
   dataSources: DataSourceEntry[];
+  typeDefinitions: TypeDefinition[];
   portTypeColors: PortTypeColors;
   hotkeyBindings: HotkeyBindings;
   focusTarget: WorkflowFocusTarget | null;
@@ -3828,7 +3955,10 @@ function WorkflowBuilder({
   }, [activeWorkflow.kind, commitWorkflowLibrary, setEdges, setNodes, workflowLibrary]);
 
   const cloneActiveWorkflow = useCallback(() => {
-    const workflow = createSavedWorkflow(`${activeWorkflow.name} Copy`, nodes, edges, activeWorkflow.kind);
+    const workflow = {
+      ...createSavedWorkflow(`${activeWorkflow.name} Copy`, nodes, edges, activeWorkflow.kind),
+      resultPanel: cloneWorkflowResultPanel(activeWorkflow.resultPanel, activeWorkflow.kind, `${activeWorkflow.name} Copy`),
+    };
     const nextLibrary: SavedWorkflowLibrary = {
       ...workflowLibrary,
       activeWorkflowId: workflow.id,
@@ -3842,7 +3972,7 @@ function WorkflowBuilder({
     setContextMenu(null);
     setOutputConnectorMenu(null);
     setBlockLibraryMessage("Cloned workflow");
-  }, [activeWorkflow.kind, activeWorkflow.name, commitWorkflowLibrary, edges, nodes, setEdges, setNodes, workflowLibrary]);
+  }, [activeWorkflow.kind, activeWorkflow.name, activeWorkflow.resultPanel, commitWorkflowLibrary, edges, nodes, setEdges, setNodes, workflowLibrary]);
 
   const deleteWorkflow = useCallback(
     (workflowId: string) => {
@@ -3904,7 +4034,34 @@ function WorkflowBuilder({
       const nextLibrary: SavedWorkflowLibrary = {
         ...workflowLibrary,
         workflows: workflowLibrary.workflows.map((workflow) =>
-          workflow.id === workflowId ? { ...workflow, kind, updatedAt } : workflow,
+          workflow.id === workflowId
+            ? {
+                ...workflow,
+                kind,
+                updatedAt,
+                resultPanel: normalizeWorkflowResultPanel(workflow.resultPanel, kind, workflow.name),
+              }
+            : workflow,
+        ),
+      };
+      commitWorkflowLibrary(nextLibrary);
+    },
+    [commitWorkflowLibrary, workflowLibrary],
+  );
+
+  const updateWorkflowResultPanel = useCallback(
+    (workflowId: string, panel: WorkflowResultPanel) => {
+      const updatedAt = new Date().toISOString();
+      const nextLibrary: SavedWorkflowLibrary = {
+        ...workflowLibrary,
+        workflows: workflowLibrary.workflows.map((workflow) =>
+          workflow.id === workflowId
+            ? {
+                ...workflow,
+                updatedAt,
+                resultPanel: normalizeWorkflowResultPanel(panel, workflow.kind, workflow.name),
+              }
+            : workflow,
         ),
       };
       commitWorkflowLibrary(nextLibrary);
@@ -4879,6 +5036,7 @@ function WorkflowBuilder({
           nodes={nodes}
           edges={edges}
           dataSources={dataSources}
+          typeDefinitions={typeDefinitions}
           selectedNodes={selectedNodes}
           selectedInternalEdgeCount={selectedInternalEdgeCount}
           blockName={blockName}
@@ -4895,6 +5053,7 @@ function WorkflowBuilder({
           onWorkflowNameDraftChange={setWorkflowNameDraft}
           onCommitWorkflowName={commitActiveWorkflowName}
           onWorkflowKindChange={(kind) => changeWorkflowKind(activeWorkflow.id, kind)}
+          onResultPanelChange={(panel) => updateWorkflowResultPanel(activeWorkflow.id, panel)}
           onSaveSelectedBlock={saveSelectedBlock}
           onGroupSelected={() => groupNodes(selectedNodeIds)}
           onDeleteSelected={() => deleteWorkflowNodes(selectedNodeIds)}
@@ -5207,11 +5366,13 @@ function WorkflowComponentTile({
 
 function ComponentsPage({
   savedBlocks,
+  typeDefinitions,
   onSavedBlocksChange,
   onEditComponent,
   onTestComponent,
 }: {
   savedBlocks: SavedWorkflowBlock[];
+  typeDefinitions: TypeDefinition[];
   onSavedBlocksChange: React.Dispatch<React.SetStateAction<SavedWorkflowBlock[]>>;
   onEditComponent: (block: SavedWorkflowBlock) => void;
   onTestComponent: (block: SavedWorkflowBlock) => void;
@@ -5550,7 +5711,7 @@ function ComponentsPage({
                       <div key={`${input.nodeId}-${input.port.id}`} className="rounded-md border border-zinc-200 bg-white px-3 py-2">
                         <div className="text-xs font-semibold text-zinc-900">{input.nodeTitle}</div>
                         <div className="mt-1 text-[11px] text-zinc-500">{input.port.label}</div>
-                        <WorkflowTypeDetails spec={input.port.valueType} />
+                        <WorkflowTypeDetails spec={input.port.valueType} typeDefinitions={typeDefinitions} />
                       </div>
                     ))
                   )}
@@ -5568,7 +5729,7 @@ function ComponentsPage({
                       <div key={`${output.nodeId}-${output.port.id}`} className="rounded-md border border-zinc-200 bg-white px-3 py-2">
                         <div className="text-xs font-semibold text-zinc-900">{output.nodeTitle}</div>
                         <div className="mt-1 text-[11px] text-zinc-500">{output.port.label}</div>
-                        <WorkflowTypeDetails spec={output.port.valueType} />
+                        <WorkflowTypeDetails spec={output.port.valueType} typeDefinitions={typeDefinitions} />
                       </div>
                     ))
                   )}
@@ -5594,6 +5755,7 @@ function WorkflowDetailsPanel({
   nodes,
   edges,
   dataSources,
+  typeDefinitions,
   selectedNodes,
   selectedInternalEdgeCount,
   blockName,
@@ -5610,6 +5772,7 @@ function WorkflowDetailsPanel({
   onWorkflowNameDraftChange,
   onCommitWorkflowName,
   onWorkflowKindChange,
+  onResultPanelChange,
   onSaveSelectedBlock,
   onGroupSelected,
   onDeleteSelected,
@@ -5631,6 +5794,7 @@ function WorkflowDetailsPanel({
   nodes: WorkflowNodeModel[];
   edges: Edge[];
   dataSources: DataSourceEntry[];
+  typeDefinitions: TypeDefinition[];
   selectedNodes: WorkflowNodeModel[];
   selectedInternalEdgeCount: number;
   blockName: string;
@@ -5647,6 +5811,7 @@ function WorkflowDetailsPanel({
   onWorkflowNameDraftChange: (value: string) => void;
   onCommitWorkflowName: () => void;
   onWorkflowKindChange: (kind: WorkflowKindId) => void;
+  onResultPanelChange: (panel: WorkflowResultPanel) => void;
   onSaveSelectedBlock: () => void;
   onGroupSelected: () => void;
   onDeleteSelected: () => void;
@@ -5793,16 +5958,22 @@ function WorkflowDetailsPanel({
               />
             )}
             {selectedNode.data.adapterNode && (
-              <AdapterNodeSettings node={selectedNode} onChange={onUpdateSelectedAdapter} />
+              <AdapterNodeSettings
+                node={selectedNode}
+                typeDefinitions={typeDefinitions}
+                onChange={onUpdateSelectedAdapter}
+              />
             )}
             <WorkflowPortConnectionsList
               title="Inputs"
               groups={selectedInputConnections}
+              typeDefinitions={typeDefinitions}
               onFocusNode={onFocusNode}
             />
             <WorkflowPortConnectionsList
               title="Outputs"
               groups={selectedOutputConnections}
+              typeDefinitions={typeDefinitions}
               onFocusNode={onFocusNode}
             />
             {selectedGroupNode?.data.group && (
@@ -5941,6 +6112,14 @@ function WorkflowDetailsPanel({
               <Metric label="Components" value={String(nodes.length)} />
               <Metric label="Connections" value={String(edges.length)} />
             </div>
+            <WorkflowResultPanelEditor
+              workflowKind={activeWorkflow.kind}
+              panel={normalizeWorkflowResultPanel(activeWorkflow.resultPanel, activeWorkflow.kind, activeWorkflow.name)}
+              nodes={nodes}
+              dataSources={dataSources}
+              typeDefinitions={typeDefinitions}
+              onChange={onResultPanelChange}
+            />
             <div className="grid grid-cols-4 gap-2">
               <button
                 type="button"
@@ -6074,6 +6253,237 @@ function WorkflowDetailsPanel({
   );
 }
 
+function WorkflowResultPanelEditor({
+  workflowKind,
+  panel,
+  nodes,
+  dataSources,
+  typeDefinitions,
+  onChange,
+}: {
+  workflowKind: WorkflowKindId;
+  panel: WorkflowResultPanel;
+  nodes: WorkflowNodeModel[];
+  dataSources: DataSourceEntry[];
+  typeDefinitions: TypeDefinition[];
+  onChange: (panel: WorkflowResultPanel) => void;
+}) {
+  const reportKind = workflowReportKind(workflowKind);
+  const options = dashboardWidgetOptionsForReportKind(reportKind);
+  const componentIds = dashboardWidgetIdsForLayout(panel.layout);
+  const availableOptions = options.filter((option) => !componentIds.includes(option.id));
+  const [componentDraft, setComponentDraft] = useState<DashboardWidgetId>(availableOptions[0]?.id ?? options[0]?.id ?? "summary");
+  const bindingSummaries = resultPanelBindingSummaries(panel, nodes, dataSources, typeDefinitions);
+
+  useEffect(() => {
+    const nextOption = availableOptions[0]?.id ?? options[0]?.id;
+    if (nextOption && !availableOptions.some((option) => option.id === componentDraft)) {
+      setComponentDraft(nextOption);
+    }
+  }, [availableOptions, componentDraft, options]);
+
+  const updatePanel = (updates: Partial<WorkflowResultPanel>) => {
+    onChange(normalizeWorkflowResultPanel({ ...panel, ...updates }, workflowKind, panel.name));
+  };
+
+  const addComponent = () => {
+    if (!availableOptions.some((option) => option.id === componentDraft)) {
+      return;
+    }
+    updatePanel({ layout: resultPanelLayoutFromWidgetIds(componentIds.concat(componentDraft)) });
+  };
+
+  const removeComponent = (componentId: DashboardWidgetId) => {
+    const nextIds = componentIds.filter((id) => id !== componentId);
+    if (nextIds.length === 0) {
+      return;
+    }
+    updatePanel({
+      layout: resultPanelLayoutFromWidgetIds(nextIds),
+      bindings: panel.bindings.filter((binding) => binding.componentId !== componentId),
+    });
+  };
+
+  const setBinding = (
+    componentId: DashboardWidgetId,
+    dataKind: DashboardDataKind,
+    binding: ResultPanelSourceBinding,
+  ) => {
+    updatePanel({
+      bindings: panel.bindings
+        .filter((candidate) => candidate.componentId !== componentId || candidate.dataKind !== dataKind)
+        .concat(binding),
+    });
+  };
+
+  return (
+    <div className="space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase text-zinc-500">Result Panel</div>
+          <p className="mt-1 text-xs leading-5 text-zinc-600">
+            Attached to this workflow and opened after completed runs.
+          </p>
+        </div>
+        <span className="shrink-0 rounded bg-white px-2 py-1 text-[11px] font-medium text-zinc-600">
+          {componentIds.length} components
+        </span>
+      </div>
+      <Field label="Panel name">
+        <input
+          className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+          value={panel.name}
+          onChange={(event) => updatePanel({ name: event.target.value })}
+        />
+      </Field>
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+        <select
+          className="min-w-0 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+          value={componentDraft}
+          onChange={(event) => setComponentDraft(event.target.value as DashboardWidgetId)}
+          disabled={availableOptions.length === 0}
+        >
+          {availableOptions.length === 0 ? (
+            <option value={componentDraft}>All components placed</option>
+          ) : (
+            availableOptions.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))
+          )}
+        </select>
+        <button
+          type="button"
+          className="inline-flex h-10 items-center justify-center rounded-lg bg-zinc-950 px-3 text-xs font-medium text-white shadow-sm hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-400"
+          onClick={addComponent}
+          disabled={availableOptions.length === 0}
+          title="Add result component"
+        >
+          Add
+        </button>
+      </div>
+      <div className="space-y-2">
+        {componentIds.map((componentId) => {
+          const option = options.find((candidate) => candidate.id === componentId);
+          if (!option) {
+            return null;
+          }
+          return (
+            <div key={componentId} className="rounded-md border border-zinc-200 bg-white p-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 truncate text-xs font-semibold text-zinc-900">
+                  {dashboardWidgetLabel(componentId)}
+                </div>
+                <button
+                  type="button"
+                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-zinc-200 text-zinc-500 hover:bg-zinc-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:text-zinc-300"
+                  onClick={() => removeComponent(componentId)}
+                  disabled={componentIds.length <= 1}
+                  title="Remove component"
+                  aria-label="Remove component"
+                >
+                  <CloseIcon className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <div className="mt-2 space-y-2">
+                {option.dataKinds.map((dataKind) => (
+                  <ResultPanelBindingEditor
+                    key={`${componentId}-${dataKind}`}
+                    componentId={componentId}
+                    dataKind={dataKind}
+                    binding={
+                      panel.bindings.find(
+                        (candidate) => candidate.componentId === componentId && candidate.dataKind === dataKind,
+                      ) ?? defaultResultPanelBinding(componentId, dataKind)
+                    }
+                    nodes={nodes}
+                    dataSources={dataSources}
+                    typeDefinitions={typeDefinitions}
+                    onChange={(binding) => setBinding(componentId, dataKind, binding)}
+                  />
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {bindingSummaries.length > 0 && (
+        <div className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-[11px] leading-5 text-zinc-600">
+          {bindingSummaries.length} data mapping{bindingSummaries.length === 1 ? "" : "s"} defined
+        </div>
+      )}
+      <button
+        type="button"
+        className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+        onClick={() => onChange(defaultWorkflowResultPanel(workflowKind, panel.name))}
+        title="Reset attached result panel"
+      >
+        <RefreshIcon className="h-4 w-4" />
+        Reset Panel
+      </button>
+    </div>
+  );
+}
+
+function ResultPanelBindingEditor({
+  componentId,
+  dataKind,
+  binding,
+  nodes,
+  dataSources,
+  typeDefinitions,
+  onChange,
+}: {
+  componentId: DashboardWidgetId;
+  dataKind: DashboardDataKind;
+  binding: ResultPanelSourceBinding;
+  nodes: WorkflowNodeModel[];
+  dataSources: DataSourceEntry[];
+  typeDefinitions: TypeDefinition[];
+  onChange: (binding: ResultPanelSourceBinding) => void;
+}) {
+  const sourceOptions = resultPanelSourceOptions(dataKind, nodes, dataSources, typeDefinitions);
+  const selectedKey = resultPanelBindingKey(binding);
+  const selectedSource = sourceOptions.find((option) => option.key === selectedKey) ?? sourceOptions[0];
+  const reportPath = binding.reportPath ?? defaultReportPathForDataKind(dataKind);
+
+  return (
+    <div className="space-y-1">
+      <div className="text-[11px] font-medium uppercase text-zinc-500">{formatPortType(resultDataKindPortType(dataKind))}</div>
+      <select
+        className="w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+        value={selectedSource.key}
+        onChange={(event) => {
+          const nextSource = sourceOptions.find((option) => option.key === event.target.value) ?? sourceOptions[0];
+          onChange(resultPanelBindingFromSource(componentId, dataKind, nextSource, reportPath));
+        }}
+      >
+        {sourceOptions.map((option) => (
+          <option key={option.key} value={option.key}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      {(selectedSource.kind === "completed_report" || binding.sourceKind === "completed_report") && (
+        <input
+          className="w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 font-mono text-[11px] outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+          value={reportPath}
+          placeholder={defaultReportPathForDataKind(dataKind)}
+          onChange={(event) =>
+            onChange({
+              componentId,
+              dataKind,
+              sourceKind: "completed_report",
+              reportPath: event.target.value,
+            })
+          }
+        />
+      )}
+    </div>
+  );
+}
+
 interface WorkflowPortConnection {
   nodeId: string;
   nodeTitle: string;
@@ -6135,10 +6545,12 @@ function workflowNodePortConnections(
 function WorkflowPortConnectionsList({
   title,
   groups,
+  typeDefinitions,
   onFocusNode,
 }: {
   title: string;
   groups: WorkflowPortConnectionGroup[];
+  typeDefinitions: TypeDefinition[];
   onFocusNode: (nodeId: string) => void;
 }) {
   const colors = usePortTypeColors();
@@ -6166,7 +6578,7 @@ function WorkflowPortConnectionsList({
                   {portIsStream(portValue) && <span className="text-zinc-900">stream</span>}
                   {portValue.optional && <span className="text-zinc-500">optional</span>}
                 </div>
-                <WorkflowTypeDetails spec={portValue.valueType} />
+                <WorkflowTypeDetails spec={portValue.valueType} typeDefinitions={typeDefinitions} />
                 {connections.length === 0 ? (
                   <div className="mt-2 text-[11px] text-zinc-500">No connected components</div>
                 ) : (
@@ -6194,11 +6606,29 @@ function WorkflowPortConnectionsList({
   );
 }
 
-function WorkflowTypeDetails({ spec }: { spec: WorkflowTypeSpec }) {
+function WorkflowTypeDetails({
+  spec,
+  typeDefinitions = [],
+}: {
+  spec: WorkflowTypeSpec;
+  typeDefinitions?: TypeDefinition[];
+}) {
+  const customType = customTypeForSpec(spec, typeDefinitions);
   return (
-    <pre className="mt-2 overflow-auto rounded-md bg-white/80 px-2 py-2 font-mono text-[10px] leading-4 text-zinc-600">
-      {formatWorkflowTypeSpecJson(spec)}
-    </pre>
+    <div className="mt-2 space-y-2">
+      {customType && (
+        <div className="inline-flex max-w-full rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 font-mono text-[10px] font-semibold text-emerald-800">
+          {customType.name}
+        </div>
+      )}
+      <pre className="overflow-auto rounded-md bg-white/80 px-2 py-2 font-mono text-[10px] leading-4 text-zinc-600">
+        {customType ? `type ${customType.name} = ${customType.source.trim()};\n` : formatWorkflowTypeScriptType(spec)}
+      </pre>
+      <details className="rounded-md bg-white/60 px-2 py-2 text-[10px] text-zinc-500">
+        <summary className="cursor-pointer font-semibold uppercase">JSON</summary>
+        <pre className="mt-2 overflow-auto font-mono leading-4">{formatWorkflowTypeSpecJson(spec)}</pre>
+      </details>
+    </div>
   );
 }
 
@@ -6286,9 +6716,11 @@ function DataSourceNodeSettings({
 
 function AdapterNodeSettings({
   node,
+  typeDefinitions,
   onChange,
 }: {
   node: WorkflowNodeModel;
+  typeDefinitions: TypeDefinition[];
   onChange: (nodeId: string, inputSchema: DataSourceSchema, outputSchema: DataSourceSchema) => void;
 }) {
   const inputSchema = normalizeDataSourceSchema(node.data.adapterInputSchema, { type: "any" });
@@ -6312,6 +6744,7 @@ function AdapterNodeSettings({
         <div className="text-[11px] font-semibold uppercase text-zinc-500">Input contract</div>
         <DataSourceSchemaEditor
           schema={inputSchema}
+          typeDefinitions={typeDefinitions}
           onChange={(nextInputSchema) => onChange(node.id, nextInputSchema, outputSchema)}
         />
       </div>
@@ -6319,6 +6752,7 @@ function AdapterNodeSettings({
         <div className="text-[11px] font-semibold uppercase text-zinc-500">Output contract</div>
         <DataSourceSchemaEditor
           schema={outputSchema}
+          typeDefinitions={typeDefinitions}
           onChange={(nextOutputSchema) => onChange(node.id, inputSchema, nextOutputSchema)}
         />
       </div>
@@ -6329,10 +6763,12 @@ function AdapterNodeSettings({
 function DataSourceSchemaEditor({
   schema,
   onChange,
+  typeDefinitions = [],
   depth = 0,
 }: {
   schema: DataSourceSchema;
   onChange: (schema: DataSourceSchema) => void;
+  typeDefinitions?: TypeDefinition[];
   depth?: number;
 }) {
   const updateKind = (kind: DataSourceSchema["type"]) => {
@@ -6362,6 +6798,28 @@ function DataSourceSchemaEditor({
         </Field>
         <Metric label="Workflow output" value={formatWorkflowTypeSpec(dataSourceSchemaToWorkflowType(schema))} />
       </div>
+
+      {typeDefinitions.length > 0 && (
+        <Field label="Custom type">
+          <select
+            className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+            value={customTypeForSpec(dataSourceSchemaToWorkflowType(schema), typeDefinitions)?.id ?? ""}
+            onChange={(event) => {
+              const definition = typeDefinitions.find((candidate) => candidate.id === event.target.value);
+              if (definition) {
+                onChange(workflowTypeSpecToDataSourceSchema(definition.spec));
+              }
+            }}
+          >
+            <option value="">Use structural type</option>
+            {typeDefinitions.map((definition) => (
+              <option key={definition.id} value={definition.id}>
+                {definition.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
 
       {schema.type === "port" && (
         <Field label="Port type">
@@ -6409,6 +6867,7 @@ function DataSourceSchemaEditor({
         <div className="mt-3 border-l-2 border-zinc-200 pl-3">
           <DataSourceSchemaEditor
             schema={schema.items}
+            typeDefinitions={typeDefinitions}
             onChange={(items) => onChange({ ...schema, items })}
             depth={depth + 1}
           />
@@ -6437,6 +6896,7 @@ function DataSourceSchemaEditor({
               </div>
               <DataSourceSchemaEditor
                 schema={variant}
+                typeDefinitions={typeDefinitions}
                 onChange={(nextVariant) =>
                   onChange({
                     ...schema,
@@ -6511,6 +6971,7 @@ function DataSourceSchemaEditor({
                 <div className="mt-3 border-l-2 border-zinc-200 pl-3">
                   <DataSourceSchemaEditor
                     schema={property.schema}
+                    typeDefinitions={typeDefinitions}
                     onChange={(propertySchema) =>
                       onChange(updateDataSourceSchemaProperty(schema, property.id, { schema: propertySchema }))
                     }
@@ -8091,6 +8552,122 @@ function comparableWorkflowEdge(edge: SavedWorkflowBlockEdge): SavedWorkflowBloc
   };
 }
 
+function workflowReportKind(kind: WorkflowKindId): ReportKind {
+  switch (kind) {
+    case "youtube-collection":
+      return "youtube-collection";
+    case "song-analysis":
+      return "song-analysis";
+    case "subtitle-generation":
+      return "subtitle-generation";
+    case "video-red-cars":
+    case "youtube-video":
+      return "youtube-video";
+  }
+}
+
+function defaultWorkflowResultPanel(kind: WorkflowKindId, workflowName = "Workflow"): WorkflowResultPanel {
+  return {
+    name: `${workflowName} Results`,
+    layout: defaultDashboardLayoutForReportKind(workflowReportKind(kind)),
+    bindings: [],
+  };
+}
+
+function normalizeWorkflowResultPanel(
+  value: unknown,
+  kind: WorkflowKindId,
+  workflowName = "Workflow",
+): WorkflowResultPanel {
+  const fallback = defaultWorkflowResultPanel(kind, workflowName);
+  if (!isRecord(value)) {
+    return fallback;
+  }
+  const reportKind = workflowReportKind(kind);
+  return {
+    name: typeof value.name === "string" && value.name.trim() ? value.name.trim() : fallback.name,
+    layout: isDashboardLayout(value.layout)
+      ? sanitizeDashboardLayout(value.layout, reportKind)
+      : fallback.layout,
+    bindings: Array.isArray(value.bindings)
+      ? value.bindings.flatMap((binding) => normalizeResultPanelBinding(binding, reportKind))
+      : [],
+  };
+}
+
+function normalizeResultPanelBinding(value: unknown, reportKind: ReportKind): ResultPanelSourceBinding[] {
+  if (!isRecord(value) || !isDashboardWidgetId(value.componentId) || !isDashboardDataKind(value.dataKind)) {
+    return [];
+  }
+  const option = dashboardWidgetOptionsForReportKind(reportKind).find((candidate) => candidate.id === value.componentId);
+  if (!option?.dataKinds.includes(value.dataKind)) {
+    return [];
+  }
+  const sourceKind = isResultPanelSourceKind(value.sourceKind) ? value.sourceKind : "completed_report";
+  return [
+    {
+      componentId: value.componentId,
+      dataKind: value.dataKind,
+      sourceKind,
+      ...(typeof value.nodeId === "string" ? { nodeId: value.nodeId } : {}),
+      ...(typeof value.portId === "string" ? { portId: value.portId } : {}),
+      ...(typeof value.dataSourceId === "string" ? { dataSourceId: value.dataSourceId } : {}),
+      ...(typeof value.reportPath === "string" ? { reportPath: value.reportPath } : {}),
+    },
+  ];
+}
+
+function cloneWorkflowResultPanel(panel: WorkflowResultPanel | undefined, kind: WorkflowKindId, workflowName: string): WorkflowResultPanel {
+  const normalized = normalizeWorkflowResultPanel(panel, kind, workflowName);
+  return {
+    name: normalized.name,
+    layout: structuredClone(normalized.layout),
+    bindings: normalized.bindings.map((binding) => ({ ...binding })),
+  };
+}
+
+function isDashboardLayout(value: unknown): value is DashboardLayout {
+  if (!isRecord(value) || typeof value.type !== "string") {
+    return false;
+  }
+  if (value.type === "widget") {
+    return isDashboardWidgetId(value.id);
+  }
+  return (
+    value.type === "split" &&
+    typeof value.id === "string" &&
+    (value.direction === "row" || value.direction === "column") &&
+    Array.isArray(value.sizes) &&
+    value.sizes.every((size) => typeof size === "number") &&
+    Array.isArray(value.children) &&
+    value.children.length > 0 &&
+    value.children.every(isDashboardLayout)
+  );
+}
+
+function isDashboardWidgetId(value: unknown): value is DashboardWidgetId {
+  return typeof value === "string" && dashboardWidgetOptionsForReportKind("youtube-video")
+    .concat(dashboardWidgetOptionsForReportKind("youtube-collection"))
+    .concat(dashboardWidgetOptionsForReportKind("song-analysis"))
+    .concat(dashboardWidgetOptionsForReportKind("subtitle-generation"))
+    .some((option) => option.id === value);
+}
+
+function isDashboardDataKind(value: unknown): value is DashboardDataKind {
+  return (
+    typeof value === "string" &&
+    dashboardWidgetOptionsForReportKind("youtube-video")
+      .concat(dashboardWidgetOptionsForReportKind("youtube-collection"))
+      .concat(dashboardWidgetOptionsForReportKind("song-analysis"))
+      .concat(dashboardWidgetOptionsForReportKind("subtitle-generation"))
+      .some((option) => option.dataKinds.includes(value as DashboardDataKind))
+  );
+}
+
+function isResultPanelSourceKind(value: unknown): value is ResultPanelSourceKind {
+  return value === "completed_report" || value === "workflow_output" || value === "workspace_data_source";
+}
+
 function buildWorkflowFile(workflow: SavedWorkflow, nodes: WorkflowNodeModel[], edges: Edge[]): SavedWorkflowFile {
   return {
     format: savedWorkflowJsonFormat,
@@ -8099,6 +8676,7 @@ function buildWorkflowFile(workflow: SavedWorkflow, nodes: WorkflowNodeModel[], 
     workflowName: workflow.name,
     workflowKind: workflow.kind,
     workflowVersion: workflow.version,
+    resultPanel: cloneWorkflowResultPanel(workflow.resultPanel, workflow.kind, workflow.name),
     nodes: nodes.map(serializeWorkflowNode),
     edges: edges.map(serializeWorkflowEdge),
   };
@@ -8127,6 +8705,7 @@ function parseWorkflowJson(text: string): {
   workflowName?: string;
   workflowKind?: WorkflowKindId;
   workflowVersion?: number;
+  resultPanel?: WorkflowResultPanel;
   nodes: WorkflowNodeModel[];
   edges: Edge[];
 } {
@@ -8155,6 +8734,7 @@ function restoreWorkflowFile(file: SavedWorkflowFile): {
   workflowName?: string;
   workflowKind?: WorkflowKindId;
   workflowVersion?: number;
+  resultPanel?: WorkflowResultPanel;
   nodes: WorkflowNodeModel[];
   edges: Edge[];
 } {
@@ -8174,6 +8754,7 @@ function restoreWorkflowFile(file: SavedWorkflowFile): {
     workflowName: file.workflowName,
     workflowKind: file.workflowKind,
     workflowVersion: file.workflowVersion,
+    resultPanel: normalizeWorkflowResultPanel(file.resultPanel, file.workflowKind ?? "youtube-video", file.workflowName),
     nodes,
     edges: restoreValidWorkflowEdges(file.edges, nodes),
   };
@@ -8526,6 +9107,7 @@ function normalizeSavedWorkflow(workflow: SavedWorkflow): SavedWorkflow {
     name,
     version: Math.max(version, ...versions.map((savedVersion) => savedVersion.version)),
     versions,
+    resultPanel: normalizeWorkflowResultPanel(workflow.resultPanel, kind, name),
     updatedAt: legacySeedWorkflowNames.has(workflow.name) ? new Date().toISOString() : workflow.updatedAt,
   };
 }
@@ -8570,6 +9152,7 @@ function createSavedWorkflow(
     updatedAt: createdAt,
     version: 1,
     versions: [],
+    resultPanel: defaultWorkflowResultPanel(kind, name),
     nodes: nodes.map(serializeWorkflowNode),
     edges: edges.map(serializeWorkflowEdge),
   };
@@ -8653,6 +9236,7 @@ function importSharedWorkflowFile(
     updatedAt: restored.lastUpdated || importedAt,
     version: versionNumber,
     versions: [version],
+    resultPanel: normalizeWorkflowResultPanel(restored.resultPanel, importedKind, importedName),
     nodes: version.nodes.map((node) => ({
       id: node.id,
       position: { ...node.position },
@@ -9138,6 +9722,9 @@ function dataSourceSchemaToWorkflowType(schema: DataSourceSchema): WorkflowTypeS
             required: property.required,
           })),
         additional_properties: schema.additionalProperties ?? schema.properties.length === 0,
+        ...(schema.additionalPropertySchema
+          ? { additional_property_value: dataSourceSchemaToWorkflowType(schema.additionalPropertySchema) }
+          : {}),
         ...(schema.semantic ? { semantic: schema.semantic } : {}),
       };
     case "union":
@@ -9232,7 +9819,11 @@ function dataSourceSchemaToJsonSchema(schema: DataSourceSchema): unknown {
         type: "object",
         properties,
         required: schema.properties.filter((property) => property.required && property.name.trim()).map((property) => property.name.trim()),
-        ...(schema.additionalProperties === false ? { additionalProperties: false } : {}),
+        ...(schema.additionalPropertySchema
+          ? { additionalProperties: dataSourceSchemaToJsonSchema(schema.additionalPropertySchema) }
+          : schema.additionalProperties === false
+            ? { additionalProperties: false }
+            : {}),
         ...(schema.semantic ? { "x-semantic": schema.semantic } : {}),
       };
     }
@@ -9317,6 +9908,9 @@ function dataSourceSchemaFromJsonSchema(value: unknown): DataSourceSchema | null
       type: "object",
       properties,
       additionalProperties: value.additionalProperties !== false,
+      ...(isRecord(value.additionalProperties)
+        ? { additionalPropertySchema: dataSourceSchemaFromJsonSchema(value.additionalProperties) ?? { type: "any" } }
+        : {}),
       ...(semantic ? { semantic } : {}),
     };
   }
@@ -9616,6 +10210,7 @@ function isDataSourceSchema(value: unknown): value is DataSourceSchema {
       return (
         Array.isArray(value.properties) &&
         (value.additionalProperties === undefined || typeof value.additionalProperties === "boolean") &&
+        (value.additionalPropertySchema === undefined || isDataSourceSchema(value.additionalPropertySchema)) &&
         (value.semantic === undefined || isWorkflowSemanticKind(value.semantic)) &&
         value.properties.every(
           (property) =>
@@ -9693,6 +10288,9 @@ function normalizeDataSourceSchema(value: unknown, fallback: DataSourceSchema): 
             })
           : [],
         additionalProperties: typeof value.additionalProperties === "boolean" ? value.additionalProperties : true,
+        ...(value.additionalPropertySchema !== undefined
+          ? { additionalPropertySchema: normalizeDataSourceSchema(value.additionalPropertySchema, { type: "any" }) }
+          : {}),
         ...(isWorkflowSemanticKind(value.semantic) ? { semantic: value.semantic } : {}),
       };
     case "string": {
@@ -9735,6 +10333,7 @@ function isSavedWorkflowFile(value: unknown): value is SavedWorkflowFile {
     (value.workflowName === undefined || typeof value.workflowName === "string") &&
     (value.workflowKind === undefined || isWorkflowKindId(value.workflowKind)) &&
     (value.workflowVersion === undefined || typeof value.workflowVersion === "number") &&
+    (value.resultPanel === undefined || isRecord(value.resultPanel)) &&
     Array.isArray(value.nodes) &&
     value.nodes.every(isSavedWorkflowBlockNode) &&
     Array.isArray(value.edges) &&
@@ -10991,6 +11590,9 @@ function workflowTypeSpecToDataSourceSchema(spec: WorkflowTypeSpec, fallbackPort
           required: Boolean(property.required),
         })),
         additionalProperties: spec.additional_properties ?? false,
+        ...(spec.additional_property_value
+          ? { additionalPropertySchema: workflowTypeSpecToDataSourceSchema(spec.additional_property_value) }
+          : {}),
         ...(spec.semantic ? { semantic: spec.semantic } : {}),
       };
     case "union":
@@ -11227,6 +11829,265 @@ function formatPortType(type: PortType, stream = false): string {
 
 function formatFlowPortType(portValue: FlowPort): string {
   return formatWorkflowTypeSpec(portValue.valueType, portIsStream(portValue));
+}
+
+interface ResultPanelSourceOption {
+  key: string;
+  kind: ResultPanelSourceKind;
+  label: string;
+  nodeId?: string;
+  portId?: string;
+  dataSourceId?: string;
+}
+
+function resultPanelLayoutFromWidgetIds(widgetIds: DashboardWidgetId[]): DashboardLayout {
+  const uniqueIds = Array.from(new Set(widgetIds));
+  if (uniqueIds.length <= 1) {
+    return { type: "widget", id: uniqueIds[0] ?? "summary" };
+  }
+  return {
+    type: "split",
+    id: `attached-result-${uniqueIds.join("-")}`,
+    direction: "column",
+    sizes: uniqueIds.map(() => 1),
+    children: uniqueIds.map((id) => ({ type: "widget", id })),
+  };
+}
+
+function defaultResultPanelBinding(
+  componentId: DashboardWidgetId,
+  dataKind: DashboardDataKind,
+): ResultPanelSourceBinding {
+  return {
+    componentId,
+    dataKind,
+    sourceKind: "completed_report",
+    reportPath: defaultReportPathForDataKind(dataKind),
+  };
+}
+
+function resultDataKindPortType(dataKind: DashboardDataKind): PortType {
+  switch (dataKind) {
+    case "media_preview":
+      return "media_file";
+    case "video_metadata":
+      return "video_metadata";
+    case "scene_result":
+      return "scene_result";
+    case "video_observation":
+      return "video_observation";
+    case "audio_event":
+      return "audio_event";
+    case "audio_feature":
+    case "audio_frame":
+      return "audio_frame";
+    case "audio_wav":
+      return "audio_wav";
+    case "transcript_segment":
+      return "transcript_segment";
+    case "text_event":
+      return "text_event";
+    case "data_record":
+      return "data_record";
+    case "data_bucket":
+      return "data_bucket";
+    case "model_prediction":
+      return "model_prediction";
+    case "video_frame":
+      return "video_frame";
+    case "json_report":
+      return "json_report";
+    case "collection_manifest":
+      return "collection_manifest";
+    case "collection_item":
+      return "collection_item";
+    case "collection_report":
+      return "collection_report";
+    case "collection_table":
+      return "collection_table";
+    case "song_fingerprint":
+      return "song_fingerprint";
+    case "song_match":
+      return "song_match";
+    case "music_feature":
+      return "music_feature";
+  }
+}
+
+function defaultReportPathForDataKind(dataKind: DashboardDataKind): string {
+  switch (dataKind) {
+    case "media_preview":
+      return "$.source.local_video";
+    case "video_metadata":
+      return "$.video";
+    case "scene_result":
+      return "$.video.scenes";
+    case "video_observation":
+      return "$.video.observations";
+    case "audio_event":
+      return "$.audio.events";
+    case "audio_feature":
+    case "audio_frame":
+      return "$.audio";
+    case "audio_wav":
+      return "$.assets.audio_wav";
+    case "transcript_segment":
+      return "$.transcription.segments";
+    case "text_event":
+      return "$.text.events";
+    case "data_record":
+    case "data_bucket":
+      return "$.data_buckets";
+    case "model_prediction":
+      return "$.video.observations";
+    case "video_frame":
+      return "$.video.frames_processed";
+    case "json_report":
+      return "$";
+    case "collection_manifest":
+      return "$.manifest";
+    case "collection_item":
+      return "$.items";
+    case "collection_report":
+      return "$.collection";
+    case "collection_table":
+      return "$.items";
+    case "song_fingerprint":
+      return "$.fingerprint";
+    case "song_match":
+      return "$.identification";
+    case "music_feature":
+      return "$.music";
+  }
+}
+
+function resultPanelSourceOptions(
+  dataKind: DashboardDataKind,
+  nodes: WorkflowNodeModel[],
+  dataSources: DataSourceEntry[],
+  typeDefinitions: TypeDefinition[],
+): ResultPanelSourceOption[] {
+  const targetType = resultDataKindPortType(dataKind);
+  const workflowOptions = nodes.flatMap((node) =>
+    node.data.outputs
+      .filter((portValue) => resultPanelSourceMatches(targetType, portValue.type))
+      .map((portValue) => ({
+        key: `workflow:${node.id}:${portValue.id}`,
+        kind: "workflow_output" as const,
+        label: sourceLabelWithCustomType(`${node.data.title} / ${portValue.label}`, portValue.valueType, typeDefinitions),
+        nodeId: node.id,
+        portId: portValue.id,
+      })),
+  );
+  const dataSourceOptions = dataSources
+    .filter((dataSource) => resultPanelSourceMatches(targetType, workflowTypeToPortType(dataSource.type, "data_value")))
+    .map((dataSource) => ({
+      key: `data-source:${dataSource.id}`,
+      kind: "workspace_data_source" as const,
+      label: sourceLabelWithCustomType(`${dataSource.name} (${dataSource.id})`, dataSource.type, typeDefinitions),
+      dataSourceId: dataSource.id,
+    }));
+  return [
+    { key: "completed-report", kind: "completed_report", label: "Completed run report path" },
+    ...workflowOptions,
+    ...dataSourceOptions,
+  ];
+}
+
+function resultPanelSourceMatches(targetType: PortType, sourceType: PortType): boolean {
+  return targetType === sourceType || targetType === "json_report" || sourceType === "json_report" || sourceType === "data_value";
+}
+
+function resultPanelBindingKey(binding: ResultPanelSourceBinding): string {
+  switch (binding.sourceKind) {
+    case "workflow_output":
+      return binding.nodeId && binding.portId ? `workflow:${binding.nodeId}:${binding.portId}` : "completed-report";
+    case "workspace_data_source":
+      return binding.dataSourceId ? `data-source:${binding.dataSourceId}` : "completed-report";
+    case "completed_report":
+      return "completed-report";
+  }
+}
+
+function resultPanelBindingFromSource(
+  componentId: DashboardWidgetId,
+  dataKind: DashboardDataKind,
+  source: ResultPanelSourceOption,
+  reportPath: string,
+): ResultPanelSourceBinding {
+  switch (source.kind) {
+    case "workflow_output":
+      return {
+        componentId,
+        dataKind,
+        sourceKind: "workflow_output",
+        ...(source.nodeId ? { nodeId: source.nodeId } : {}),
+        ...(source.portId ? { portId: source.portId } : {}),
+      };
+    case "workspace_data_source":
+      return {
+        componentId,
+        dataKind,
+        sourceKind: "workspace_data_source",
+        ...(source.dataSourceId ? { dataSourceId: source.dataSourceId } : {}),
+      };
+    case "completed_report":
+      return {
+        componentId,
+        dataKind,
+        sourceKind: "completed_report",
+        reportPath: reportPath || defaultReportPathForDataKind(dataKind),
+      };
+  }
+}
+
+function resultPanelBindingSummaries(
+  panel: WorkflowResultPanel | undefined,
+  nodes: WorkflowNodeModel[],
+  dataSources: DataSourceEntry[],
+  typeDefinitions: TypeDefinition[] = [],
+): DashboardWidgetBindingSummary[] {
+  if (!panel) {
+    return [];
+  }
+  return panel.bindings.map((binding) => ({
+    widgetId: binding.componentId,
+    dataKind: binding.dataKind,
+    sourceLabel: resultPanelBindingSourceLabel(binding, nodes, dataSources, typeDefinitions),
+  }));
+}
+
+function resultPanelBindingSourceLabel(
+  binding: ResultPanelSourceBinding,
+  nodes: WorkflowNodeModel[],
+  dataSources: DataSourceEntry[],
+  typeDefinitions: TypeDefinition[] = [],
+): string {
+  switch (binding.sourceKind) {
+    case "workflow_output": {
+      const node = nodes.find((candidate) => candidate.id === binding.nodeId);
+      const portValue = node?.data.outputs.find((output) => output.id === binding.portId);
+      return node && portValue
+        ? sourceLabelWithCustomType(`${node.data.title} / ${portValue.label}`, portValue.valueType, typeDefinitions)
+        : "Workflow output";
+    }
+    case "workspace_data_source": {
+      const dataSource = dataSources.find((candidate) => candidate.id === binding.dataSourceId);
+      return dataSource ? sourceLabelWithCustomType(dataSource.name, dataSource.type, typeDefinitions) : "Workspace data source";
+    }
+    case "completed_report":
+      return binding.reportPath || defaultReportPathForDataKind(binding.dataKind);
+  }
+}
+
+function sourceLabelWithCustomType(label: string, spec: WorkflowTypeSpec, typeDefinitions: TypeDefinition[]): string {
+  const customType = customTypeForSpec(spec, typeDefinitions);
+  return customType ? `${label} [${customType.name}]` : label;
+}
+
+function customTypeForSpec(spec: WorkflowTypeSpec, typeDefinitions: TypeDefinition[]): TypeDefinition | null {
+  const signature = workflowTypeSignature(spec);
+  return typeDefinitions.find((definition) => workflowTypeSignature(definition.spec) === signature) ?? null;
 }
 
 function handleSignature(portValue: FlowPort): string {
@@ -13240,6 +14101,9 @@ function appLocationFromPath(pathname: string): AppLocation {
   if (pageSegment === "components" || pageSegment === "component-library") {
     return { page: "components", workflowId: null };
   }
+  if (pageSegment === "types" || pageSegment === "type-library") {
+    return { page: "types", workflowId: null };
+  }
   if (pageSegment === "settings") {
     return { page: "settings", workflowId: null };
   }
@@ -13256,6 +14120,8 @@ function pathForAppPage(page: AppPage, workflowId?: string | null): string {
       return "/components";
     case "data-sources":
       return "/data-sources";
+    case "types":
+      return "/types";
     case "settings":
       return "/settings";
     case "analysis":
@@ -14036,6 +14902,18 @@ function DataSourceIcon({ className }: { className?: string }) {
       <ellipse cx="10" cy="5" rx="5.8" ry="2.5" />
       <path d="M4.2 5v9.2c0 1.4 2.6 2.5 5.8 2.5s5.8-1.1 5.8-2.5V5" />
       <path d="M4.2 9.2c0 1.4 2.6 2.5 5.8 2.5s5.8-1.1 5.8-2.5" />
+    </svg>
+  );
+}
+
+function TypeIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className={className}>
+      <path d="M4 5h12" strokeLinecap="round" />
+      <path d="M7 5v10" strokeLinecap="round" />
+      <path d="M13 5v10" strokeLinecap="round" />
+      <path d="M5 15h4" strokeLinecap="round" />
+      <path d="M11 15h4" strokeLinecap="round" />
     </svg>
   );
 }

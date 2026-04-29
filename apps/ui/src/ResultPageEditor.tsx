@@ -32,11 +32,13 @@ import {
   SongSummaryCards,
   type SubtitleGenerationReport,
   type StudioReport,
+  type VideoRedCarsReport,
   type YoutubeVideoReport,
 } from "./index";
 import {
   isSongAnalysisReport,
   isSubtitleGenerationReport,
+  isVideoRedCarsReport,
   isYoutubeCollectionReport,
   isYoutubeVideoReport,
 } from "./api/client";
@@ -110,6 +112,12 @@ export interface DashboardWidgetOption {
   label: string;
   dataKinds: DashboardDataKind[];
   reportKinds: ReportKind[];
+}
+
+export interface DashboardWidgetBindingSummary {
+  widgetId: DashboardWidgetId;
+  dataKind: DashboardDataKind;
+  sourceLabel: string;
 }
 
 interface DragPayload {
@@ -248,15 +256,18 @@ export function ResultPageEditor({
   report,
   runId,
   layout,
+  bindingSummaries = [],
   onLayoutChange,
 }: {
   report: StudioReport;
   runId?: string | null;
   layout: DashboardLayout;
+  bindingSummaries?: DashboardWidgetBindingSummary[];
   onLayoutChange: (layout: DashboardLayout) => void;
 }) {
   const reportKind = reportKindForReport(report);
-  const videoSelection = useVideoSelectionState(isYoutubeVideoReport(report) ? report : null, null);
+  const videoSelectionReport = useMemo(() => reportForVideoSelection(report), [report]);
+  const videoSelection = useVideoSelectionState(videoSelectionReport, null);
   const sanitizedLayout = useMemo(() => sanitizeDashboardLayout(layout, reportKind), [layout, reportKind]);
   const activeWidgetIds = useMemo(() => widgetIdsForLayout(sanitizedLayout), [sanitizedLayout]);
   const inactiveOptions = dashboardWidgetOptionsForReportKind(reportKind).filter(
@@ -407,6 +418,7 @@ export function ResultPageEditor({
           report={report}
           runId={runId}
           videoSelection={videoSelection}
+          bindingSummaries={bindingSummaries}
           canRemove={visibleCount > 1}
           currentDragPayload={currentDragPayload}
           onDragWidget={handleWidgetDragStart}
@@ -513,6 +525,7 @@ function DashboardLayoutNode({
   report,
   runId,
   videoSelection,
+  bindingSummaries,
   canRemove,
   currentDragPayload,
   onDragWidget,
@@ -526,6 +539,7 @@ function DashboardLayoutNode({
   report: StudioReport;
   runId?: string | null;
   videoSelection: VideoSelectionControls;
+  bindingSummaries: DashboardWidgetBindingSummary[];
   canRemove: boolean;
   currentDragPayload: DragPayload | null;
   onDragWidget: (event: ReactDragEvent<HTMLElement>, widgetId: DashboardWidgetId) => void;
@@ -547,6 +561,7 @@ function DashboardLayoutNode({
         report={report}
         runId={runId}
         videoSelection={videoSelection}
+        bindingSummaries={bindingSummaries}
         canRemove={canRemove}
         currentDragPayload={currentDragPayload}
         onDragWidget={onDragWidget}
@@ -564,6 +579,7 @@ function DashboardLayoutNode({
       report={report}
       runId={runId}
       videoSelection={videoSelection}
+      bindingSummaries={bindingSummaries}
       canRemove={canRemove}
       currentDragPayload={currentDragPayload}
       onDragWidget={onDragWidget}
@@ -581,6 +597,7 @@ function SplitPane({
   report,
   runId,
   videoSelection,
+  bindingSummaries,
   canRemove,
   currentDragPayload,
   onDragWidget,
@@ -594,6 +611,7 @@ function SplitPane({
   report: StudioReport;
   runId?: string | null;
   videoSelection: VideoSelectionControls;
+  bindingSummaries: DashboardWidgetBindingSummary[];
   canRemove: boolean;
   currentDragPayload: DragPayload | null;
   onDragWidget: (event: ReactDragEvent<HTMLElement>, widgetId: DashboardWidgetId) => void;
@@ -622,6 +640,7 @@ function SplitPane({
               report={report}
               runId={runId}
               videoSelection={videoSelection}
+              bindingSummaries={bindingSummaries}
               canRemove={canRemove}
               currentDragPayload={currentDragPayload}
               onDragWidget={onDragWidget}
@@ -651,6 +670,7 @@ function ResultWidgetPanel({
   report,
   runId,
   videoSelection,
+  bindingSummaries,
   canRemove,
   currentDragPayload,
   onDragWidget,
@@ -662,6 +682,7 @@ function ResultWidgetPanel({
   report: StudioReport;
   runId?: string | null;
   videoSelection: VideoSelectionControls;
+  bindingSummaries: DashboardWidgetBindingSummary[];
   canRemove: boolean;
   currentDragPayload: DragPayload | null;
   onDragWidget: (event: ReactDragEvent<HTMLElement>, widgetId: DashboardWidgetId) => void;
@@ -670,6 +691,7 @@ function ResultWidgetPanel({
   onRemoveWidget: (widgetId: DashboardWidgetId) => void;
 }) {
   const [dropSide, setDropSide] = useState<DropSide | null>(null);
+  const widgetBindings = bindingSummaries.filter((binding) => binding.widgetId === widgetId);
 
   return (
     <section
@@ -718,7 +740,22 @@ function ResultWidgetPanel({
           <CloseIcon className="h-4 w-4" />
         </button>
       </div>
-      <div className="min-h-0 flex-1 overflow-auto p-3">{renderWidget(widgetId, report, runId, videoSelection)}</div>
+      <div className="min-h-0 flex-1 overflow-auto p-3">
+        {widgetBindings.length > 0 && (
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {widgetBindings.map((binding) => (
+              <span
+                key={`${binding.widgetId}-${binding.dataKind}`}
+                className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-[11px] font-medium text-zinc-600"
+                title={`${formatDashboardDataKind(binding.dataKind)} source`}
+              >
+                {formatDashboardDataKind(binding.dataKind)}: {binding.sourceLabel}
+              </span>
+            ))}
+          </div>
+        )}
+        {renderWidget(widgetId, report, runId, videoSelection)}
+      </div>
     </section>
   );
 }
@@ -887,6 +924,10 @@ function widgetIdsForLayout(layout: DashboardLayout): DashboardWidgetId[] {
   return layout.type === "widget" ? [layout.id] : layout.children.flatMap(widgetIdsForLayout);
 }
 
+export function dashboardWidgetIdsForLayout(layout: DashboardLayout): DashboardWidgetId[] {
+  return widgetIdsForLayout(layout);
+}
+
 function normalizeSizes(sizes: number[], count: number): number[] {
   const next = Array.from({ length: count }, (_, index) => (Number.isFinite(sizes[index]) ? sizes[index] : 1));
   const total = next.reduce((sum, size) => sum + size, 0);
@@ -920,6 +961,9 @@ function renderWidget(
   runId?: string | null,
   videoSelection?: VideoSelectionControls | null,
 ) {
+  if (isVideoRedCarsReport(report)) {
+    return renderWidget(widgetId, adaptVideoRedCarsReport(report), runId, videoSelection);
+  }
   if (isYoutubeCollectionReport(report)) {
     switch (widgetId) {
       case "collection-summary":
@@ -1097,6 +1141,48 @@ function renderWidget(
   }
 }
 
+function reportForVideoSelection(report: StudioReport): YoutubeVideoReport | null {
+  if (isYoutubeVideoReport(report)) {
+    return report;
+  }
+  if (isVideoRedCarsReport(report)) {
+    return adaptVideoRedCarsReport(report);
+  }
+  return null;
+}
+
+function adaptVideoRedCarsReport(report: VideoRedCarsReport): YoutubeVideoReport {
+  return {
+    workflow: report.workflow,
+    use_case: report.use_case,
+    source: report.source,
+    assets: report.assets,
+    capabilities: report.capabilities,
+    video: {
+      ...report.video,
+    },
+    transcription: {
+      status: "skipped",
+      text: null,
+      segments: [],
+      message: "Not part of this workflow",
+    },
+    audio: {
+      status: "skipped",
+      frames_processed: 0,
+      events: [],
+      message: "Not part of this workflow",
+    },
+    text: {
+      status: "skipped",
+      segments_processed: 0,
+      events: [],
+      message: "Not part of this workflow",
+    },
+    data_buckets: [],
+  };
+}
+
 function DiagnosticsPanel({ report }: { report: YoutubeVideoReport }) {
   const recordCount = report.data_buckets.reduce((sum, bucket) => sum + bucket.records, 0);
   const modelCount = report.video.observations.filter((observation) =>
@@ -1165,6 +1251,14 @@ function formatNumber(value: number): string {
 
 function widgetLabel(widgetId: DashboardWidgetId): string {
   return widgetOptions.find((option) => option.id === widgetId)?.label ?? widgetId;
+}
+
+export function dashboardWidgetLabel(widgetId: DashboardWidgetId): string {
+  return widgetLabel(widgetId);
+}
+
+function formatDashboardDataKind(kind: DashboardDataKind): string {
+  return kind.replace(/_/g, " ");
 }
 
 function basename(path: string): string {

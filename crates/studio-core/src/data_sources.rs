@@ -546,6 +546,7 @@ fn migrate_legacy_type(value: &Value) -> Result<WorkflowTypeSpec> {
                 .get("additionalProperties")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            additional_property_value: None,
             semantic: parse_semantic(object.get("semantic").and_then(Value::as_str)),
         }),
         "union" => Ok(WorkflowTypeSpec::Union {
@@ -631,6 +632,7 @@ fn port_type_to_workflow_type(port_type: &str) -> WorkflowTypeSpec {
         "object_value" => WorkflowTypeSpec::Object {
             properties: Vec::new(),
             additional_properties: true,
+            additional_property_value: None,
             semantic: None,
         },
         "audio_file" => WorkflowTypeSpec::Binary {
@@ -652,26 +654,31 @@ fn port_type_to_workflow_type(port_type: &str) -> WorkflowTypeSpec {
         "transcript" => WorkflowTypeSpec::Object {
             properties: Vec::new(),
             additional_properties: true,
+            additional_property_value: None,
             semantic: Some(WorkflowSemanticKind::Transcript),
         },
         "song_catalog" => WorkflowTypeSpec::Object {
             properties: Vec::new(),
             additional_properties: true,
+            additional_property_value: None,
             semantic: Some(WorkflowSemanticKind::SongCatalog),
         },
         "data_record" => WorkflowTypeSpec::Object {
             properties: Vec::new(),
             additional_properties: true,
+            additional_property_value: None,
             semantic: Some(WorkflowSemanticKind::DataRecord),
         },
         "data_bucket" => WorkflowTypeSpec::Object {
             properties: Vec::new(),
             additional_properties: true,
+            additional_property_value: None,
             semantic: Some(WorkflowSemanticKind::DataBucket),
         },
         "http_response" => WorkflowTypeSpec::Object {
             properties: Vec::new(),
             additional_properties: true,
+            additional_property_value: None,
             semantic: Some(WorkflowSemanticKind::HttpResponse),
         },
         _ => WorkflowTypeSpec::Any,
@@ -769,17 +776,20 @@ fn default_type_for_kind(kind: DataSourceKind) -> WorkflowTypeSpec {
         DataSourceKind::Sqlite | DataSourceKind::Csv => WorkflowTypeSpec::Object {
             properties: Vec::new(),
             additional_properties: true,
+            additional_property_value: None,
             semantic: Some(WorkflowSemanticKind::DataRecord),
         },
         DataSourceKind::Txt => WorkflowTypeSpec::String { semantic: None },
         DataSourceKind::Folder => WorkflowTypeSpec::Object {
             properties: Vec::new(),
             additional_properties: true,
+            additional_property_value: None,
             semantic: Some(WorkflowSemanticKind::DataBucket),
         },
         DataSourceKind::Api => WorkflowTypeSpec::Object {
             properties: Vec::new(),
             additional_properties: true,
+            additional_property_value: None,
             semantic: Some(WorkflowSemanticKind::HttpResponse),
         },
     }
@@ -799,6 +809,7 @@ mod tests {
             value_type: WorkflowTypeSpec::Object {
                 properties: Vec::new(),
                 additional_properties: true,
+                additional_property_value: None,
                 semantic: Some(WorkflowSemanticKind::SongCatalog),
             },
             location: "studio-data/catalog.json".to_string(),
@@ -867,6 +878,7 @@ mod tests {
                     value_type: WorkflowTypeSpec::Object {
                         properties: Vec::new(),
                         additional_properties: true,
+                        additional_property_value: None,
                         semantic: Some(WorkflowSemanticKind::SongCatalog),
                     },
                     description: String::new(),
@@ -911,6 +923,7 @@ mod tests {
                     value_type: WorkflowTypeSpec::Object {
                         properties: Vec::new(),
                         additional_properties: true,
+                        additional_property_value: None,
                         semantic: Some(WorkflowSemanticKind::SongCatalog),
                     },
                     description: String::new(),

@@ -75,6 +75,38 @@ describe("workflow type compatibility", () => {
 
     expect(workflowTypesAssignable(source, target)).toBe(true);
   });
+
+  test("typed additional properties can satisfy required target properties", () => {
+    const source: WorkflowTypeSpec = {
+      type: "object",
+      properties: [],
+      additional_properties: true,
+      additional_property_value: { type: "string" },
+    };
+    const target: WorkflowTypeSpec = {
+      type: "object",
+      properties: [{ name: "title", value: { type: "string" }, required: true }],
+      additional_properties: true,
+    };
+
+    expect(workflowTypesAssignable(source, target)).toBe(true);
+  });
+
+  test("typed target additional properties constrain source extras", () => {
+    const source: WorkflowTypeSpec = {
+      type: "object",
+      properties: [{ name: "count", value: { type: "number" }, required: true }],
+      additional_properties: false,
+    };
+    const target: WorkflowTypeSpec = {
+      type: "object",
+      properties: [],
+      additional_properties: true,
+      additional_property_value: { type: "string" },
+    };
+
+    expect(workflowTypesAssignable(source, target)).toBe(false);
+  });
 });
 
 describe("workflow type formatting and signatures", () => {
@@ -172,5 +204,23 @@ describe("workflow type runtime validation", () => {
         "output/{{id}}.json",
       ),
     ).toBeNull();
+  });
+
+  test("validates unknown object keys against typed additional properties", () => {
+    expect(
+      validateWorkflowValue(
+        {
+          type: "object",
+          properties: [{ name: "id", value: { type: "string" }, required: true }],
+          additional_properties: true,
+          additional_property_value: { type: "number" },
+        },
+        { id: "abc", score: "high" },
+      ),
+    ).toEqual({
+      path: "$.score",
+      expected: "Number",
+      actual: "string",
+    });
   });
 });

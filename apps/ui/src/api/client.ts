@@ -167,6 +167,7 @@ export type WorkflowTypeSpec =
       type: "object";
       properties?: WorkflowObjectProperty[];
       additional_properties?: boolean;
+      additional_property_value?: WorkflowTypeSpec;
       semantic?: WorkflowSemanticKind;
     }
   | { type: "union"; variants: WorkflowTypeSpec[] };

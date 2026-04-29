@@ -134,6 +134,8 @@ pub enum WorkflowTypeSpec {
         #[serde(default)]
         additional_properties: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        additional_property_value: Option<Box<WorkflowTypeSpec>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         semantic: Option<WorkflowSemanticKind>,
     },
     Union {
@@ -251,6 +253,8 @@ struct PortDefinition {
     label: String,
     kind: PortKind,
     #[serde(default)]
+    value_type: Option<WorkflowTypeSpec>,
+    #[serde(default)]
     optional: bool,
     #[serde(default)]
     stream: bool,
@@ -283,7 +287,9 @@ impl From<PortDefinition> for PortSpec {
         Self {
             id: value.id,
             label: value.label,
-            value_type: workflow_type_for_port_kind(value.kind),
+            value_type: value
+                .value_type
+                .unwrap_or_else(|| workflow_type_for_port_kind(value.kind)),
             kind: value.kind,
             optional: value.optional,
             stream: value.stream,
@@ -381,11 +387,13 @@ pub fn workflow_types_assignable(source: &WorkflowTypeSpec, target: &WorkflowTyp
             WorkflowTypeSpec::Object {
                 properties: source_properties,
                 additional_properties: source_additional_properties,
+                additional_property_value: source_additional_property_value,
                 semantic: source_semantic,
             },
             WorkflowTypeSpec::Object {
                 properties: target_properties,
                 additional_properties: target_additional_properties,
+                additional_property_value: target_additional_property_value,
                 semantic: target_semantic,
             },
         ) => {
@@ -393,8 +401,10 @@ pub fn workflow_types_assignable(source: &WorkflowTypeSpec, target: &WorkflowTyp
                 && object_properties_assignable(
                     source_properties,
                     *source_additional_properties,
+                    source_additional_property_value.as_deref(),
                     target_properties,
                     *target_additional_properties,
+                    target_additional_property_value.as_deref(),
                 )
         }
         _ => false,
@@ -536,6 +546,7 @@ fn open_object(semantic: Option<WorkflowSemanticKind>) -> WorkflowTypeSpec {
     WorkflowTypeSpec::Object {
         properties: Vec::new(),
         additional_properties: true,
+        additional_property_value: None,
         semantic,
     }
 }
@@ -582,29 +593,53 @@ fn max_items_assignable(source: Option<u32>, target: Option<u32>) -> bool {
 fn object_properties_assignable(
     source_properties: &[WorkflowObjectProperty],
     source_additional_properties: bool,
+    source_additional_property_value: Option<&WorkflowTypeSpec>,
     target_properties: &[WorkflowObjectProperty],
     target_additional_properties: bool,
+    target_additional_property_value: Option<&WorkflowTypeSpec>,
 ) -> bool {
     for target_property in target_properties {
         let source_property = source_properties
             .iter()
             .find(|source_property| source_property.name == target_property.name);
-        let Some(source_property) = source_property else {
-            if target_property.required {
+        if let Some(source_property) = source_property {
+            if !workflow_types_assignable(&source_property.value, &target_property.value) {
+                return false;
+            }
+            if source_property.required != target_property.required && target_property.required {
                 return false;
             }
             continue;
-        };
-        if !workflow_types_assignable(&source_property.value, &target_property.value) {
-            return false;
         }
-        if source_property.required != target_property.required && target_property.required {
-            return false;
+        if target_property.required {
+            match source_additional_property_value {
+                Some(source_value) if workflow_types_assignable(source_value, &target_property.value) => {}
+                _ => return false,
+            }
         }
     }
 
     if !target_additional_properties && source_additional_properties {
         return false;
+    }
+    if let Some(target_value) = target_additional_property_value {
+        for source_property in source_properties {
+            if !target_properties
+                .iter()
+                .any(|target_property| target_property.name == source_property.name)
+                && !workflow_types_assignable(&source_property.value, target_value)
+            {
+                return false;
+            }
+        }
+        if source_additional_properties && source_additional_property_value.is_none() {
+            return false;
+        }
+        if let Some(source_value) = source_additional_property_value {
+            if !workflow_types_assignable(source_value, target_value) {
+                return false;
+            }
+        }
     }
     if !source_additional_properties {
         return source_properties.iter().all(|source_property| {
@@ -614,4 +649,110 @@ fn object_properties_assignable(
         });
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serde_accepts_typed_additional_properties() {
+        let spec: WorkflowTypeSpec = serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "properties": [],
+            "additional_properties": true,
+            "additional_property_value": { "type": "number" }
+        }))
+        .unwrap();
+
+        assert_eq!(
+            spec,
+            WorkflowTypeSpec::Object {
+                properties: Vec::new(),
+                additional_properties: true,
+                additional_property_value: Some(Box::new(WorkflowTypeSpec::Number)),
+                semantic: None,
+            }
+        );
+    }
+
+    #[test]
+    fn typed_additional_properties_satisfy_required_target_properties() {
+        let source = WorkflowTypeSpec::Object {
+            properties: Vec::new(),
+            additional_properties: true,
+            additional_property_value: Some(Box::new(WorkflowTypeSpec::String { semantic: None })),
+            semantic: None,
+        };
+        let target = WorkflowTypeSpec::Object {
+            properties: vec![WorkflowObjectProperty {
+                name: "title".to_string(),
+                value: WorkflowTypeSpec::String { semantic: None },
+                required: true,
+            }],
+            additional_properties: true,
+            additional_property_value: None,
+            semantic: None,
+        };
+
+        assert!(workflow_types_assignable(&source, &target));
+    }
+
+    #[test]
+    fn typed_target_additional_properties_constrain_source_extras() {
+        let source = WorkflowTypeSpec::Object {
+            properties: vec![WorkflowObjectProperty {
+                name: "count".to_string(),
+                value: WorkflowTypeSpec::Number,
+                required: true,
+            }],
+            additional_properties: false,
+            additional_property_value: None,
+            semantic: None,
+        };
+        let target = WorkflowTypeSpec::Object {
+            properties: Vec::new(),
+            additional_properties: true,
+            additional_property_value: Some(Box::new(WorkflowTypeSpec::String { semantic: None })),
+            semantic: None,
+        };
+
+        assert!(!workflow_types_assignable(&source, &target));
+    }
+
+    #[test]
+    fn port_definition_value_type_overrides_kind_default() {
+        let definition: PortDefinition = serde_json::from_value(serde_json::json!({
+            "id": "items",
+            "label": "Items",
+            "kind": "object",
+            "value_type": {
+                "type": "object",
+                "properties": [
+                    {
+                        "name": "id",
+                        "value": { "type": "string" },
+                        "required": true
+                    }
+                ],
+                "additional_properties": false
+            }
+        }))
+        .unwrap();
+        let spec: PortSpec = definition.into();
+
+        assert_eq!(
+            spec.value_type,
+            WorkflowTypeSpec::Object {
+                properties: vec![WorkflowObjectProperty {
+                    name: "id".to_string(),
+                    value: WorkflowTypeSpec::String { semantic: None },
+                    required: true,
+                }],
+                additional_properties: false,
+                additional_property_value: None,
+                semantic: None,
+            }
+        );
+    }
 }
