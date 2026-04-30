@@ -6,6 +6,8 @@ dist/
 *.log
 studio-data/
 use-case-output/
+workflow-output/
+!fixtures/workflow-output/
 *.mp4
 *.mkv
 *.webm

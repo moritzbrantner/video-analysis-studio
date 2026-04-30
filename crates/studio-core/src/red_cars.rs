@@ -20,8 +20,9 @@ use crate::report::{
     AssetReport, CapabilityReport, ObservationReport, RegionReport, SourceReport,
     VideoRedCarsReport, VideoRedCarsSceneReport, VideoRedCarsVideoReport,
 };
-use crate::run_manager::WorkflowProgress;
+use crate::run_manager::{RunCancellationToken, WorkflowProgress};
 use crate::system::resolve_command;
+use crate::workflow_support::run_output_with_cancel;
 use crate::youtube::{
     ExternalCommandConfig, SourceSpec, DEFAULT_MIN_SCENE_LEN, DEFAULT_SCENE_THRESHOLD,
     DEFAULT_VISUAL_SAMPLE_EVERY,
@@ -102,9 +103,11 @@ pub fn run_video_red_cars_workflow(
     request: VideoRedCarsRunRequest,
     work_dir: PathBuf,
     report_path: PathBuf,
+    cancellation: RunCancellationToken,
     progress: &mut dyn FnMut(WorkflowProgress),
 ) -> Result<VideoRedCarsReport> {
     request.validate()?;
+    cancellation.check()?;
     fs::create_dir_all(&work_dir)?;
 
     let (source_url, local_video) = match request.source {
@@ -113,11 +116,12 @@ pub fn run_video_red_cars_workflow(
                 "download",
                 "downloading YouTube video",
             ));
-            let local_video = download_youtube_video(&url, &work_dir)?;
+            let local_video = download_youtube_video(&url, &work_dir, &cancellation)?;
             (Some(url), local_video)
         }
         SourceSpec::LocalFile { path } => (None, path),
     };
+    cancellation.check()?;
 
     progress(WorkflowProgress::message(
         "video-red-cars",
@@ -146,8 +150,10 @@ pub fn run_video_red_cars_workflow(
         &target_object,
         detector_config,
         downloaded_model,
+        &cancellation,
     )?;
 
+    cancellation.check()?;
     let bytes = serde_json::to_vec_pretty(&report)?;
     fs::write(
         &report_path,
@@ -178,6 +184,7 @@ fn run_local_video_red_cars(
     target_object: &str,
     detector_config: ExternalCommandConfig,
     downloaded_model: DownloadedModel,
+    cancellation: &RunCancellationToken,
 ) -> Result<VideoRedCarsReport> {
     let mut source = FfmpegVideoSource::open(input)?;
     let metadata = source.metadata().clone();
@@ -192,6 +199,7 @@ fn run_local_video_red_cars(
     let mut sampled_frame_indices = Vec::new();
 
     while let Some(frame) = source.next_video_frame()? {
+        cancellation.check()?;
         let frame_ref = frame.as_frame();
         let frame_index = frame.position.frame_index;
         if frame_index % visual_sample_every == 0 {
@@ -570,7 +578,12 @@ fn default_target_object() -> String {
     DEFAULT_TARGET_OBJECT.to_string()
 }
 
-fn download_youtube_video(url: &str, work_dir: &Path) -> Result<PathBuf> {
+fn download_youtube_video(
+    url: &str,
+    work_dir: &Path,
+    cancellation: &RunCancellationToken,
+) -> Result<PathBuf> {
+    cancellation.check()?;
     let command = PathBuf::from("yt-dlp");
     if resolve_command(&command).is_none() {
         return Err(StudioError::MissingDependency(
@@ -579,7 +592,8 @@ fn download_youtube_video(url: &str, work_dir: &Path) -> Result<PathBuf> {
     }
 
     let output_template = work_dir.join("youtube-video.%(ext)s");
-    let output = Command::new("yt-dlp")
+    let mut command = Command::new("yt-dlp");
+    command
         .arg("--no-playlist")
         .arg("--merge-output-format")
         .arg("mp4")
@@ -587,8 +601,8 @@ fn download_youtube_video(url: &str, work_dir: &Path) -> Result<PathBuf> {
         .arg("after_move:filepath")
         .arg("-o")
         .arg(&output_template)
-        .arg(url)
-        .output()?;
+        .arg(url);
+    let output = run_output_with_cancel(command, cancellation)?;
 
     if !output.status.success() {
         return Err(StudioError::Workflow(format!(

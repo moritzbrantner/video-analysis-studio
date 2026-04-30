@@ -18,241 +18,42 @@ import type {
 } from "../types";
 import { createHttpClient } from "./httpClient";
 import { createTauriClient, isTauriRuntime } from "./tauriClient";
-
-export type RunStatus = "pending" | "running" | "succeeded" | "failed" | "canceled";
-
-export interface RunRecord {
-  run_id: string;
-  workflow: "youtube_video" | "video_red_cars" | "youtube_collection" | "song_analysis" | "subtitle_generation";
-  status: RunStatus;
-  work_dir: string;
-  report_path: string;
-  created_at: string;
-  updated_at: string;
-  started_at?: string | null;
-  finished_at?: string | null;
-  message?: string | null;
-}
-
-export interface RunEvent {
-  run_id: string;
-  status: RunStatus;
-  message: string;
-  timestamp: string;
-  node?: string | null;
-  phase?: "preparing" | "downloading_model" | "loading_model" | "transcribing" | null;
-  progress?: number | null;
-  stdout?: string | null;
-  stderr?: string | null;
-}
-
-export interface DependencyStatus {
-  name: string;
-  required: boolean;
-  available: boolean;
-  resolved_path?: string | null;
-  message?: string | null;
-}
-
-export interface SystemDependencyReport {
-  dependencies: DependencyStatus[];
-}
-
-export interface WhisperCppModelStatus {
-  model: WhisperCppModel;
-  cached: boolean;
-}
-
-export interface TranscriptionEngineStatus {
-  id: TranscriptionEngine;
-  label: string;
-  available: boolean;
-  native: boolean;
-}
-
-export interface TranscriptionCatalog {
-  default_engine: TranscriptionEngine;
-  engines: TranscriptionEngineStatus[];
-  whisper_cpp: {
-    default_model: WhisperCppModel;
-    models: WhisperCppModelStatus[];
-  };
-}
-
-export type PortKind =
-  | "run_trigger"
-  | "run_config"
-  | "youtube_url"
-  | "youtube_collection_url"
-  | "video_file"
-  | "audio_file"
-  | "media_file"
-  | "transcript"
-  | "subtitle_file"
-  | "scene_list"
-  | "observation_list"
-  | "audio_events"
-  | "text_events"
-  | "data_buckets"
-  | "json_report"
-  | "collection_manifest"
-  | "collection_items"
-  | "song_fingerprint"
-  | "song_catalog"
-  | "song_matches"
-  | "music_features"
-  | "template_string"
-  | "string"
-  | "number"
-  | "boolean"
-  | "array"
-  | "object"
-  | "http_request"
-  | "http_response";
-
-export type WorkflowSemanticKind =
-  | "run_request"
-  | "run_config"
-  | "template_string"
-  | "youtube_url"
-  | "youtube_collection_url"
-  | "video_file"
-  | "audio_file"
-  | "audio_wav"
-  | "media_file"
-  | "transcript"
-  | "subtitle_file"
-  | "video_metadata"
-  | "scene_result"
-  | "video_observation"
-  | "model_request"
-  | "model_prediction"
-  | "transcript_segment"
-  | "audio_event"
-  | "text_event"
-  | "collection_manifest"
-  | "collection_item"
-  | "collection_report"
-  | "collection_table"
-  | "song_fingerprint"
-  | "song_catalog"
-  | "song_match"
-  | "music_feature"
-  | "http_request"
-  | "http_response"
-  | "json_report"
-  | "dashboard_view"
-  | "data_record"
-  | "data_bucket";
-
-export interface WorkflowObjectProperty {
-  name: string;
-  value: WorkflowTypeSpec;
-  required?: boolean;
-}
-
-export type WorkflowInputSurface = "source_url" | "collection_url" | "file" | "config" | "generic";
-
-export type WorkflowRuntimeValidation = "strict" | "unsafe" | "external_input";
-
-export type WorkflowTypeSpec =
-  | { type: "any" }
-  | { type: "null" }
-  | { type: "boolean" }
-  | { type: "number" }
-  | { type: "string"; semantic?: WorkflowSemanticKind }
-  | { type: "binary"; media_type?: string; semantic?: WorkflowSemanticKind }
-  | { type: "array"; items: WorkflowTypeSpec; min_items?: number; max_items?: number }
-  | {
-      type: "object";
-      properties?: WorkflowObjectProperty[];
-      additional_properties?: boolean;
-      additional_property_value?: WorkflowTypeSpec;
-      semantic?: WorkflowSemanticKind;
-    }
-  | { type: "union"; variants: WorkflowTypeSpec[] };
-
-export type DataSourceKind = "sqlite" | "json" | "csv" | "txt" | "folder" | "api" | "other";
-export type DataSourceDerivationKind = "alias" | "subset_view";
-
-export type DataSourceOrigin =
-  | { mode: "root" }
-  | {
-      mode: "derived_view";
-      parent_id: string;
-      derivation_kind: DataSourceDerivationKind;
-      summary?: string;
-    };
-
-export interface DataSourceRecord {
-  id: string;
-  name: string;
-  kind: DataSourceKind;
-  type: WorkflowTypeSpec;
-  location: string;
-  description: string;
-  tags: string[];
-  body: string;
-  origin: DataSourceOrigin;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface DataSourceUpsert {
-  id: string;
-  name: string;
-  kind: DataSourceKind;
-  type: WorkflowTypeSpec;
-  location: string;
-  description: string;
-  tags: string[];
-  body: string;
-}
-
-export interface DataSourceDerivationInput {
-  id: string;
-  name: string;
-  type: WorkflowTypeSpec;
-  description: string;
-  tags: string[];
-  derivation_kind?: DataSourceDerivationKind;
-  summary?: string;
-}
-
-export interface PortSpec {
-  id: string;
-  label: string;
-  kind: PortKind;
-  value_type: WorkflowTypeSpec;
-  optional?: boolean;
-  stream?: boolean;
-  exposable_input?: boolean;
-  input_surface?: WorkflowInputSurface;
-  suggested_adapters?: string[];
-  runtime_validation?: WorkflowRuntimeValidation;
-}
-
-export interface NodeSpec {
-  id: string;
-  title: string;
-  package_name: string;
-  category: string;
-  ui_owned?: boolean;
-  inputs: PortSpec[];
-  outputs: PortSpec[];
-}
-
-export interface PortCompatibility {
-  source: PortKind;
-  target: PortKind;
-}
-
-export interface WorkflowCatalog {
-  version: number;
-  port_kinds: PortKind[];
-  nodes: NodeSpec[];
-  compatibility: PortCompatibility[];
-}
+import type {
+  DataSourceDerivationInput,
+  DataSourceRecord,
+  DataSourceUpsert,
+  RunEvent,
+  RunRecord,
+  RunStatus,
+  SystemDependencyReport,
+  TranscriptionCatalog,
+  WorkflowCatalog,
+} from "./generated";
+export type {
+  DataSourceDerivationInput,
+  DataSourceKind,
+  DataSourceOrigin,
+  DataSourceRecord,
+  DataSourceUpsert,
+  DependencyStatus,
+  NodeSpec,
+  PortCompatibility,
+  PortKind,
+  PortSpec,
+  RunEvent,
+  RunRecord,
+  RunStatus,
+  SystemDependencyReport,
+  TranscriptionCatalog,
+  TranscriptionEngineStatus,
+  WhisperCppModelStatus,
+  WorkflowCatalog,
+  WorkflowInputSurface,
+  WorkflowObjectProperty,
+  WorkflowRuntimeValidation,
+  WorkflowSemanticKind,
+  WorkflowTypeSpec,
+} from "./generated";
 
 export interface ExternalCommandConfig {
   command: string;
@@ -303,6 +104,7 @@ export interface WorkflowClient {
   startSongAnalysisRun(request: SongAnalysisRunRequest): Promise<RunRecord>;
   startSubtitleGenerationRun(request: SubtitleGenerationRunRequest): Promise<RunRecord>;
   importSongCatalogItems(request: SongCatalogImportRequest): Promise<SongCatalogImportResponse>;
+  listRuns(params?: RunListParams): Promise<RunRecord[]>;
   getRun(runId: string): Promise<RunRecord>;
   getRunEvents(runId: string): Promise<RunEvent[]>;
   getReport(runId: string): Promise<StudioReport>;
@@ -314,6 +116,12 @@ export interface WorkflowClient {
   mediaUrl(runId: string | null, path: string): Promise<string | null>;
   cancelRun(runId: string): Promise<void>;
   subscribeRunEvents?(runId: string, onEvent: (event: RunEvent) => void): Promise<() => void>;
+}
+
+export interface RunListParams {
+  limit?: number;
+  workflow?: RunRecord["workflow"];
+  status?: RunStatus;
 }
 
 export function getWorkflowClient(): WorkflowClient {

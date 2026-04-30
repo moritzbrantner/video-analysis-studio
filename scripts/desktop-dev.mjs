@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
 
-import { readRuntimeConfig, uiDevUrl } from "./runtime-config.mjs";
+import { readOrCreateDevApiToken, readRuntimeConfig, uiDevUrl } from "./runtime-config.mjs";
 
 const config = readRuntimeConfig();
+const apiToken = readOrCreateDevApiToken();
 const beforeDevCommand = [
   "bun",
   "run",
@@ -39,6 +40,11 @@ const desktopProcess = spawn(
   {
     stdio: "inherit",
     cwd: process.cwd(),
+    env: {
+      ...process.env,
+      STUDIO_API_TOKEN: apiToken,
+      VITE_STUDIO_API_TOKEN: apiToken,
+    },
   },
 );
 

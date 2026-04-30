@@ -1,6 +1,7 @@
 import type {
   DataSourceRecord,
   RunEvent,
+  RunListParams,
   RunRecord,
   SystemDependencyReport,
   TranscriptionCatalog,
@@ -27,6 +28,7 @@ import {
 } from "./client";
 
 const defaultBaseUrl = typeof __STUDIO_API_URL__ === "string" ? __STUDIO_API_URL__ : "";
+const defaultApiToken = typeof __STUDIO_API_TOKEN__ === "string" ? __STUDIO_API_TOKEN__ : "";
 
 export function createHttpClient(baseUrl = import.meta.env.VITE_STUDIO_API_URL ?? defaultBaseUrl): WorkflowClient {
   return {
@@ -89,6 +91,7 @@ export function createHttpClient(baseUrl = import.meta.env.VITE_STUDIO_API_URL ?
         method: "POST",
         body: JSON.stringify(payload),
       }),
+    listRuns: (params) => request<RunRecord[]>(baseUrl, `/api/runs${runListQuery(params)}`),
     getRun: (runId) => request<RunRecord>(baseUrl, `/api/runs/${runId}`),
     getRunEvents: (runId) => request<RunEvent[]>(baseUrl, `/api/runs/${runId}/events/history`),
     getReport: (runId) => request<StudioReport>(baseUrl, `/api/runs/${runId}/report`),
@@ -147,13 +150,30 @@ export function createHttpClient(baseUrl = import.meta.env.VITE_STUDIO_API_URL ?
   };
 }
 
+function runListQuery(params: RunListParams | undefined): string {
+  const query = new URLSearchParams();
+  if (params?.limit !== undefined) {
+    query.set("limit", String(params.limit));
+  }
+  if (params?.workflow) {
+    query.set("workflow", params.workflow);
+  }
+  if (params?.status) {
+    query.set("status", params.status);
+  }
+  const value = query.toString();
+  return value ? `?${value}` : "";
+}
+
 async function request<T>(baseUrl: string, path: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
   try {
+    const method = init.method?.toUpperCase() ?? "GET";
     response = await fetch(`${baseUrl}${path}`, {
       ...init,
       headers: {
         "Content-Type": "application/json",
+        ...apiTokenHeader(method),
         ...(init.headers ?? {}),
       },
     });
@@ -168,6 +188,13 @@ async function request<T>(baseUrl: string, path: string, init: RequestInit = {})
     return undefined as T;
   }
   return (await response.json()) as T;
+}
+
+function apiTokenHeader(method: string): Record<string, string> {
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS" || !defaultApiToken) {
+    return {};
+  }
+  return { "X-Studio-Api-Token": defaultApiToken };
 }
 
 function normalizeRequestError(baseUrl: string, error: unknown): Error {

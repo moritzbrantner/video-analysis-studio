@@ -34,8 +34,16 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Typecheck UI
         run: bun run --cwd apps/ui typecheck
+      - name: Test UI
+        run: bun run --cwd apps/ui test
+      - name: Check generated API types
+        run: bun run api:types:check
       - name: Build UI
         run: bun run --cwd apps/ui build
+      - name: Install Playwright browsers
+        run: bunx playwright install --with-deps chromium
+      - name: Run UI e2e smoke
+        run: bun run --cwd apps/ui test:e2e
 
   desktop-check:
     runs-on: ubuntu-latest

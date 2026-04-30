@@ -31,7 +31,7 @@ use crate::report::{
     TranscriptionReport, VideoReport, YoutubeCollectionReport, YoutubeCollectionSourceReport,
     YoutubeVideoReport,
 };
-use crate::run_manager::WorkflowProgress;
+use crate::run_manager::{RunCancellationToken, WorkflowProgress};
 use crate::system::resolve_command;
 use crate::workflow_support::{
     display_path, download_youtube_video, download_youtube_video_to_dir, transcribe_media,
@@ -428,9 +428,11 @@ pub fn run_youtube_video_workflow(
     request: YoutubeRunRequest,
     work_dir: PathBuf,
     report_path: PathBuf,
+    cancellation: RunCancellationToken,
     progress: &mut dyn FnMut(WorkflowProgress),
 ) -> Result<YoutubeVideoReport> {
     request.validate()?;
+    cancellation.check()?;
     fs::create_dir_all(&work_dir)?;
 
     let mut completed = Vec::new();
@@ -439,16 +441,22 @@ pub fn run_youtube_video_workflow(
     let (source_url, video_path) = match &request.source {
         SourceSpec::LocalFile { path } => (None, path.clone()),
         SourceSpec::YoutubeUrl { url } => {
-            let path = download_youtube_video(url, &work_dir)?;
+            let path = download_youtube_video(url, &work_dir, &cancellation)?;
             completed.push("youtube_download".to_string());
             (Some(url.clone()), path)
         }
     };
+    cancellation.check()?;
 
     let mut data_buckets = Vec::new();
     let mut aggregator = BucketAggregator::new(BucketConfig::record_count(1_000)?)?;
-    let (video, observations) =
-        analyze_video(&request, &video_path, &mut aggregator, &mut data_buckets)?;
+    let (video, observations) = analyze_video(
+        &request,
+        &video_path,
+        &mut aggregator,
+        &mut data_buckets,
+        &cancellation,
+    )?;
     completed.push("scene_detection".to_string());
     if request.models.object.is_some() {
         completed.push("object_person_detection".to_string());
@@ -465,6 +473,7 @@ pub fn run_youtube_video_workflow(
         &request.transcription,
         &video_path,
         &work_dir,
+        &cancellation,
         &mut |event| {
             progress(WorkflowProgress::phase(
                 "transcriber",
@@ -473,7 +482,7 @@ pub fn run_youtube_video_workflow(
                 event.progress,
             ));
         },
-    );
+    )?;
     match transcription.status.as_str() {
         "completed" => completed.push("transcription".to_string()),
         _ => skipped.push(format!(
@@ -482,7 +491,12 @@ pub fn run_youtube_video_workflow(
         )),
     }
 
-    let audio = match analyze_audio(&video_path, &mut aggregator, &mut data_buckets) {
+    let audio = match analyze_audio(
+        &video_path,
+        &mut aggregator,
+        &mut data_buckets,
+        &cancellation,
+    ) {
         Ok(report) => {
             completed.push("audio_analysis".to_string());
             report
@@ -527,6 +541,7 @@ pub fn run_youtube_video_workflow(
     if let Some(bucket) = aggregator.finish() {
         data_buckets.push(bucket_report(&bucket));
     }
+    cancellation.check()?;
 
     let report = YoutubeVideoReport {
         workflow: "youtube-video".to_string(),
@@ -572,9 +587,11 @@ pub fn run_youtube_collection_workflow(
     request: YoutubeCollectionRunRequest,
     work_dir: PathBuf,
     report_path: PathBuf,
+    cancellation: RunCancellationToken,
     progress: &mut dyn FnMut(WorkflowProgress),
 ) -> Result<YoutubeCollectionReport> {
     request.validate()?;
+    cancellation.check()?;
     fs::create_dir_all(&work_dir)?;
 
     let mut manifest = match request.manifest.clone() {
@@ -600,6 +617,7 @@ pub fn run_youtube_collection_workflow(
     let mut downloaded_items = 0_u64;
 
     for item in &manifest.items {
+        cancellation.check()?;
         if !metadata_filter_matches(item, &request.metadata_filter) {
             item_reports.push(collection_item_report(
                 item,
@@ -630,7 +648,12 @@ pub fn run_youtube_collection_workflow(
         selected_items += 1;
         let mut local_video = existing;
         if local_video.is_none() {
-            match download_youtube_video_to_dir(&item.source_url, &media_dir, &item.item_id) {
+            match download_youtube_video_to_dir(
+                &item.source_url,
+                &media_dir,
+                &item.item_id,
+                &cancellation,
+            ) {
                 Ok(path) => {
                     downloaded_items += 1;
                     local_video = Some(path);
@@ -711,6 +734,7 @@ pub fn run_youtube_collection_workflow(
             item_request,
             analysis_work_dir,
             item_report_path,
+            cancellation.clone(),
             progress,
         ) {
             Ok(report) => item_reports.push(collection_item_report(
@@ -803,6 +827,7 @@ pub fn run_youtube_collection_workflow(
         capabilities: CapabilityReport { completed, skipped },
     };
 
+    cancellation.check()?;
     write_json_report(&report_path, &report)?;
 
     if analyzed_items == 0 && failed_items > 0 {
@@ -1309,12 +1334,14 @@ fn analyze_video(
     video_path: &Path,
     aggregator: &mut BucketAggregator,
     data_buckets: &mut Vec<DataBucketReport>,
+    cancellation: &RunCancellationToken,
 ) -> Result<(VideoReport, Vec<ObservationReport>)> {
     let mut source = FfmpegVideoSource::open(video_path)?;
     let metadata = source.metadata().clone();
     let mut pipeline = build_video_pipeline(request)?;
 
     while let Some(frame) = source.next_video_frame()? {
+        cancellation.check()?;
         let frame_ref = frame.as_frame();
         let record = DataRecord::video_frame("video", frame.position.frame_index, &frame_ref);
         push_record(aggregator, record, data_buckets)?;
@@ -1413,6 +1440,7 @@ fn analyze_audio(
     video_path: &Path,
     aggregator: &mut BucketAggregator,
     data_buckets: &mut Vec<DataBucketReport>,
+    cancellation: &RunCancellationToken,
 ) -> Result<AudioReport> {
     let mut source = FfmpegAudioSource::open_path_with_options(
         video_path,
@@ -1422,6 +1450,7 @@ fn analyze_audio(
         .analyzer(AudioEnergyAnalyzer::default())
         .build()?;
     while let Some(frame) = source.next_audio_frame()? {
+        cancellation.check()?;
         let frame_ref = frame.as_frame()?;
         let record = DataRecord::audio_frame("audio", pipeline.frames_processed(), &frame_ref);
         push_record(aggregator, record, data_buckets)?;

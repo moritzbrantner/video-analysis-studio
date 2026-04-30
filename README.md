@@ -33,3 +33,5 @@ If you need the backend separately, use `bun run api:dev`.
 If you only need the desktop shell with the same shared UI dev server, use `bun run desktop:dev`.
 
 The API host and port, UI dev port, and UI test port all come from `config/runtime.json`. The browser UI uses the same startup config for its default API base URL. `VITE_STUDIO_API_URL` can still override the API URL when needed.
+
+Runtime workflow output is written to the ignored `workflow-output/` directory by default. Committed example reports live under `fixtures/workflow-output/` so local analysis runs do not create repository noise.

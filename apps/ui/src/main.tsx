@@ -131,14 +131,10 @@ import {
   workflowShareUrl,
 } from "./workflowShare";
 import { workflowGraphHasCycle, workflowGraphWouldCreateCycle } from "./workflowGraph";
+import { appLocationFromPath, pathForAppPage, type AppPage } from "./app/routing";
 
 type WorkflowKindId = "youtube-video" | "video-red-cars" | "youtube-collection" | "song-analysis" | "subtitle-generation";
 type SourceMode = "url" | "file" | "collection";
-type AppPage = "analysis" | "runs" | "workflow" | "components" | "data-sources" | "types" | "settings";
-interface AppLocation {
-  page: AppPage;
-  workflowId: string | null;
-}
 type ViewMode = "home" | ReportDashboardMode;
 type JsonSchemaScalar = "number" | "boolean" | "null" | "any";
 
@@ -354,6 +350,23 @@ function App() {
   const [mainSidebarCollapsed, setMainSidebarCollapsed] = useState(() =>
     loadStoredBoolean(mainSidebarCollapsedStorageKey, false),
   );
+  useEffect(() => {
+    let canceled = false;
+    getWorkflowClient()
+      .listRuns({ limit: 50 })
+      .then((records) => {
+        if (canceled) {
+          return;
+        }
+        setWorkflowRuns((currentRuns) => mergeBackendWorkflowRuns(currentRuns, records, workflowLibrary.workflows));
+      })
+      .catch(() => {
+        // The local API can be unavailable when the UI is opened against static fixtures.
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [workflowLibrary.workflows]);
 
   const activeWorkflow = useMemo(() => activeSavedWorkflow(workflowLibrary), [workflowLibrary]);
   const activeWorkflowResultPanel = useMemo(
@@ -9408,6 +9421,116 @@ function workflowRunFromRunRecord(run: SavedWorkflowRun, record: RunRecord): Sav
   };
 }
 
+function mergeBackendWorkflowRuns(
+  localRuns: SavedWorkflowRun[],
+  records: RunRecord[],
+  workflows: SavedWorkflow[],
+): SavedWorkflowRun[] {
+  const localByBackendId = new Map(localRuns.flatMap((run) => (run.backendRunId ? [[run.backendRunId, run]] : [])));
+  const backendRuns = records.map((record) => {
+    const existing = localByBackendId.get(record.run_id);
+    return existing
+      ? workflowRunFromRunRecord(existing, record)
+      : savedWorkflowRunFromBackendRecord(record, workflows);
+  });
+  const backendIds = new Set(records.map((record) => record.run_id));
+  const legacyLocalRuns = localRuns.filter((run) => !run.backendRunId || !backendIds.has(run.backendRunId));
+  return [...backendRuns, ...legacyLocalRuns].slice(0, 50);
+}
+
+function savedWorkflowRunFromBackendRecord(record: RunRecord, workflows: SavedWorkflow[]): SavedWorkflowRun {
+  const workflowKind = workflowKindIdFromRunRecord(record);
+  const workflow = workflows.find((candidate) => candidate.kind === workflowKind);
+  return {
+    id: `backend-${record.run_id}`,
+    workflowId: workflow?.id ?? workflowKind,
+    workflowName: workflow?.name ?? workflowKindName(workflowKind),
+    workflowKind,
+    workflowVersion: workflow?.version,
+    createdAt: record.created_at,
+    updatedAt: record.updated_at,
+    status: record.status,
+    inputSummary: record.report_path,
+    request: placeholderRunRequest(workflowKind, record.work_dir),
+    backendRunId: record.run_id,
+    reportPath: record.report_path,
+    message: record.message,
+  };
+}
+
+function workflowKindIdFromRunRecord(record: RunRecord): WorkflowKindId {
+  switch (record.workflow) {
+    case "video_red_cars":
+      return "video-red-cars";
+    case "youtube_collection":
+      return "youtube-collection";
+    case "song_analysis":
+      return "song-analysis";
+    case "subtitle_generation":
+      return "subtitle-generation";
+    case "youtube_video":
+    default:
+      return "youtube-video";
+  }
+}
+
+function placeholderRunRequest(
+  kind: WorkflowKindId,
+  workDir: string,
+): YoutubeRunRequest | VideoRedCarsRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest {
+  const source = { kind: "local_file" as const, path: "" };
+  switch (kind) {
+    case "video-red-cars":
+      return {
+        source,
+        work_dir: workDir,
+        scene_threshold: initialForm.sceneThreshold,
+        min_scene_len: initialForm.minSceneLen,
+        visual_sample_every: initialForm.visualSampleEvery,
+        target_object: initialForm.targetObject,
+        vehicle_detector: { command: "", args: [] },
+      } as VideoRedCarsRunRequest;
+    case "youtube-collection":
+      return {
+        source: null,
+        manifest: null,
+        max_items: null,
+        metadata_filter: {},
+        local_file_filter: {},
+        analysis: {},
+        work_dir: workDir,
+        delete_filtered_downloads: false,
+      } as unknown as YoutubeCollectionRunRequest;
+    case "song-analysis":
+      return {
+        source,
+        work_dir: workDir,
+        catalog: {},
+        identification: {},
+        transcription: { enabled: true },
+        music: {},
+      } as SongAnalysisRunRequest;
+    case "subtitle-generation":
+      return {
+        source,
+        work_dir: workDir,
+        transcription: { enabled: true },
+        overwrite: true,
+      } as SubtitleGenerationRunRequest;
+    case "youtube-video":
+    default:
+      return {
+        source,
+        work_dir: workDir,
+        scene_threshold: initialForm.sceneThreshold,
+        min_scene_len: initialForm.minSceneLen,
+        visual_sample_every: initialForm.visualSampleEvery,
+        transcription: { enabled: true },
+        models: {},
+      } as YoutubeRunRequest;
+  }
+}
+
 function loadSavedWorkflowBlocks(): SavedWorkflowBlock[] {
   if (typeof window === "undefined") {
     return [];
@@ -14077,66 +14200,6 @@ function defaultOutputForWorkflowKind(id: WorkflowKindId): string {
       return "workflow-output/subtitle-generation/subtitle-generation.json";
     case "youtube-video":
       return "workflow-output/youtube-video/analysis.json";
-  }
-}
-
-function appLocationFromPath(pathname: string): AppLocation {
-  const segments = pathname.split("/").filter(Boolean);
-  const [pageSegment, workflowSegment] = segments;
-  if (pageSegment === "workflow" || pageSegment === "workflows") {
-    return {
-      page: "workflow",
-      workflowId: decodePathSegment(workflowSegment),
-    };
-  }
-  if (pageSegment === "run" || pageSegment === "runs") {
-    return {
-      page: "runs",
-      workflowId: decodePathSegment(workflowSegment),
-    };
-  }
-  if (pageSegment === "data-sources" || pageSegment === "datasources") {
-    return { page: "data-sources", workflowId: null };
-  }
-  if (pageSegment === "components" || pageSegment === "component-library") {
-    return { page: "components", workflowId: null };
-  }
-  if (pageSegment === "types" || pageSegment === "type-library") {
-    return { page: "types", workflowId: null };
-  }
-  if (pageSegment === "settings") {
-    return { page: "settings", workflowId: null };
-  }
-  return { page: "analysis", workflowId: null };
-}
-
-function pathForAppPage(page: AppPage, workflowId?: string | null): string {
-  switch (page) {
-    case "workflow":
-      return workflowId ? `/workflow/${encodeURIComponent(workflowId)}` : "/workflow";
-    case "runs":
-      return workflowId ? `/runs/${encodeURIComponent(workflowId)}` : "/runs";
-    case "components":
-      return "/components";
-    case "data-sources":
-      return "/data-sources";
-    case "types":
-      return "/types";
-    case "settings":
-      return "/settings";
-    case "analysis":
-      return "/";
-  }
-}
-
-function decodePathSegment(value: string | undefined): string | null {
-  if (!value) {
-    return null;
-  }
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
   }
 }
 

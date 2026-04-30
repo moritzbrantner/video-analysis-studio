@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Output, Stdio};
+use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -12,18 +13,25 @@ use video_analysis_ffmpeg::extract_wav;
 use crate::error::{Result, StudioError};
 use crate::media::prepare_transcription_config;
 use crate::report::{TranscriptSegmentReport, TranscriptionReport};
+use crate::run_manager::RunCancellationToken;
 use crate::system::resolve_command;
 use crate::youtube::{ExternalCommandConfig, TranscriptionConfig, TranscriptionEngine};
 
-pub(crate) fn download_youtube_video(url: &str, work_dir: &Path) -> Result<PathBuf> {
-    download_youtube_video_to_dir(url, work_dir, "youtube-video")
+pub(crate) fn download_youtube_video(
+    url: &str,
+    work_dir: &Path,
+    cancellation: &RunCancellationToken,
+) -> Result<PathBuf> {
+    download_youtube_video_to_dir(url, work_dir, "youtube-video", cancellation)
 }
 
 pub(crate) fn download_youtube_video_to_dir(
     url: &str,
     media_dir: &Path,
     output_stem: &str,
+    cancellation: &RunCancellationToken,
 ) -> Result<PathBuf> {
+    cancellation.check()?;
     let command = PathBuf::from("yt-dlp");
     if resolve_command(&command).is_none() {
         return Err(StudioError::Workflow(
@@ -33,7 +41,8 @@ pub(crate) fn download_youtube_video_to_dir(
     fs::create_dir_all(media_dir)?;
 
     let output_template = media_dir.join(format!("{output_stem}.%(ext)s"));
-    let output = Command::new("yt-dlp")
+    let mut command = Command::new("yt-dlp");
+    command
         .arg("--no-playlist")
         .arg("--merge-output-format")
         .arg("mp4")
@@ -41,8 +50,8 @@ pub(crate) fn download_youtube_video_to_dir(
         .arg("after_move:filepath")
         .arg("-o")
         .arg(&output_template)
-        .arg(url)
-        .output()?;
+        .arg(url);
+    let output = run_output_with_cancel(command, cancellation)?;
 
     if !output.status.success() {
         return Err(StudioError::Workflow(format!(
@@ -75,10 +84,11 @@ pub(crate) fn transcribe_media(
     config: &TranscriptionConfig,
     media_path: &Path,
     work_dir: &Path,
+    cancellation: &RunCancellationToken,
     progress: &mut dyn FnMut(WhisperCppProgressEvent),
-) -> (TranscriptionReport, Option<PathBuf>) {
+) -> Result<(TranscriptionReport, Option<PathBuf>)> {
     if !config.enabled {
-        return (
+        return Ok((
             TranscriptionReport {
                 status: "skipped".to_string(),
                 text: None,
@@ -86,13 +96,15 @@ pub(crate) fn transcribe_media(
                 message: Some("disabled".to_string()),
             },
             None,
-        );
+        ));
     }
 
+    cancellation.check()?;
     let prepared = prepare_transcription_config(config);
     match extract_transcription_wav(media_path, work_dir).and_then(|audio_path| {
+        cancellation.check()?;
         if prepared.engine == TranscriptionEngine::WhisperCpp {
-            run_whisper_cpp_transcriber(&prepared, &audio_path, progress)
+            run_whisper_cpp_transcriber(&prepared, &audio_path, cancellation, progress)
         } else {
             let command = prepared.command.clone().ok_or_else(|| {
                 StudioError::Workflow(default_transcriber_message(prepared.engine))
@@ -110,11 +122,13 @@ pub(crate) fn transcribe_media(
                 &command,
                 &audio_path,
                 &work_dir.join("transcript"),
+                cancellation,
             )
         }
     }) {
-        Ok((report, audio_path)) => (report, Some(audio_path)),
-        Err(err) => (
+        Ok((report, audio_path)) => Ok((report, Some(audio_path))),
+        Err(StudioError::Canceled(message)) => Err(StudioError::Canceled(message)),
+        Err(err) => Ok((
             TranscriptionReport {
                 status: "skipped".to_string(),
                 text: None,
@@ -122,7 +136,7 @@ pub(crate) fn transcribe_media(
                 message: Some(err.to_string()),
             },
             None,
-        ),
+        )),
     }
 }
 
@@ -158,18 +172,20 @@ fn run_transcriber_command(
     config: &ExternalCommandConfig,
     audio_path: &Path,
     output_dir: &Path,
+    cancellation: &RunCancellationToken,
 ) -> Result<(TranscriptionReport, PathBuf)> {
     fs::create_dir_all(output_dir)?;
 
-    let status = Command::new(&config.command)
+    let mut command = Command::new(&config.command);
+    command
         .args(&config.args)
         .arg(audio_path)
         .arg("--output_format")
         .arg("json")
         .arg("--output_dir")
         .arg(output_dir)
-        .stdin(Stdio::null())
-        .status()?;
+        .stdin(Stdio::null());
+    let status = run_status_with_cancel(command, cancellation)?;
     if !status.success() {
         return Err(StudioError::Workflow(format!(
             "{} transcriber command `{}` failed",
@@ -194,12 +210,15 @@ fn run_transcriber_command(
 fn run_whisper_cpp_transcriber(
     config: &TranscriptionConfig,
     audio_path: &Path,
+    cancellation: &RunCancellationToken,
     progress: &mut dyn FnMut(WhisperCppProgressEvent),
 ) -> Result<(TranscriptionReport, PathBuf)> {
+    cancellation.check()?;
     let mut transcriber = WhisperCppTranscriber::new(config.whisper_cpp.clone());
     let parsed = transcriber
         .transcribe_with_progress(audio_path, progress)
         .map_err(|error| StudioError::Workflow(error.to_string()))?;
+    cancellation.check()?;
     Ok((
         TranscriptionReport {
             status: "completed".to_string(),
@@ -218,6 +237,47 @@ fn run_whisper_cpp_transcriber(
         },
         audio_path.to_path_buf(),
     ))
+}
+
+pub(crate) fn run_output_with_cancel(
+    mut command: Command,
+    cancellation: &RunCancellationToken,
+) -> Result<Output> {
+    cancellation.check()?;
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    loop {
+        cancellation.check().inspect_err(|_| {
+            let _ = child.kill();
+            let _ = child.wait();
+        })?;
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output().map_err(Into::into);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+pub(crate) fn run_status_with_cancel(
+    mut command: Command,
+    cancellation: &RunCancellationToken,
+) -> Result<ExitStatus> {
+    cancellation.check()?;
+    command.stdin(Stdio::null());
+    let mut child = command.spawn()?;
+    loop {
+        cancellation.check().inspect_err(|_| {
+            let _ = child.kill();
+            let _ = child.wait();
+        })?;
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn transcription_engine_label(engine: TranscriptionEngine) -> &'static str {

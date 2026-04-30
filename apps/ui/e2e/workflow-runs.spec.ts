@@ -29,9 +29,7 @@ test.describe("example workflow runs", () => {
     await createRun(page);
 
     await expect(page.getByRole("button", { name: "YouTube Video Quick Review run succeeded" })).toBeVisible();
-    await expect(
-      page.getByRole("definition").filter({ hasText: "workflow-output/youtube-video/quick-review-video.mp4" }),
-    ).toBeVisible();
+    await expect(page.getByText("workflow-output/youtube-video/quick-review-video.mp4", { exact: true })).toBeVisible();
   });
 
   test("YouTube Collection Spot Check completes with a collection report", async ({ page }) => {

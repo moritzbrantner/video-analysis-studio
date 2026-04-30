@@ -1,10 +1,12 @@
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 const runtimeConfigPath = path.join(repoRoot, "config", "runtime.json");
+const defaultDevApiTokenPath = path.join(repoRoot, "studio-data", "dev-api-token");
 
 export function readRuntimeConfig() {
   const raw = JSON.parse(readFileSync(runtimeConfigPath, "utf8"));
@@ -26,6 +28,27 @@ export function uiBaseUrl(config = readRuntimeConfig()) {
 
 export function runtimeConfigFilePath() {
   return runtimeConfigPath;
+}
+
+export function devApiTokenFilePath() {
+  return defaultDevApiTokenPath;
+}
+
+export function readOrCreateDevApiToken(tokenPath = defaultDevApiTokenPath) {
+  const envToken = process.env.STUDIO_API_TOKEN?.trim();
+  if (envToken) {
+    return envToken;
+  }
+  if (existsSync(tokenPath)) {
+    const token = readFileSync(tokenPath, "utf8").trim();
+    if (token) {
+      return token;
+    }
+  }
+  mkdirSync(path.dirname(tokenPath), { recursive: true });
+  const token = `${randomUUID()}${randomUUID()}`;
+  writeFileSync(tokenPath, `${token}\n`);
+  return token;
 }
 
 function validateRuntimeConfig(value) {

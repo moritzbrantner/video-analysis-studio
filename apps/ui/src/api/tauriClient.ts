@@ -62,6 +62,12 @@ export function createTauriClient(): WorkflowClient {
       invoke<RunRecord>("start_subtitle_generation_run", { request }),
     importSongCatalogItems: async (request: SongCatalogImportRequest) =>
       invoke<SongCatalogImportResponse>("import_song_catalog_items", { request }),
+    listRuns: async (params) =>
+      invoke<RunRecord[]>("list_runs", {
+        limit: params?.limit,
+        workflow: params?.workflow,
+        status: params?.status,
+      }),
     getRun: async (runId) => invoke<RunRecord>("get_run", { runId }),
     getRunEvents: async (runId) => invoke<RunEvent[]>("get_run_events", { runId }),
     getReport: async (runId) => invoke<StudioReport>("get_report", { runId }),

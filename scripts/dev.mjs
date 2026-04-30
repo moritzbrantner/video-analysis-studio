@@ -1,11 +1,18 @@
 import { spawn } from "node:child_process";
 
-import { readRuntimeConfig, studioApiBaseUrl, uiDevUrl } from "./runtime-config.mjs";
+import {
+  devApiTokenFilePath,
+  readOrCreateDevApiToken,
+  readRuntimeConfig,
+  studioApiBaseUrl,
+  uiDevUrl,
+} from "./runtime-config.mjs";
 
 const config = readRuntimeConfig();
 const apiBaseUrl = studioApiBaseUrl(config);
 const healthUrl = `${apiBaseUrl}/api/system/dependencies`;
 const browserUrl = uiDevUrl(config);
+const apiToken = readOrCreateDevApiToken();
 
 const apiProcess = spawn(
   "cargo",
@@ -20,10 +27,16 @@ const apiProcess = spawn(
     String(config.api.port),
     "--data-dir",
     "./studio-data",
+    "--auth-token-file",
+    devApiTokenFilePath(),
   ],
   {
     stdio: "inherit",
     cwd: process.cwd(),
+    env: {
+      ...process.env,
+      STUDIO_API_TOKEN: apiToken,
+    },
   },
 );
 
@@ -46,6 +59,11 @@ try {
 desktopProcess = spawn("bun", ["./scripts/desktop-dev.mjs"], {
   stdio: "inherit",
   cwd: process.cwd(),
+  env: {
+    ...process.env,
+    STUDIO_API_TOKEN: apiToken,
+    VITE_STUDIO_API_TOKEN: apiToken,
+  },
 });
 
 try {

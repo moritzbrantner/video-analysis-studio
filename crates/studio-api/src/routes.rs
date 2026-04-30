@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::header::CONTENT_TYPE;
+use axum::http::{HeaderName, HeaderValue, Method, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
@@ -15,25 +17,42 @@ use serde::{Deserialize, Serialize};
 use studio_core::{
     check_system_dependencies, discover_youtube_collection_manifest, transcription_catalog,
     DataSourceDerivationInput, DataSourceRecord, DataSourceUpsert, RunEvent, RunId, RunManager,
-    RunRecord, SongAnalysisRunRequest, SongCatalogImportRequest, StudioError, StudioReport,
-    SubtitleGenerationRunRequest, VideoRedCarsRunRequest, WorkflowKind,
+    RunRecord, RunStatus, SongAnalysisRunRequest, SongCatalogImportRequest, StudioError,
+    StudioReport, SubtitleGenerationRunRequest, VideoRedCarsRunRequest, WorkflowKind,
     YoutubeCollectionManifestRequest, YoutubeCollectionRunRequest, YoutubeRunRequest,
     YoutubeVideoReport,
 };
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 use tower::ServiceExt;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::ServeFile;
 use tower_http::trace::TraceLayer;
+
+pub const STUDIO_API_TOKEN_HEADER: &str = "x-studio-api-token";
 
 #[derive(Clone)]
 struct AppState {
     manager: RunManager,
+    auth_token: Option<String>,
 }
 
 pub fn build_app(manager: RunManager) -> Router {
-    let state = AppState { manager };
+    build_app_with_options(manager, ApiOptions::default())
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ApiOptions {
+    pub auth_token: Option<String>,
+    pub allowed_origins: Vec<String>,
+}
+
+pub fn build_app_with_options(manager: RunManager, options: ApiOptions) -> Router {
+    let state = AppState {
+        manager,
+        auth_token: options.auth_token.filter(|token| !token.trim().is_empty()),
+    };
+    let cors = cors_layer(&options.allowed_origins);
     Router::new()
         .route("/health", get(health))
         .route("/api/system/dependencies", get(system_dependencies))
@@ -80,20 +99,81 @@ pub fn build_app(manager: RunManager) -> Router {
             post(start_subtitle_generation_run),
         )
         .route("/api/song-catalog/imports", post(import_song_catalog_items))
+        .route("/api/runs", get(list_runs))
         .route("/api/runs/{run_id}", get(get_run))
         .route("/api/runs/{run_id}/events", get(get_events))
         .route("/api/runs/{run_id}/events/history", get(get_event_history))
         .route("/api/runs/{run_id}/media", get(get_run_media))
         .route("/api/runs/{run_id}/report", get(get_report))
         .route("/api/runs/{run_id}/cancel", post(cancel_run))
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
-        )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_api_token,
+        ))
+        .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
+    let origins: Vec<HeaderValue> = allowed_origins
+        .iter()
+        .filter_map(|origin| HeaderValue::from_str(origin).ok())
+        .collect();
+    let allow_origin = if origins.is_empty() {
+        AllowOrigin::list([
+            HeaderValue::from_static("http://127.0.0.1:8702"),
+            HeaderValue::from_static("http://localhost:8702"),
+            HeaderValue::from_static("http://127.0.0.1:4173"),
+        ])
+    } else {
+        AllowOrigin::list(origins)
+    };
+    CorsLayer::new()
+        .allow_origin(allow_origin)
+        .allow_methods([
+            Method::GET,
+            Method::HEAD,
+            Method::OPTIONS,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+        ])
+        .allow_headers([
+            CONTENT_TYPE,
+            HeaderName::from_static(STUDIO_API_TOKEN_HEADER),
+        ])
+}
+
+async fn require_api_token(
+    State(state): State<AppState>,
+    request: axum::http::Request<Body>,
+    next: Next,
+) -> Response {
+    let Some(expected_token) = state.auth_token.as_deref() else {
+        return next.run(request).await;
+    };
+    if !request.uri().path().starts_with("/api/") || token_exempt_method(request.method()) {
+        return next.run(request).await;
+    }
+    let provided = request
+        .headers()
+        .get(HeaderName::from_static(STUDIO_API_TOKEN_HEADER))
+        .and_then(|value| value.to_str().ok());
+    if provided == Some(expected_token) {
+        return next.run(request).await;
+    }
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(ErrorResponse {
+            error: "missing or invalid Studio API token".to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn token_exempt_method(method: &Method) -> bool {
+    matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -239,6 +319,25 @@ async fn get_run(
     Path(run_id): Path<RunId>,
 ) -> Result<Json<studio_core::RunRecord>, ApiError> {
     Ok(Json(state.manager.get_run(run_id).await?))
+}
+
+#[derive(Debug, Deserialize)]
+struct RunsQuery {
+    limit: Option<usize>,
+    workflow: Option<WorkflowKind>,
+    status: Option<RunStatus>,
+}
+
+async fn list_runs(
+    State(state): State<AppState>,
+    Query(query): Query<RunsQuery>,
+) -> Result<Json<Vec<RunRecord>>, ApiError> {
+    Ok(Json(
+        state
+            .manager
+            .list_runs(query.limit.unwrap_or(50), query.workflow, query.status)
+            .await?,
+    ))
 }
 
 async fn get_report(
@@ -444,6 +543,7 @@ impl IntoResponse for ApiError {
             StudioError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
             StudioError::RunNotFound(_) | StudioError::ReportNotFound(_) => StatusCode::NOT_FOUND,
             StudioError::MissingDependency(_) => StatusCode::FAILED_DEPENDENCY,
+            StudioError::Canceled(_) => StatusCode::CONFLICT,
             StudioError::Workflow(_)
             | StudioError::Io(_)
             | StudioError::Json(_)
@@ -462,6 +562,7 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use axum::body::Body;
+    use axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN;
     use axum::http::{Request, StatusCode};
     use serde_json::json;
     use tower::ServiceExt;
@@ -477,6 +578,128 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn mutating_api_routes_require_token_when_configured() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = build_app_with_options(
+            RunManager::new(dir.path().to_path_buf()),
+            ApiOptions {
+                auth_token: Some("secret-token".to_string()),
+                allowed_origins: vec![],
+            },
+        );
+        let response = app
+            .oneshot(
+                Request::post("/api/workflows/youtube-video/runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "source": { "kind": "youtube_url", "url": "https://example.com/video" },
+                            "scene_threshold": 27,
+                            "min_scene_len": 15,
+                            "visual_sample_every": 30
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn mutating_api_routes_accept_valid_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = build_app_with_options(
+            RunManager::new(dir.path().to_path_buf()),
+            ApiOptions {
+                auth_token: Some("secret-token".to_string()),
+                allowed_origins: vec![],
+            },
+        );
+        let response = app
+            .oneshot(
+                Request::post("/api/workflows/youtube-video/runs")
+                    .header("content-type", "application/json")
+                    .header(STUDIO_API_TOKEN_HEADER, "secret-token")
+                    .body(Body::from(
+                        json!({
+                            "source": { "kind": "youtube_url", "url": "https://example.com/video" },
+                            "scene_threshold": 27,
+                            "min_scene_len": 15,
+                            "visual_sample_every": 30
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn read_routes_do_not_require_token_when_configured() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = build_app_with_options(
+            RunManager::new(dir.path().to_path_buf()),
+            ApiOptions {
+                auth_token: Some("secret-token".to_string()),
+                allowed_origins: vec![],
+            },
+        );
+        let response = app
+            .oneshot(
+                Request::get("/api/system/dependencies")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn cors_allows_configured_origin_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = build_app_with_options(
+            RunManager::new(dir.path().to_path_buf()),
+            ApiOptions {
+                auth_token: None,
+                allowed_origins: vec!["http://127.0.0.1:8702".to_string()],
+            },
+        );
+        let allowed = app
+            .clone()
+            .oneshot(
+                Request::get("/api/system/dependencies")
+                    .header("origin", "http://127.0.0.1:8702")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            allowed.headers().get(ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&HeaderValue::from_static("http://127.0.0.1:8702"))
+        );
+
+        let rejected = app
+            .oneshot(
+                Request::get("/api/system/dependencies")
+                    .header("origin", "http://example.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(rejected
+            .headers()
+            .get(ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none());
     }
 
     #[tokio::test]
@@ -954,6 +1177,36 @@ mod tests {
             .unwrap()
             .iter()
             .any(|event| event["status"] == "canceled"));
+    }
+
+    #[tokio::test]
+    async fn list_runs_returns_persisted_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = RunManager::new(dir.path().to_path_buf());
+        let run = manager
+            .start_youtube_video(YoutubeRunRequest::local_file(
+                dir.path().join("missing.mp4"),
+            ))
+            .await
+            .unwrap();
+        manager.cancel_run(run.run_id).await.unwrap();
+        let app = build_app(RunManager::new(dir.path().to_path_buf()));
+
+        let response = app
+            .oneshot(
+                Request::get("/api/runs?limit=10&status=canceled")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let records: Vec<studio_core::RunRecord> = serde_json::from_slice(&bytes).unwrap();
+        assert!(records.iter().any(|record| record.run_id == run.run_id));
     }
 
     #[tokio::test]

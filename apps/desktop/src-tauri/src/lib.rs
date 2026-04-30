@@ -6,7 +6,7 @@ use commands::{
     cancel_run, check_dependencies, create_data_source, create_data_source_derivation,
     delete_data_source, discover_youtube_collection_manifest_command, get_report, get_run,
     get_run_events, get_transcription_catalog, get_workflow_catalog, import_song_catalog_items,
-    list_data_sources, start_song_analysis_run, start_subtitle_generation_run,
+    list_data_sources, list_runs, start_song_analysis_run, start_subtitle_generation_run,
     start_video_red_cars_run, start_youtube_collection_run, start_youtube_video_run,
     update_data_source, StudioState,
 };
@@ -43,6 +43,7 @@ pub fn run() {
             start_song_analysis_run,
             start_subtitle_generation_run,
             import_song_catalog_items,
+            list_runs,
             get_run,
             get_report,
             get_run_events,

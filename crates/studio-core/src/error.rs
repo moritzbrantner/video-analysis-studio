@@ -16,6 +16,8 @@ pub enum StudioError {
     ReportNotFound(String),
     #[error("workflow failed: {0}")]
     Workflow(String),
+    #[error("run canceled: {0}")]
+    Canceled(String),
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
     #[error("JSON error: {0}")]

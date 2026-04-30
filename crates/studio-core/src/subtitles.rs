@@ -8,7 +8,7 @@ use crate::media::{prepare_transcription_config, validate_local_file, validate_y
 use crate::report::{
     CapabilityReport, SourceReport, SubtitleAssetReport, SubtitleGenerationReport, SubtitleReport,
 };
-use crate::run_manager::WorkflowProgress;
+use crate::run_manager::{RunCancellationToken, WorkflowProgress};
 use crate::workflow_support::{
     display_path, download_youtube_video, transcribe_media, write_json_report,
 };
@@ -52,9 +52,11 @@ pub fn run_subtitle_generation_workflow(
     mut request: SubtitleGenerationRunRequest,
     work_dir: PathBuf,
     report_path: PathBuf,
+    cancellation: RunCancellationToken,
     progress: &mut dyn FnMut(WorkflowProgress),
 ) -> Result<SubtitleGenerationReport> {
     request.validate()?;
+    cancellation.check()?;
     request.transcription = prepare_transcription_config(&request.transcription);
     std::fs::create_dir_all(&work_dir)?;
 
@@ -64,11 +66,12 @@ pub fn run_subtitle_generation_workflow(
     let (source_url, video_path) = match &request.source {
         SourceSpec::LocalFile { path } => (None, path.clone()),
         SourceSpec::YoutubeUrl { url } => {
-            let path = download_youtube_video(url, &work_dir)?;
+            let path = download_youtube_video(url, &work_dir, &cancellation)?;
             completed.push("youtube_download".to_string());
             (Some(url.clone()), path)
         }
     };
+    cancellation.check()?;
 
     let subtitle_path = video_path.with_extension("srt");
     if subtitle_path.exists() && !request.overwrite {
@@ -82,6 +85,7 @@ pub fn run_subtitle_generation_workflow(
         &request.transcription,
         &video_path,
         &work_dir,
+        &cancellation,
         &mut |event| {
             progress(WorkflowProgress::phase(
                 "transcriber",
@@ -90,7 +94,7 @@ pub fn run_subtitle_generation_workflow(
                 event.progress,
             ));
         },
-    );
+    )?;
     if transcription.status != "completed" {
         return Err(crate::error::StudioError::Workflow(format!(
             "subtitle generation requires completed transcription: {}",
@@ -99,6 +103,7 @@ pub fn run_subtitle_generation_workflow(
     }
     completed.push("transcription".to_string());
 
+    cancellation.check()?;
     write_srt_file(&subtitle_path, &transcription.segments)?;
     completed.push("subtitle_srt".to_string());
     if transcription.segments.is_empty() {
@@ -127,6 +132,7 @@ pub fn run_subtitle_generation_workflow(
         transcription,
     };
 
+    cancellation.check()?;
     write_json_report(&report_path, &report)?;
     Ok(report)
 }

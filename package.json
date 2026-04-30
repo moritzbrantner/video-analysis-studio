@@ -14,6 +14,8 @@
     "ui:test": "bun run --cwd apps/ui test",
     "ui:test:e2e": "bun run --cwd apps/ui test:e2e",
     "ui:typecheck": "bun run --cwd apps/ui typecheck",
+    "api:types": "cargo run -p studio-core --bin export_ts -- apps/ui/src/api/generated.ts",
+    "api:types:check": "bun run api:types && git diff --exit-code apps/ui/src/api/generated.ts",
     "desktop:dev": "bun ./scripts/desktop-dev.mjs",
     "desktop:check": "cargo check -p studio-desktop"
   },

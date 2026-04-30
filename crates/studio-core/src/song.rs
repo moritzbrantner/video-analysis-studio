@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use audio_analysis_recognition::FingerprintRecord;
 use chrono::Utc;
@@ -15,11 +15,11 @@ use crate::report::{
     MusicSegmentReport, SongAnalysisReport, SongAssetReport, SongFingerprintQueryReport,
     SongIdentificationReport, SongMatchCandidateReport, SongMatchedSegmentReport, SongSourceReport,
 };
-use crate::run_manager::WorkflowProgress;
+use crate::run_manager::{RunCancellationToken, WorkflowProgress};
 use crate::system::resolve_command;
 use crate::workflow_support::{
     display_path, download_youtube_video, download_youtube_video_to_dir,
-    extract_music_analysis_wav, transcribe_media, write_json_report,
+    extract_music_analysis_wav, run_output_with_cancel, transcribe_media, write_json_report,
 };
 use crate::youtube::{ExternalCommandConfig, TranscriptionConfig};
 
@@ -250,9 +250,11 @@ pub fn run_song_analysis_workflow(
     data_dir: PathBuf,
     work_dir: PathBuf,
     report_path: PathBuf,
+    cancellation: RunCancellationToken,
     progress: &mut dyn FnMut(WorkflowProgress),
 ) -> Result<SongAnalysisReport> {
     request.validate()?;
+    cancellation.check()?;
     request.transcription = prepare_transcription_config(&request.transcription);
     if request.music.command.is_none() {
         request.music.command = Some(default_music_command());
@@ -261,13 +263,14 @@ pub fn run_song_analysis_workflow(
 
     let mut completed = Vec::new();
     let mut skipped = Vec::new();
-    let (source_url, media_path) = resolve_song_source(&request.source, &work_dir)?;
+    let (source_url, media_path) = resolve_song_source(&request.source, &work_dir, &cancellation)?;
     if source_url.is_some() {
         completed.push("youtube_download".to_string());
     }
 
     let catalog_path = request.resolved_catalog_path(&data_dir);
     let identification = if request.identification.enabled {
+        cancellation.check()?;
         match identify_song(&media_path, &catalog_path, &request.identification) {
             Ok(report) => {
                 if matches!(report.status.as_str(), "matched" | "ambiguous" | "no_match") {
@@ -303,6 +306,7 @@ pub fn run_song_analysis_workflow(
         &request.transcription,
         &media_path,
         &work_dir,
+        &cancellation,
         &mut |event| {
             progress(WorkflowProgress::phase(
                 "transcriber",
@@ -311,7 +315,7 @@ pub fn run_song_analysis_workflow(
                 event.progress,
             ));
         },
-    );
+    )?;
     if lyrics.status == "completed" {
         completed.push("lyrics_transcription".to_string());
     } else {
@@ -321,7 +325,8 @@ pub fn run_song_analysis_workflow(
         ));
     }
 
-    let (music, music_analysis_wav) = analyze_music(&media_path, &work_dir, &request.music);
+    let (music, music_analysis_wav) =
+        analyze_music(&media_path, &work_dir, &request.music, &cancellation)?;
     if music.status == "completed" {
         completed.push("music_analysis".to_string());
     } else {
@@ -350,6 +355,7 @@ pub fn run_song_analysis_workflow(
         data_buckets: Vec::<DataBucketReport>::new(),
     };
 
+    cancellation.check()?;
     write_json_report(&report_path, &report)?;
     Ok(report)
 }
@@ -432,7 +438,8 @@ fn import_catalog_item(
     item_dir: &Path,
     item: SongCatalogImportItem,
 ) -> Result<String> {
-    let (_, media_path) = resolve_song_source_to_dir(&item.source, item_dir)?;
+    let cancellation = RunCancellationToken::new();
+    let (_, media_path) = resolve_song_source_to_dir(&item.source, item_dir, &cancellation)?;
     let full = run_fpcalc(&media_path, false)?;
     let full = full.into_iter().next().ok_or_else(|| {
         StudioError::Workflow("fpcalc completed but no fingerprint was returned".to_string())
@@ -730,9 +737,10 @@ fn analyze_music(
     media_path: &Path,
     work_dir: &Path,
     config: &MusicAnalysisConfig,
-) -> (MusicAnalysisReport, Option<PathBuf>) {
+    cancellation: &RunCancellationToken,
+) -> Result<(MusicAnalysisReport, Option<PathBuf>)> {
     if !config.enabled {
-        return (
+        return Ok((
             MusicAnalysisReport {
                 status: "skipped".to_string(),
                 global: None,
@@ -740,10 +748,10 @@ fn analyze_music(
                 message: Some("disabled".to_string()),
             },
             None,
-        );
+        ));
     }
     let Some(command) = config.command.clone() else {
-        return (
+        return Ok((
             MusicAnalysisReport {
                 status: "skipped".to_string(),
                 global: None,
@@ -751,10 +759,10 @@ fn analyze_music(
                 message: Some("music analyzer command is not configured".to_string()),
             },
             None,
-        );
+        ));
     };
     if resolve_command(&command.command).is_none() {
-        return (
+        return Ok((
             MusicAnalysisReport {
                 status: "skipped".to_string(),
                 global: None,
@@ -762,14 +770,15 @@ fn analyze_music(
                 message: Some(format!("{} is not available", command.command.display())),
             },
             None,
-        );
+        ));
     }
 
     match extract_music_analysis_wav(media_path, work_dir)
-        .and_then(|audio_path| run_music_command(&command, &audio_path, config))
+        .and_then(|audio_path| run_music_command(&command, &audio_path, config, cancellation))
     {
-        Ok((report, audio_path)) => (report, Some(audio_path)),
-        Err(error) => (
+        Ok((report, audio_path)) => Ok((report, Some(audio_path))),
+        Err(StudioError::Canceled(message)) => Err(StudioError::Canceled(message)),
+        Err(error) => Ok((
             MusicAnalysisReport {
                 status: "failed".to_string(),
                 global: None,
@@ -777,7 +786,7 @@ fn analyze_music(
                 message: Some(error.to_string()),
             },
             None,
-        ),
+        )),
     }
 }
 
@@ -785,8 +794,10 @@ fn run_music_command(
     command: &ExternalCommandConfig,
     audio_path: &Path,
     config: &MusicAnalysisConfig,
+    cancellation: &RunCancellationToken,
 ) -> Result<(MusicAnalysisReport, PathBuf)> {
-    let output = Command::new(&command.command)
+    let mut analyzer = Command::new(&command.command);
+    analyzer
         .args(&command.args)
         .arg("--input")
         .arg(audio_path)
@@ -797,9 +808,8 @@ fn run_music_command(
         .arg("--min-bpm")
         .arg(config.min_bpm.to_string())
         .arg("--max-bpm")
-        .arg(config.max_bpm.to_string())
-        .stdin(Stdio::null())
-        .output()?;
+        .arg(config.max_bpm.to_string());
+    let output = run_output_with_cancel(analyzer, cancellation)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -838,13 +848,15 @@ impl AnalyzerMusicReport {
 fn resolve_song_source(
     source: &SongSourceSpec,
     work_dir: &Path,
+    cancellation: &RunCancellationToken,
 ) -> Result<(Option<String>, PathBuf)> {
-    resolve_song_source_to_dir(source, work_dir)
+    resolve_song_source_to_dir(source, work_dir, cancellation)
 }
 
 fn resolve_song_source_to_dir(
     source: &SongSourceSpec,
     work_dir: &Path,
+    cancellation: &RunCancellationToken,
 ) -> Result<(Option<String>, PathBuf)> {
     match source {
         SongSourceSpec::LocalFile { path } => {
@@ -854,9 +866,9 @@ fn resolve_song_source_to_dir(
         SongSourceSpec::YoutubeUrl { url } => {
             validate_youtube_url(url)?;
             let path = if work_dir.ends_with("imports") {
-                download_youtube_video_to_dir(url, work_dir, "song")
+                download_youtube_video_to_dir(url, work_dir, "song", cancellation)
             } else {
-                download_youtube_video(url, work_dir)
+                download_youtube_video(url, work_dir, cancellation)
             }?;
             Ok((Some(url.clone()), path))
         }

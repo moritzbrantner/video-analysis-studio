@@ -4,6 +4,7 @@ mod media;
 mod red_cars;
 mod report;
 mod run_manager;
+mod run_store;
 mod song;
 mod subtitles;
 mod system;
@@ -23,7 +24,8 @@ pub use error::{Result, StudioError};
 pub use red_cars::{run_video_red_cars_workflow, VideoRedCarsRunRequest};
 pub use report::*;
 pub use run_manager::{
-    RunEvent, RunId, RunManager, RunRecord, RunStatus, WorkflowKind, WorkflowProgress,
+    RunCancellationToken, RunEvent, RunId, RunManager, RunRecord, RunStatus, WorkflowKind,
+    WorkflowProgress,
 };
 pub use song::{
     import_song_catalog_items, run_song_analysis_workflow, MusicAnalysisConfig,

@@ -111,6 +111,10 @@ export async function mockWorkflowBackend(page: Page) {
       return json(route, { version: 1, port_kinds: [], nodes: [], compatibility: [] });
     }
 
+    if (request.method() === "GET" && path === "/api/runs") {
+      return json(route, Array.from(runs.values()).map((state) => state.record));
+    }
+
     if (request.method() === "POST" && path === "/api/youtube/collection-manifests") {
       const payload = parseJson(request.postData());
       const sourceUrl = String(payload?.source?.url ?? "https://www.youtube.com/playlist?list=demo");

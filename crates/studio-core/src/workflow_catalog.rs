@@ -613,7 +613,8 @@ fn object_properties_assignable(
         }
         if target_property.required {
             match source_additional_property_value {
-                Some(source_value) if workflow_types_assignable(source_value, &target_property.value) => {}
+                Some(source_value)
+                    if workflow_types_assignable(source_value, &target_property.value) => {}
                 _ => return false,
             }
         }

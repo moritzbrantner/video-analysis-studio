@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use studio_core::{
     check_system_dependencies, discover_youtube_collection_manifest, transcription_catalog,
     DataSourceDerivationInput, DataSourceRecord, DataSourceUpsert, RunEvent, RunId, RunManager,
@@ -175,6 +176,42 @@ pub async fn import_song_catalog_items(
     state
         .manager
         .import_song_catalog_items(request)
+        .map_err(error_string)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunWorkflowFilter {
+    YoutubeVideo,
+    VideoRedCars,
+    YoutubeCollection,
+    SongAnalysis,
+    SubtitleGeneration,
+}
+
+impl From<RunWorkflowFilter> for studio_core::WorkflowKind {
+    fn from(value: RunWorkflowFilter) -> Self {
+        match value {
+            RunWorkflowFilter::YoutubeVideo => Self::YoutubeVideo,
+            RunWorkflowFilter::VideoRedCars => Self::VideoRedCars,
+            RunWorkflowFilter::YoutubeCollection => Self::YoutubeCollection,
+            RunWorkflowFilter::SongAnalysis => Self::SongAnalysis,
+            RunWorkflowFilter::SubtitleGeneration => Self::SubtitleGeneration,
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn list_runs(
+    state: State<'_, StudioState>,
+    limit: Option<usize>,
+    workflow: Option<RunWorkflowFilter>,
+    status: Option<RunStatus>,
+) -> Result<Vec<RunRecord>, String> {
+    state
+        .manager
+        .list_runs(limit.unwrap_or(50), workflow.map(Into::into), status)
+        .await
         .map_err(error_string)
 }
 

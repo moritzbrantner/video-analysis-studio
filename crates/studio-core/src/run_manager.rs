@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -14,6 +15,7 @@ use crate::data_sources::{
 use crate::error::{Result, StudioError};
 use crate::red_cars::{run_video_red_cars_workflow, VideoRedCarsRunRequest};
 use crate::report::StudioReport;
+use crate::run_store::{RunListFilter, RunStore};
 use crate::song::{
     import_song_catalog_items, run_song_analysis_workflow, SongAnalysisRunRequest,
     SongCatalogImportRequest, SongCatalogImportResponse,
@@ -25,7 +27,7 @@ use crate::youtube::{
 };
 
 pub type RunId = Uuid;
-const MAX_RUN_EVENT_HISTORY: usize = 500;
+pub(crate) const MAX_RUN_EVENT_HISTORY: usize = 500;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -109,6 +111,40 @@ impl WorkflowProgress {
 }
 
 #[derive(Clone)]
+pub struct RunCancellationToken {
+    inner: Arc<AtomicBool>,
+}
+
+impl RunCancellationToken {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn cancel(&self) {
+        self.inner.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_canceled(&self) -> bool {
+        self.inner.load(Ordering::SeqCst)
+    }
+
+    pub fn check(&self) -> Result<()> {
+        if self.is_canceled() {
+            return Err(StudioError::Canceled("run canceled".to_string()));
+        }
+        Ok(())
+    }
+}
+
+impl Default for RunCancellationToken {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone)]
 pub struct RunManager {
     data_dir: PathBuf,
     inner: Arc<RunManagerInner>,
@@ -117,21 +153,26 @@ pub struct RunManager {
 struct RunManagerInner {
     runs: Mutex<HashMap<RunId, RunState>>,
     data_sources: Mutex<()>,
+    run_store: RunStore,
 }
 
 struct RunState {
     record: RunRecord,
     events: broadcast::Sender<RunEvent>,
     history: VecDeque<RunEvent>,
+    cancellation: RunCancellationToken,
 }
 
 impl RunManager {
     pub fn new(data_dir: PathBuf) -> Self {
+        let run_store = RunStore::new(&data_dir);
+        let runs = hydrate_run_states(&run_store);
         Self {
             data_dir,
             inner: Arc::new(RunManagerInner {
-                runs: Mutex::new(HashMap::new()),
+                runs: Mutex::new(runs),
                 data_sources: Mutex::new(()),
+                run_store,
             }),
         }
     }
@@ -155,6 +196,7 @@ impl RunManager {
             message: Some("queued".to_string()),
         };
         let (events, _) = broadcast::channel(128);
+        let cancellation = RunCancellationToken::new();
         {
             let mut runs = self.inner.runs.lock().await;
             runs.insert(
@@ -163,12 +205,15 @@ impl RunManager {
                     record: record.clone(),
                     events: events.clone(),
                     history: VecDeque::new(),
+                    cancellation: cancellation.clone(),
                 },
             );
         }
+        self.persist_run(&record);
         self.emit(run_id, RunStatus::Pending, "queued").await;
 
         let manager = self.clone();
+        let worker_cancellation = cancellation.clone();
         tokio::task::spawn_blocking(move || {
             let handle = tokio::runtime::Handle::current();
             handle.block_on(async {
@@ -190,7 +235,13 @@ impl RunManager {
                         .await;
                 });
             };
-            let result = run_youtube_video_workflow(request, work_dir, report_path, &mut progress);
+            let result = run_youtube_video_workflow(
+                request,
+                work_dir,
+                report_path,
+                worker_cancellation,
+                &mut progress,
+            );
             handle.block_on(async {
                 match result {
                     Ok(_) => {
@@ -205,6 +256,9 @@ impl RunManager {
                         manager
                             .emit(run_id, RunStatus::Succeeded, "analysis completed")
                             .await;
+                    }
+                    Err(StudioError::Canceled(message)) => {
+                        manager.mark_canceled_if_needed(run_id, message).await;
                     }
                     Err(error) => {
                         let message = error.to_string();
@@ -247,6 +301,7 @@ impl RunManager {
             message: Some("queued".to_string()),
         };
         let (events, _) = broadcast::channel(128);
+        let cancellation = RunCancellationToken::new();
         {
             let mut runs = self.inner.runs.lock().await;
             runs.insert(
@@ -255,12 +310,15 @@ impl RunManager {
                     record: record.clone(),
                     events: events.clone(),
                     history: VecDeque::new(),
+                    cancellation: cancellation.clone(),
                 },
             );
         }
+        self.persist_run(&record);
         self.emit(run_id, RunStatus::Pending, "queued").await;
 
         let manager = self.clone();
+        let worker_cancellation = cancellation.clone();
         tokio::task::spawn_blocking(move || {
             let handle = tokio::runtime::Handle::current();
             handle.block_on(async {
@@ -284,7 +342,13 @@ impl RunManager {
                         .await;
                 });
             };
-            let result = run_video_red_cars_workflow(request, work_dir, report_path, &mut progress);
+            let result = run_video_red_cars_workflow(
+                request,
+                work_dir,
+                report_path,
+                worker_cancellation,
+                &mut progress,
+            );
             handle.block_on(async {
                 match result {
                     Ok(_) => {
@@ -299,6 +363,9 @@ impl RunManager {
                         manager
                             .emit(run_id, RunStatus::Succeeded, &completed_message)
                             .await;
+                    }
+                    Err(StudioError::Canceled(message)) => {
+                        manager.mark_canceled_if_needed(run_id, message).await;
                     }
                     Err(error) => {
                         let message = error.to_string();
@@ -336,6 +403,7 @@ impl RunManager {
             message: Some("queued".to_string()),
         };
         let (events, _) = broadcast::channel(128);
+        let cancellation = RunCancellationToken::new();
         {
             let mut runs = self.inner.runs.lock().await;
             runs.insert(
@@ -344,12 +412,15 @@ impl RunManager {
                     record: record.clone(),
                     events: events.clone(),
                     history: VecDeque::new(),
+                    cancellation: cancellation.clone(),
                 },
             );
         }
+        self.persist_run(&record);
         self.emit(run_id, RunStatus::Pending, "queued").await;
 
         let manager = self.clone();
+        let worker_cancellation = cancellation.clone();
         tokio::task::spawn_blocking(move || {
             let handle = tokio::runtime::Handle::current();
             handle.block_on(async {
@@ -373,8 +444,13 @@ impl RunManager {
                         .await;
                 });
             };
-            let result =
-                run_youtube_collection_workflow(request, work_dir, report_path, &mut progress);
+            let result = run_youtube_collection_workflow(
+                request,
+                work_dir,
+                report_path,
+                worker_cancellation,
+                &mut progress,
+            );
             handle.block_on(async {
                 match result {
                     Ok(_) => {
@@ -393,6 +469,9 @@ impl RunManager {
                                 "collection analysis completed",
                             )
                             .await;
+                    }
+                    Err(StudioError::Canceled(message)) => {
+                        manager.mark_canceled_if_needed(run_id, message).await;
                     }
                     Err(error) => {
                         let message = error.to_string();
@@ -428,6 +507,7 @@ impl RunManager {
             message: Some("queued".to_string()),
         };
         let (events, _) = broadcast::channel(128);
+        let cancellation = RunCancellationToken::new();
         {
             let mut runs = self.inner.runs.lock().await;
             runs.insert(
@@ -436,12 +516,15 @@ impl RunManager {
                     record: record.clone(),
                     events: events.clone(),
                     history: VecDeque::new(),
+                    cancellation: cancellation.clone(),
                 },
             );
         }
+        self.persist_run(&record);
         self.emit(run_id, RunStatus::Pending, "queued").await;
 
         let manager = self.clone();
+        let worker_cancellation = cancellation.clone();
         tokio::task::spawn_blocking(move || {
             let handle = tokio::runtime::Handle::current();
             handle.block_on(async {
@@ -465,8 +548,14 @@ impl RunManager {
                         .await;
                 });
             };
-            let result =
-                run_song_analysis_workflow(request, data_dir, work_dir, report_path, &mut progress);
+            let result = run_song_analysis_workflow(
+                request,
+                data_dir,
+                work_dir,
+                report_path,
+                worker_cancellation,
+                &mut progress,
+            );
             handle.block_on(async {
                 match result {
                     Ok(_) => {
@@ -481,6 +570,9 @@ impl RunManager {
                         manager
                             .emit(run_id, RunStatus::Succeeded, "song analysis completed")
                             .await;
+                    }
+                    Err(StudioError::Canceled(message)) => {
+                        manager.mark_canceled_if_needed(run_id, message).await;
                     }
                     Err(error) => {
                         let message = error.to_string();
@@ -518,6 +610,7 @@ impl RunManager {
             message: Some("queued".to_string()),
         };
         let (events, _) = broadcast::channel(128);
+        let cancellation = RunCancellationToken::new();
         {
             let mut runs = self.inner.runs.lock().await;
             runs.insert(
@@ -526,12 +619,15 @@ impl RunManager {
                     record: record.clone(),
                     events: events.clone(),
                     history: VecDeque::new(),
+                    cancellation: cancellation.clone(),
                 },
             );
         }
+        self.persist_run(&record);
         self.emit(run_id, RunStatus::Pending, "queued").await;
 
         let manager = self.clone();
+        let worker_cancellation = cancellation.clone();
         tokio::task::spawn_blocking(move || {
             let handle = tokio::runtime::Handle::current();
             handle.block_on(async {
@@ -559,8 +655,13 @@ impl RunManager {
                         .await;
                 });
             };
-            let result =
-                run_subtitle_generation_workflow(request, work_dir, report_path, &mut progress);
+            let result = run_subtitle_generation_workflow(
+                request,
+                work_dir,
+                report_path,
+                worker_cancellation,
+                &mut progress,
+            );
             handle.block_on(async {
                 match result {
                     Ok(_) => {
@@ -579,6 +680,9 @@ impl RunManager {
                                 "subtitle generation completed",
                             )
                             .await;
+                    }
+                    Err(StudioError::Canceled(message)) => {
+                        manager.mark_canceled_if_needed(run_id, message).await;
                     }
                     Err(error) => {
                         let message = error.to_string();
@@ -608,6 +712,19 @@ impl RunManager {
             .ok_or_else(|| StudioError::RunNotFound(run_id.to_string()))
     }
 
+    pub async fn list_runs(
+        &self,
+        limit: usize,
+        workflow: Option<WorkflowKind>,
+        status: Option<RunStatus>,
+    ) -> Result<Vec<RunRecord>> {
+        self.inner.run_store.list_runs(RunListFilter {
+            limit: limit.clamp(1, 200),
+            workflow,
+            status,
+        })
+    }
+
     pub async fn get_report(&self, run_id: RunId) -> Result<StudioReport> {
         let run = self.get_run(run_id).await?;
         if !run.report_path.exists() {
@@ -628,6 +745,7 @@ impl RunManager {
         ) {
             return Ok(());
         }
+        state.cancellation.cancel();
         let now = Utc::now();
         state.record.status = RunStatus::Canceled;
         state.record.updated_at = now;
@@ -643,15 +761,17 @@ impl RunManager {
             progress: None,
         };
         push_event_history(&mut state.history, event.clone());
-        let _ = state.events.send(event);
+        let _ = state.events.send(event.clone());
+        let record = state.record.clone();
+        drop(runs);
+        self.persist_run(&record);
+        self.persist_event(&event);
         Ok(())
     }
 
     pub async fn list_events(&self, run_id: RunId) -> Result<Vec<RunEvent>> {
-        let runs = self.inner.runs.lock().await;
-        runs.get(&run_id)
-            .map(|state| state.history.iter().cloned().collect())
-            .ok_or_else(|| StudioError::RunNotFound(run_id.to_string()))
+        self.get_run(run_id).await?;
+        self.inner.run_store.list_events(run_id)
     }
 
     pub async fn subscribe_events(&self, run_id: RunId) -> Result<broadcast::Receiver<RunEvent>> {
@@ -730,6 +850,39 @@ impl RunManager {
         if finished {
             state.record.finished_at = Some(now);
         }
+        let record = state.record.clone();
+        drop(runs);
+        self.persist_run(&record);
+    }
+
+    async fn mark_canceled_if_needed(&self, run_id: RunId, message: String) {
+        let mut runs = self.inner.runs.lock().await;
+        let Some(state) = runs.get_mut(&run_id) else {
+            return;
+        };
+        if state.record.status == RunStatus::Canceled {
+            return;
+        }
+        let now = Utc::now();
+        state.record.status = RunStatus::Canceled;
+        state.record.updated_at = now;
+        state.record.finished_at = Some(now);
+        state.record.message = Some(message.clone());
+        let event = RunEvent {
+            run_id,
+            status: RunStatus::Canceled,
+            message,
+            timestamp: now,
+            node: None,
+            phase: None,
+            progress: None,
+        };
+        push_event_history(&mut state.history, event.clone());
+        let _ = state.events.send(event.clone());
+        let record = state.record.clone();
+        drop(runs);
+        self.persist_run(&record);
+        self.persist_event(&event);
     }
 
     async fn emit(&self, run_id: RunId, status: RunStatus, message: impl Into<String>) {
@@ -790,7 +943,9 @@ impl RunManager {
                 progress,
             };
             push_event_history(&mut state.history, event.clone());
-            let _ = state.events.send(event);
+            let _ = state.events.send(event.clone());
+            drop(runs);
+            self.persist_event(&event);
         }
     }
 
@@ -801,6 +956,57 @@ impl RunManager {
     fn save_data_source_catalog(&self, catalog: &DataSourceCatalog) -> Result<()> {
         catalog.save(&data_source_catalog_path(&self.data_dir))
     }
+
+    fn persist_run(&self, record: &RunRecord) {
+        if let Err(error) = self.inner.run_store.save_run(record) {
+            tracing::warn!(%error, run_id = %record.run_id, "failed to persist run record");
+        }
+    }
+
+    fn persist_event(&self, event: &RunEvent) {
+        if let Err(error) = self.inner.run_store.save_event(event) {
+            tracing::warn!(%error, run_id = %event.run_id, "failed to persist run event");
+        }
+    }
+}
+
+fn hydrate_run_states(run_store: &RunStore) -> HashMap<RunId, RunState> {
+    let Ok(states) = run_store.load_states() else {
+        return HashMap::new();
+    };
+    let mut runs = HashMap::new();
+    for (mut record, mut history) in states {
+        let (events, _) = broadcast::channel(128);
+        if matches!(record.status, RunStatus::Pending | RunStatus::Running) {
+            let now = Utc::now();
+            record.status = RunStatus::Failed;
+            record.updated_at = now;
+            record.finished_at = Some(now);
+            record.message = Some("interrupted by Studio restart".to_string());
+            let event = RunEvent {
+                run_id: record.run_id,
+                status: RunStatus::Failed,
+                message: "interrupted by Studio restart".to_string(),
+                timestamp: now,
+                node: None,
+                phase: None,
+                progress: None,
+            };
+            push_event_history(&mut history, event.clone());
+            let _ = run_store.save_run(&record);
+            let _ = run_store.save_event(&event);
+        }
+        runs.insert(
+            record.run_id,
+            RunState {
+                record,
+                events,
+                history,
+                cancellation: RunCancellationToken::new(),
+            },
+        );
+    }
+    runs
 }
 
 fn push_event_history(history: &mut VecDeque<RunEvent>, event: RunEvent) {
@@ -866,6 +1072,57 @@ mod tests {
         assert!(events
             .iter()
             .any(|event| event.status == RunStatus::Canceled && event.message == "canceled"));
+    }
+
+    #[tokio::test]
+    async fn run_records_and_events_survive_manager_restart() {
+        let dir = tempdir().unwrap();
+        let manager = RunManager::new(dir.path().to_path_buf());
+        let run = manager
+            .start_youtube_video(YoutubeRunRequest::local_file(
+                dir.path().join("missing.mp4"),
+            ))
+            .await
+            .unwrap();
+        manager.cancel_run(run.run_id).await.unwrap();
+
+        let restarted = RunManager::new(dir.path().to_path_buf());
+        let record = restarted.get_run(run.run_id).await.unwrap();
+        assert_eq!(record.status, RunStatus::Canceled);
+        let events = restarted.list_events(run.run_id).await.unwrap();
+        assert!(events
+            .iter()
+            .any(|event| event.status == RunStatus::Canceled && event.message == "canceled"));
+    }
+
+    #[tokio::test]
+    async fn running_run_is_marked_failed_after_restart() {
+        let dir = tempdir().unwrap();
+        let run_id = Uuid::new_v4();
+        let now = Utc::now();
+        let store = RunStore::new(dir.path());
+        store
+            .save_run(&RunRecord {
+                run_id,
+                workflow: WorkflowKind::YoutubeVideo,
+                status: RunStatus::Running,
+                work_dir: dir.path().join("run"),
+                report_path: dir.path().join("run").join("analysis.json"),
+                created_at: now,
+                updated_at: now,
+                started_at: Some(now),
+                finished_at: None,
+                message: Some("running".to_string()),
+            })
+            .unwrap();
+
+        let restarted = RunManager::new(dir.path().to_path_buf());
+        let record = restarted.get_run(run_id).await.unwrap();
+        assert_eq!(record.status, RunStatus::Failed);
+        assert_eq!(
+            record.message.as_deref(),
+            Some("interrupted by Studio restart")
+        );
     }
 
     #[tokio::test]
