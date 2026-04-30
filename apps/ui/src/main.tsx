@@ -30,6 +30,7 @@ import {
   CliRunPanel,
   CollectionManifestPreviewPanel,
   filterYoutubeCollectionManifest,
+  type ImageSimilarityReport,
   JsonReportLoader,
   type SongAnalysisRunRequest,
   type CliRun,
@@ -78,6 +79,7 @@ import {
   DataSourceRecord,
   DataSourceUpsert,
   getWorkflowClient,
+  isImageSimilarityReport,
   isSongAnalysisReport,
   isSubtitleGenerationReport,
   isYoutubeCollectionReport,
@@ -133,7 +135,13 @@ import {
 import { workflowGraphHasCycle, workflowGraphWouldCreateCycle } from "./workflowGraph";
 import { appLocationFromPath, pathForAppPage, type AppPage } from "./app/routing";
 
-type WorkflowKindId = "youtube-video" | "video-red-cars" | "youtube-collection" | "song-analysis" | "subtitle-generation";
+type WorkflowKindId =
+  | "youtube-video"
+  | "video-red-cars"
+  | "youtube-collection"
+  | "song-analysis"
+  | "subtitle-generation"
+  | "image-similarity";
 type SourceMode = "url" | "file" | "collection";
 type ViewMode = "home" | ReportDashboardMode;
 type JsonSchemaScalar = "number" | "boolean" | "null" | "any";
@@ -195,6 +203,9 @@ interface WorkflowRunForm {
   songMinBpm: number;
   songMaxBpm: number;
   musicCommand: string;
+  imageDataUrl: string;
+  imageSourceName: string;
+  imageDataSourceId: string;
   workflowInputs: Record<string, string>;
 }
 
@@ -207,6 +218,13 @@ interface CollectionManifestPreviewState {
 }
 
 type DataSourceEntry = DataSourceRecord;
+
+interface ImageSimilarityRunRequest {
+  source: { kind: "pasted_image"; name: string; data_url: string };
+  data_source_id: string;
+  top_k: number;
+  work_dir?: string | null;
+}
 
 const workflowKinds: Array<{
   id: WorkflowKindId;
@@ -248,6 +266,13 @@ const workflowKinds: Array<{
     name: "Subtitle Generation",
     defaultWorkflowName: "Subtitle Generation Workflow",
     packageName: "studio-core",
+    status: "Ready",
+  },
+  {
+    id: "image-similarity",
+    name: "Image Similarity",
+    defaultWorkflowName: "Image Similarity Workflow",
+    packageName: "@video-analysis-studio/ui",
     status: "Ready",
   },
 ];
@@ -296,6 +321,9 @@ const initialForm: WorkflowRunForm = {
   songMinBpm: 60,
   songMaxBpm: 200,
   musicCommand: "",
+  imageDataUrl: "",
+  imageSourceName: "",
+  imageDataSourceId: "",
   workflowInputs: {},
 };
 
@@ -394,6 +422,7 @@ function App() {
   const activeReport = hasLoadedReport ? report : null;
   const songReport = activeReport && isSongAnalysisReport(activeReport) ? activeReport : null;
   const subtitleReport = activeReport && isSubtitleGenerationReport(activeReport) ? activeReport : null;
+  const imageSimilarityReport = activeReport && isImageSimilarityReport(activeReport) ? activeReport : null;
   const collectionReport = activeReport && isYoutubeCollectionReport(activeReport) ? activeReport : null;
   const videoReport = activeReport && isYoutubeVideoReport(activeReport)
     ? activeReport
@@ -404,6 +433,8 @@ function App() {
       ? songReport.identification.top_match?.title ?? songReport.source.local_media
     : subtitleReport
       ? subtitleReport.subtitle.path
+    : imageSimilarityReport
+      ? imageSimilarityReport.query.name
       : videoReport?.source.local_video ?? "No report loaded";
   const cliRun = lastRun;
   const analysisViewOptions: Array<[ViewMode, string]> = hasLoadedReport
@@ -882,6 +913,8 @@ function App() {
             ? formFromSubtitleGenerationRunRequest(run.request, transcriptionCatalog)
           : isSongAnalysisRunRequest(run.request)
             ? formFromSongAnalysisRunRequest(run.request, transcriptionCatalog)
+          : isImageSimilarityRunRequest(run.request)
+            ? formFromImageSimilarityRunRequest(run.request)
             : formFromYoutubeRunRequest(run.request, transcriptionCatalog),
       );
       setRunStatus(run.status);
@@ -1034,6 +1067,8 @@ function App() {
             ? buildSubtitleGenerationRunRequest(form, activeWorkflowInputModel)
           : selectedWorkflowKind === "song-analysis"
             ? buildSongAnalysisRunRequest(form, activeWorkflowInputModel)
+          : selectedWorkflowKind === "image-similarity"
+            ? buildImageSimilarityRunRequest(form)
           : buildYoutubeRunRequest(form, activeWorkflowInputModel)),
     );
     const nextReport = await cache.fetchQuery(
@@ -1076,8 +1111,10 @@ function App() {
           ? buildSubtitleGenerationRunRequest(form, activeWorkflowInputModel)
         : workflowKind === "song-analysis"
           ? buildSongAnalysisRunRequest(form, activeWorkflowInputModel)
+        : workflowKind === "image-similarity"
+          ? buildImageSimilarityRunRequest(form)
         : buildYoutubeRunRequest(form, activeWorkflowInputModel);
-    const localRun = createSavedWorkflowRun(activeWorkflow, request, workflowInputSummaryFromForm(form, activeWorkflowInputModel));
+    const localRun = createSavedWorkflowRun(activeWorkflow, request, workflowInputSummaryFromForm(form, activeWorkflowInputModel, workflowKind));
     addWorkflowRun(localRun);
     setLastRun({
       command: "studio-api",
@@ -1093,6 +1130,43 @@ function App() {
     setActiveRunRecord(null);
 
     try {
+      if (workflowKind === "image-similarity") {
+        const report = await runImageSimilarityWorkflow(form, dataSources);
+        const now = new Date().toISOString();
+        setReport(report);
+        setHasLoadedReport(true);
+        setActiveReportRunId(null);
+        setDashboardLayout(normalizeWorkflowResultPanel(activeWorkflow.resultPanel, activeWorkflow.kind, activeWorkflow.name).layout);
+        setRunStatus("succeeded");
+        updateWorkflowRun(localRun.id, (run) => ({
+          ...run,
+          status: "succeeded",
+          updatedAt: now,
+          reportPath: "browser:image-similarity",
+          message: "image similarity completed",
+        }));
+        setRunEvents((events) =>
+          appendRunEvent(events, {
+            run_id: localRun.id,
+            status: "succeeded",
+            message: "image similarity completed",
+            timestamp: now,
+            node: "image-similarity",
+            progress: 1,
+          }),
+        );
+        setLastRun({
+          command: "studio-ui",
+          args: [activeWorkflow.name, workflowKind],
+          status: "succeeded",
+          exit_code: 0,
+          output_files: ["browser:image-similarity"],
+          message: "image similarity completed",
+        });
+        navigateToPage("analysis");
+        setViewMode("overview");
+        return;
+      }
       const client = getWorkflowClient();
       const started =
         workflowKind === "youtube-collection"
@@ -1611,6 +1685,7 @@ function App() {
                 activeRunRecord={activeRunRecord}
                 runEvents={runEvents}
                 collectionManifestPreview={collectionManifestPreview}
+                dataSources={dataSources}
                 workflowLibrary={workflowLibrary}
                 activeWorkflow={activeWorkflow}
                 activeWorkflowInputModel={activeWorkflowInputModel}
@@ -1714,6 +1789,7 @@ function RunWorkspace({
   activeRunRecord,
   runEvents,
   collectionManifestPreview,
+  dataSources,
   workflowLibrary,
   activeWorkflow,
   activeWorkflowInputModel,
@@ -1742,6 +1818,7 @@ function RunWorkspace({
   activeRunRecord: RunRecord | null;
   runEvents: RunEvent[];
   collectionManifestPreview: CollectionManifestPreviewState;
+  dataSources: DataSourceRecord[];
   workflowLibrary: SavedWorkflowLibrary;
   activeWorkflow: SavedWorkflow;
   activeWorkflowInputModel: WorkflowRunInputModel;
@@ -1784,6 +1861,7 @@ function RunWorkspace({
           form={form}
           inputModel={activeWorkflowInputModel}
           transcriptionCatalog={transcriptionCatalog}
+          dataSources={dataSources}
           selectedWorkflowKind={selectedWorkflowKind}
           onChange={onFormChange}
           onFocusWorkflowInput={onFocusWorkflowInput}
@@ -2143,6 +2221,7 @@ type PortPresentationKind =
   | "youtube_url"
   | "youtube_collection_url"
   | "video_file"
+  | "image_file"
   | "audio_file"
   | "media_file"
   | "transcript"
@@ -2341,7 +2420,7 @@ interface SavedWorkflowRun {
   updatedAt: string;
   status: RunStatus;
   inputSummary: string;
-  request: YoutubeRunRequest | VideoRedCarsRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest;
+  request: YoutubeRunRequest | VideoRedCarsRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest | ImageSimilarityRunRequest;
   backendRunId?: string;
   reportPath?: string;
   message?: string | null;
@@ -2514,6 +2593,7 @@ const portTypes: PortType[] = [
   "youtube_url",
   "youtube_collection_url",
   "video_file",
+  "image_file",
   "audio_file",
   "media_file",
   "transcript",
@@ -2558,6 +2638,7 @@ const defaultPortTypeColors: PortTypeColors = {
   youtube_url: "#0ea5e9",
   youtube_collection_url: "#0284c7",
   video_file: "#f59e0b",
+  image_file: "#16a34a",
   audio_file: "#06b6d4",
   media_file: "#0f766e",
   transcript: "#4f46e5",
@@ -2598,6 +2679,7 @@ const dataSourceOutputTypes: DataSourceType[] = portTypes.filter(
 const streamBridgePortDescriptors: Array<{ id: string; label: string; type: PortType }> = [
   { id: "collection_item", label: "collection items", type: "collection_item" },
   { id: "video_file", label: "video files", type: "video_file" },
+  { id: "image_file", label: "image files", type: "image_file" },
   { id: "video_frame", label: "video frames", type: "video_frame" },
   { id: "audio_frame", label: "audio frames", type: "audio_frame" },
   { id: "song_fingerprint", label: "fingerprints", type: "song_fingerprint" },
@@ -2685,6 +2767,42 @@ const initialWorkflowNodes: WorkflowNodeModel[] = [
         runtimeValidation: "external_input",
       }),
     ],
+  }),
+  workflowNode("image-source", 0, 760, {
+    title: "Image Source",
+    packageName: "@video-analysis-studio/ui",
+    description: "Accepts a pasted image, pasted image URL, or uploaded image file.",
+    tone: "sky",
+    inputs: [],
+    outputs: [
+      port("image", "query image", "image_file", {
+        exposableInput: true,
+        inputSurface: "file",
+        runtimeValidation: "external_input",
+      }),
+    ],
+    tags: ["image", "input", "upload"],
+  }),
+  workflowNode("image-catalog-source", 0, 980, {
+    title: "Image Data Source",
+    packageName: "@video-analysis-studio/ui",
+    description: "Reads image URLs or data URLs from a workspace data source.",
+    tone: "slate",
+    inputs: [],
+    outputs: [port("images", "image catalog", "object_value")],
+    tags: ["image", "data source", "catalog"],
+  }),
+  workflowNode("image-similarity", 360, 860, {
+    title: "Image Similarity",
+    packageName: "Canvas feature matcher",
+    description: "Compares the query image against a data source and returns the 3 most similar images.",
+    tone: "emerald",
+    inputs: [
+      port("query", "query image", "image_file"),
+      port("images", "image catalog", "object_value"),
+    ],
+    outputs: [port("matches", "top 3 matches", "json_report")],
+    tags: ["image", "similarity", "matching"],
   }),
   workflowNode("vite-api", 360, 190, {
     title: "Local Analysis API",
@@ -3527,6 +3645,9 @@ const initialWorkflowEdges: Edge[] = [
   workflowEdge("source", "file", "song-fingerprinter", "file"),
   workflowEdge("source", "file", "song-music-analyzer", "file"),
   workflowEdge("source", "file", "subtitle-writer", "file"),
+  workflowEdge("image-source", "image", "image-similarity", "query"),
+  workflowEdge("image-catalog-source", "images", "image-similarity", "images"),
+  workflowEdge("image-similarity", "matches", "dashboard", "report"),
   workflowEdge("vite-api", "args", "song-catalog-matcher", "config"),
   workflowEdge("vite-api", "args", "song-music-analyzer", "config"),
   workflowEdge("vite-api", "args", "collection-download-loop", "config"),
@@ -8573,6 +8694,8 @@ function workflowReportKind(kind: WorkflowKindId): ReportKind {
       return "song-analysis";
     case "subtitle-generation":
       return "subtitle-generation";
+    case "image-similarity":
+      return "youtube-video";
     case "video-red-cars":
     case "youtube-video":
       return "youtube-video";
@@ -9391,7 +9514,7 @@ function persistSavedWorkflowRuns(runs: SavedWorkflowRun[]) {
 
 function createSavedWorkflowRun(
   workflow: SavedWorkflow,
-  request: YoutubeRunRequest | VideoRedCarsRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest,
+  request: YoutubeRunRequest | VideoRedCarsRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest | ImageSimilarityRunRequest,
   inputSummary: string,
 ): SavedWorkflowRun {
   const createdAt = new Date().toISOString();
@@ -9477,7 +9600,7 @@ function workflowKindIdFromRunRecord(record: RunRecord): WorkflowKindId {
 function placeholderRunRequest(
   kind: WorkflowKindId,
   workDir: string,
-): YoutubeRunRequest | VideoRedCarsRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest {
+): YoutubeRunRequest | VideoRedCarsRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest | ImageSimilarityRunRequest {
   const source = { kind: "local_file" as const, path: "" };
   switch (kind) {
     case "video-red-cars":
@@ -9517,6 +9640,13 @@ function placeholderRunRequest(
         transcription: { enabled: true },
         overwrite: true,
       } as SubtitleGenerationRunRequest;
+    case "image-similarity":
+      return {
+        source: { kind: "pasted_image", name: "query image", data_url: "" },
+        data_source_id: "",
+        top_k: 3,
+        work_dir: workDir,
+      };
     case "youtube-video":
     default:
       return {
@@ -9596,6 +9726,8 @@ function portTypeToDataSourceSchema(portType: DataSourceType): DataSourceSchema 
       return { type: "binary", mediaType: "audio/wav", portType, semantic: "audio_wav" };
     case "video_file":
       return { type: "binary", mediaType: "video/*", portType, semantic: "video_file" };
+    case "image_file":
+      return { type: "binary", mediaType: "image/*", portType, semantic: "image_file" };
     case "media_file":
       return { type: "binary", mediaType: "application/octet-stream", portType, semantic: "media_file" };
     case "number_value":
@@ -9639,6 +9771,8 @@ function workflowTypeForPortType(type: PortType): WorkflowTypeSpec {
       return { type: "string", semantic: "youtube_collection_url" };
     case "video_file":
       return { type: "binary", media_type: "video/*", semantic: "video_file" };
+    case "image_file":
+      return { type: "binary", media_type: "image/*", semantic: "image_file" };
     case "audio_file":
       return { type: "binary", media_type: "audio/*", semantic: "audio_file" };
     case "media_file":
@@ -9718,6 +9852,8 @@ function workflowSemanticKindToPortType(semantic: WorkflowSemanticKind | undefin
       return "youtube_collection_url";
     case "video_file":
       return "video_file";
+    case "image_file":
+      return "image_file";
     case "audio_file":
       return "audio_file";
     case "audio_wav":
@@ -10295,7 +10431,8 @@ function isSavedWorkflowRun(value: unknown): value is SavedWorkflowRun {
       isVideoRedCarsRunRequest(value.request) ||
       isYoutubeCollectionRunRequest(value.request) ||
       isSongAnalysisRunRequest(value.request) ||
-      isSubtitleGenerationRunRequest(value.request)) &&
+      isSubtitleGenerationRunRequest(value.request) ||
+      isImageSimilarityRunRequest(value.request)) &&
     backendRunIdValid &&
     reportPathValid &&
     messageValid
@@ -10728,6 +10865,19 @@ function isSubtitleGenerationRunRequest(value: unknown): value is SubtitleGenera
     (value.work_dir === undefined || value.work_dir === null || typeof value.work_dir === "string") &&
     typeof value.transcription.enabled === "boolean" &&
     typeof value.overwrite === "boolean"
+  );
+}
+
+function isImageSimilarityRunRequest(value: unknown): value is ImageSimilarityRunRequest {
+  return (
+    isRecord(value) &&
+    isRecord(value.source) &&
+    value.source.kind === "pasted_image" &&
+    typeof value.source.data_url === "string" &&
+    typeof value.source.name === "string" &&
+    typeof value.data_source_id === "string" &&
+    typeof value.top_k === "number" &&
+    (value.work_dir === undefined || value.work_dir === null || typeof value.work_dir === "string")
   );
 }
 
@@ -11768,6 +11918,7 @@ function rustPortKindToPortType(kind: RustPortSpec["kind"]): PortType | null {
     youtube_url: "youtube_url",
     youtube_collection_url: "youtube_collection_url",
     video_file: "video_file",
+    image_file: "image_file",
     audio_file: "audio_file",
     media_file: "media_file",
     transcript: "transcript",
@@ -12431,10 +12582,147 @@ function effectiveSourceMode(form: WorkflowRunForm, inputModel?: WorkflowRunInpu
   return sourceModes.includes(form.sourceMode) ? form.sourceMode : sourceModes[0] ?? form.sourceMode;
 }
 
+function ImageSimilarityRunControls({
+  form,
+  dataSources,
+  onChange,
+  onRun,
+  isRunning,
+  runDisabled,
+  validationMessage,
+}: {
+  form: WorkflowRunForm;
+  dataSources: DataSourceRecord[];
+  onChange: (form: WorkflowRunForm) => void;
+  onRun: () => void;
+  isRunning: boolean;
+  runDisabled: boolean;
+  validationMessage: string | null;
+}) {
+  const [pasteMessage, setPasteMessage] = useState<string | null>(null);
+  const selectedSourceId = form.imageDataSourceId || dataSources[0]?.id || "";
+  const selectedSource = dataSources.find((source) => source.id === selectedSourceId);
+  const candidateCount = selectedSource ? imageCandidatesFromDataSource(selectedSource).length : 0;
+  const disabled = runDisabled || dataSources.length === 0;
+
+  const updateImage = (dataUrl: string, name: string) => {
+    onChange({ ...form, imageDataUrl: dataUrl, imageSourceName: name });
+    setPasteMessage(null);
+  };
+  const readFile = (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      setPasteMessage("Choose an image file.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => updateImage(String(reader.result ?? ""), file.name || "uploaded image");
+    reader.onerror = () => setPasteMessage("Could not read that image.");
+    reader.readAsDataURL(file);
+  };
+
+  return (
+    <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
+      <div className="border-b border-zinc-200 px-4 py-3">
+        <h2 className="text-sm font-semibold text-zinc-950">Run Input</h2>
+      </div>
+      <div className="space-y-4 p-4">
+        <Field label="Image data source">
+          <select
+            className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+            value={selectedSourceId}
+            onChange={(event) => onChange({ ...form, imageDataSourceId: event.target.value })}
+          >
+            {dataSources.length === 0 ? (
+              <option value="">No image data sources</option>
+            ) : (
+              dataSources.map((source) => (
+                <option key={source.id} value={source.id}>
+                  {source.name} ({imageCandidatesFromDataSource(source).length})
+                </option>
+              ))
+            )}
+          </select>
+        </Field>
+
+        <div
+          className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 p-4"
+          onPaste={(event) => {
+            const file = Array.from(event.clipboardData.files).find((item) => item.type.startsWith("image/"));
+            if (file) {
+              event.preventDefault();
+              readFile(file);
+              return;
+            }
+            const pasted = event.clipboardData.getData("text/plain").trim();
+            if (pasted.startsWith("data:image/") || /^https?:\/\//i.test(pasted)) {
+              event.preventDefault();
+              updateImage(pasted, "pasted image");
+            }
+          }}
+        >
+          <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-center">
+            <div>
+              <div className="text-sm font-medium text-zinc-950">Query image</div>
+              <div className="mt-1 text-xs text-zinc-500">Paste an image, paste an image URL/data URL, or upload a file.</div>
+            </div>
+            <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-800 shadow-sm hover:bg-zinc-50">
+              <UploadIcon className="h-4 w-4" />
+              Upload
+              <input
+                type="file"
+                accept="image/*"
+                className="sr-only"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) {
+                    readFile(file);
+                  }
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
+          </div>
+          {form.imageDataUrl ? (
+            <div className="mt-4 overflow-hidden rounded-lg border border-zinc-200 bg-white">
+              <img src={form.imageDataUrl} alt={form.imageSourceName || "Query image"} className="max-h-56 w-full object-contain" />
+            </div>
+          ) : null}
+          {pasteMessage ? <p className="mt-2 text-xs text-rose-600">{pasteMessage}</p> : null}
+        </div>
+
+        <div className="rounded-lg bg-zinc-950 p-3">
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-zinc-100">
+            {["studio-ui", "image-similarity", "--data-source", selectedSourceId || "none", "--top-k", "3"].map(shellQuote).join(" ")}
+          </pre>
+        </div>
+
+        {validationMessage || dataSources.length === 0 ? (
+          <p className="text-sm text-rose-600">
+            {validationMessage ?? "Create a JSON or TXT data source with image URLs or data URLs."}
+          </p>
+        ) : null}
+        <button
+          type="button"
+          className={classNames(
+            "inline-flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-white focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-2",
+            disabled ? "cursor-not-allowed bg-zinc-400" : "bg-zinc-950 hover:bg-zinc-800",
+          )}
+          onClick={onRun}
+          disabled={disabled}
+        >
+          {isRunning ? <SpinnerIcon className="h-4 w-4" /> : <PlayIcon className="h-4 w-4" />}
+          {isRunning ? "Checking" : `Find 3 similar images${candidateCount ? ` from ${candidateCount}` : ""}`}
+        </button>
+      </div>
+    </section>
+  );
+}
+
 function WorkflowRunControls({
   form,
   inputModel,
   transcriptionCatalog,
+  dataSources,
   selectedWorkflowKind,
   onChange,
   onFocusWorkflowInput,
@@ -12451,6 +12739,7 @@ function WorkflowRunControls({
   form: WorkflowRunForm;
   inputModel: WorkflowRunInputModel;
   transcriptionCatalog: TranscriptionCatalog | null;
+  dataSources: DataSourceRecord[];
   selectedWorkflowKind: WorkflowKindId;
   onChange: (form: WorkflowRunForm) => void;
   onFocusWorkflowInput: (input: WorkflowRunInput) => void;
@@ -12494,6 +12783,21 @@ function WorkflowRunControls({
   const isRedCars = selectedWorkflowKind === "video-red-cars";
   const usesNativeWhisperCpp = form.transcriptionEngine === "whisper_cpp";
   const transcriptionModels = transcriptionCatalog?.whisper_cpp.models ?? [{ model: form.transcriptionModel, cached: false }];
+  const imageDataSources = useMemo(() => dataSources.filter((source) => imageCandidatesFromDataSource(source).length > 0), [dataSources]);
+
+  if (selectedWorkflowKind === "image-similarity") {
+    return (
+      <ImageSimilarityRunControls
+        form={form}
+        dataSources={imageDataSources}
+        onChange={onChange}
+        onRun={onRun}
+        isRunning={isRunning}
+        runDisabled={runDisabled}
+        validationMessage={validationMessage}
+      />
+    );
+  }
 
   return (
     <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
@@ -13377,6 +13681,9 @@ function buildCommand(
   inputModel?: WorkflowRunInputModel,
   workflowKind: WorkflowKindId = "youtube-video",
 ): string[] {
+  if (workflowKind === "image-similarity") {
+    return ["studio-ui", "image-similarity", "--data-source", form.imageDataSourceId || "auto", "--top-k", "3"];
+  }
   if (workflowKind === "youtube-collection" || form.sourceMode === "collection") {
     const command = [
       "studio-api",
@@ -13648,6 +13955,216 @@ function buildSubtitleGenerationRunRequest(form: WorkflowRunForm, inputModel?: W
   };
 }
 
+function buildImageSimilarityRunRequest(form: WorkflowRunForm): ImageSimilarityRunRequest {
+  return {
+    source: {
+      kind: "pasted_image",
+      name: form.imageSourceName || "query image",
+      data_url: form.imageDataUrl,
+    },
+    data_source_id: form.imageDataSourceId,
+    top_k: 3,
+    work_dir: form.workDir.trim() || null,
+  };
+}
+
+async function runImageSimilarityWorkflow(
+  form: WorkflowRunForm,
+  dataSources: DataSourceRecord[],
+): Promise<ImageSimilarityReport> {
+  const imageSources = dataSources.filter((source) => imageCandidatesFromDataSource(source).length > 0);
+  const source =
+    imageSources.find((candidate) => candidate.id === form.imageDataSourceId) ??
+    imageSources[0];
+  if (!source) {
+    throw new Error("Create a JSON data source with image URLs or data URLs before running image similarity.");
+  }
+  const candidates = imageCandidatesFromDataSource(source);
+  const query = await loadImageElement(form.imageDataUrl);
+  const queryFeature = imageFeatureFromElement(query.image);
+  const scored = (
+    await Promise.all(
+      candidates.map(async (candidate) => {
+        try {
+          const image = await loadImageElement(candidate.imageUrl);
+          const feature = imageFeatureFromElement(image.image);
+          return {
+            candidate,
+            score: imageFeatureSimilarity(queryFeature, feature),
+          };
+        } catch {
+          return null;
+        }
+      }),
+    )
+  )
+    .filter((item): item is { candidate: ImageCandidate; score: number } => Boolean(item))
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 3);
+
+  if (scored.length === 0) {
+    throw new Error("No images in the selected data source could be loaded for comparison.");
+  }
+
+  return {
+    workflow: "image-similarity",
+    source: {
+      data_source_id: source.id,
+      data_source_name: source.name,
+      candidates: candidates.length,
+    },
+    query: {
+      name: form.imageSourceName || "query image",
+      width: query.width,
+      height: query.height,
+      data_url: form.imageDataUrl,
+    },
+    matches: scored.map(({ candidate, score }, index) => ({
+      rank: index + 1,
+      id: candidate.id,
+      title: candidate.title,
+      image_url: candidate.imageUrl,
+      score,
+      source_id: candidate.sourceId,
+      source_name: candidate.sourceName,
+    })),
+  };
+}
+
+interface ImageCandidate {
+  id: string;
+  title: string;
+  imageUrl: string;
+  sourceId: string;
+  sourceName: string;
+}
+
+function imageCandidatesFromDataSource(source: DataSourceRecord): ImageCandidate[] {
+  const values: unknown[] = [];
+  const body = source.body.trim();
+  if (body) {
+    if (source.kind === "txt") {
+      values.push(...body.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
+    } else {
+      try {
+        const parsed = JSON.parse(body) as unknown;
+        if (Array.isArray(parsed)) {
+          values.push(...parsed);
+        } else if (isRecord(parsed) && Array.isArray(parsed.images)) {
+          values.push(...parsed.images);
+        } else {
+          values.push(parsed);
+        }
+      } catch {
+        values.push(...body.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
+      }
+    }
+  }
+  if (source.location.trim() && looksLikeImageReference(source.location.trim())) {
+    values.push(source.location.trim());
+  }
+  return values.flatMap((value, index) => imageCandidateFromValue(source, value, index));
+}
+
+function imageCandidateFromValue(source: DataSourceRecord, value: unknown, index: number): ImageCandidate[] {
+  if (typeof value === "string") {
+    const imageUrl = value.trim();
+    return looksLikeImageReference(imageUrl)
+      ? [{
+          id: `${source.id}-${index + 1}`,
+          title: imageTitleFromUrl(imageUrl, `Image ${index + 1}`),
+          imageUrl,
+          sourceId: source.id,
+          sourceName: source.name,
+        }]
+      : [];
+  }
+  if (!isRecord(value)) {
+    return [];
+  }
+  const imageUrl = firstString(value, ["image_url", "imageUrl", "data_url", "dataUrl", "url", "src", "image", "path"]);
+  if (!imageUrl || !looksLikeImageReference(imageUrl)) {
+    return [];
+  }
+  return [{
+    id: firstString(value, ["id", "key", "name"]) ?? `${source.id}-${index + 1}`,
+    title: firstString(value, ["title", "label", "name"]) ?? imageTitleFromUrl(imageUrl, `Image ${index + 1}`),
+    imageUrl,
+    sourceId: source.id,
+    sourceName: source.name,
+  }];
+}
+
+function firstString(record: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function looksLikeImageReference(value: string): boolean {
+  return (
+    value.startsWith("data:image/") ||
+    /^https?:\/\//i.test(value) ||
+    /\.(png|jpe?g|webp|gif|bmp|avif|svg)(\?.*)?$/i.test(value)
+  );
+}
+
+function imageTitleFromUrl(value: string, fallback: string): string {
+  if (value.startsWith("data:image/")) {
+    return fallback;
+  }
+  const last = value.split(/[/?#]/).filter(Boolean).pop();
+  return last ? decodeURIComponent(last).replace(/\.[^.]+$/, "") : fallback;
+}
+
+function loadImageElement(src: string): Promise<{ image: HTMLImageElement; width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    if (!src.startsWith("data:")) {
+      image.crossOrigin = "anonymous";
+    }
+    image.onload = () => resolve({ image, width: image.naturalWidth, height: image.naturalHeight });
+    image.onerror = () => reject(new Error("Image failed to load."));
+    image.src = src;
+  });
+}
+
+function imageFeatureFromElement(image: HTMLImageElement): number[] {
+  const size = 16;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    throw new Error("Canvas is unavailable.");
+  }
+  context.drawImage(image, 0, 0, size, size);
+  const data = context.getImageData(0, 0, size, size).data;
+  const feature: number[] = [];
+  for (let index = 0; index < data.length; index += 4) {
+    feature.push(data[index] / 255, data[index + 1] / 255, data[index + 2] / 255);
+  }
+  return feature;
+}
+
+function imageFeatureSimilarity(left: number[], right: number[]): number {
+  const length = Math.min(left.length, right.length);
+  if (length === 0) {
+    return 0;
+  }
+  let sum = 0;
+  for (let index = 0; index < length; index += 1) {
+    const delta = left[index] - right[index];
+    sum += delta * delta;
+  }
+  const rmse = Math.sqrt(sum / length);
+  return Math.max(0, Math.min(1, 1 - rmse));
+}
+
 function formFromYoutubeRunRequest(request: YoutubeRunRequest, catalog?: TranscriptionCatalog | null): WorkflowRunForm {
   const transcriptionEngine = normalizedTranscriptionEngine(request.transcription.engine, request.transcription.command);
   return {
@@ -13771,7 +14288,26 @@ function formFromSubtitleGenerationRunRequest(
   };
 }
 
-function workflowInputSummaryFromForm(form: WorkflowRunForm, inputModel?: WorkflowRunInputModel): string {
+function formFromImageSimilarityRunRequest(request: ImageSimilarityRunRequest): WorkflowRunForm {
+  return {
+    ...initialForm,
+    sourceMode: "file",
+    workDir: request.work_dir ?? "workflow-output/image-similarity",
+    output: "workflow-output/image-similarity/image-similarity.json",
+    imageDataUrl: request.source.data_url,
+    imageSourceName: request.source.name,
+    imageDataSourceId: request.data_source_id,
+  };
+}
+
+function workflowInputSummaryFromForm(
+  form: WorkflowRunForm,
+  inputModel?: WorkflowRunInputModel,
+  workflowKind?: WorkflowKindId,
+): string {
+  if (workflowKind === "image-similarity" && form.imageDataUrl.trim()) {
+    return form.imageSourceName || "Query image";
+  }
   if (form.sourceMode === "collection") {
     return form.url.trim() || "YouTube collection";
   }
@@ -13982,7 +14518,7 @@ function workflowRunToCliRun(run: SavedWorkflowRun): CliRun {
 }
 
 function reportPathForRequest(
-  request: YoutubeRunRequest | VideoRedCarsRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest,
+  request: YoutubeRunRequest | VideoRedCarsRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest | ImageSimilarityRunRequest,
 ): string {
   if (isYoutubeCollectionRunRequest(request)) {
     return request.work_dir ? `${request.work_dir.replace(/\/$/, "")}/collection-analysis.json` : "collection-analysis.json";
@@ -13992,6 +14528,9 @@ function reportPathForRequest(
   }
   if (isSongAnalysisRunRequest(request)) {
     return request.work_dir ? `${request.work_dir.replace(/\/$/, "")}/song-analysis.json` : "song-analysis.json";
+  }
+  if (isImageSimilarityRunRequest(request)) {
+    return "browser:image-similarity";
   }
   if (isVideoRedCarsRunRequest(request)) {
     return request.work_dir ? `${request.work_dir.replace(/\/$/, "")}/video-red-cars.json` : "video-red-cars.json";
@@ -14017,6 +14556,12 @@ function getRunValidation(
   const isRedCars = workflowKind === "video-red-cars";
   const isSong = workflowKind === "song-analysis";
   const isSubtitle = workflowKind === "subtitle-generation";
+  if (workflowKind === "image-similarity") {
+    if (!form.imageDataUrl.trim()) {
+      return "Paste or upload a query image.";
+    }
+    return null;
+  }
   if (workflowKind === "youtube-collection" && form.sourceMode === "collection") {
     const url = form.url.trim();
     if (!url) {
@@ -14152,11 +14697,14 @@ function inferWorkflowKindFromName(name: string): WorkflowKindId {
   if (normalized.includes("subtitle") || normalized.includes("srt")) {
     return "subtitle-generation";
   }
+  if (normalized.includes("image") || normalized.includes("similar")) {
+    return "image-similarity";
+  }
   return "youtube-video";
 }
 
 function workflowKindFromRunRequest(
-  request: YoutubeRunRequest | VideoRedCarsRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest,
+  request: YoutubeRunRequest | VideoRedCarsRunRequest | YoutubeCollectionRunRequest | SongAnalysisRunRequest | SubtitleGenerationRunRequest | ImageSimilarityRunRequest,
 ): WorkflowKindId {
   if (isYoutubeCollectionRunRequest(request)) {
     return "youtube-collection";
@@ -14169,6 +14717,9 @@ function workflowKindFromRunRequest(
   }
   if (isSongAnalysisRunRequest(request)) {
     return "song-analysis";
+  }
+  if (isImageSimilarityRunRequest(request)) {
+    return "image-similarity";
   }
   return "youtube-video";
 }
@@ -14183,6 +14734,8 @@ function defaultWorkDirForWorkflowKind(id: WorkflowKindId): string {
       return "workflow-output/song-analysis";
     case "subtitle-generation":
       return "workflow-output/subtitle-generation";
+    case "image-similarity":
+      return "workflow-output/image-similarity";
     case "youtube-video":
       return "workflow-output/youtube-video";
   }
@@ -14198,6 +14751,8 @@ function defaultOutputForWorkflowKind(id: WorkflowKindId): string {
       return "workflow-output/song-analysis/song-analysis.json";
     case "subtitle-generation":
       return "workflow-output/subtitle-generation/subtitle-generation.json";
+    case "image-similarity":
+      return "workflow-output/image-similarity/image-similarity.json";
     case "youtube-video":
       return "workflow-output/youtube-video/analysis.json";
   }

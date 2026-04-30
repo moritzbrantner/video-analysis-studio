@@ -16,6 +16,7 @@ type PortType =
   | "youtube_url"
   | "youtube_collection_url"
   | "video_file"
+  | "image_file"
   | "audio_file"
   | "media_file"
   | "transcript"
@@ -271,6 +272,7 @@ describe("default workflow graph", () => {
 describe("starter workflow templates", () => {
   test("default starters stay intentionally small", () => {
     expect(Object.keys(workflowStarterTemplates).sort()).toEqual([
+      "image-similarity",
       "song-analysis",
       "subtitle-generation",
       "video-red-cars",
@@ -667,6 +669,8 @@ function workflowTypeForPortType(type: PortType): WorkflowTypeSpec {
       return { type: "string", semantic: "youtube_collection_url" };
     case "video_file":
       return { type: "binary", media_type: "video/*", semantic: "video_file" };
+    case "image_file":
+      return { type: "binary", media_type: "image/*", semantic: "image_file" };
     case "audio_file":
       return { type: "binary", media_type: "audio/*", semantic: "audio_file" };
     case "media_file":

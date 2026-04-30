@@ -148,6 +148,10 @@ export function isSubtitleGenerationReport(report: StudioReport): report is Subt
   return reportWorkflow(report) === "subtitle_generation" && "subtitle" in report && "transcription" in report;
 }
 
+export function isImageSimilarityReport(report: StudioReport): report is import("../types").ImageSimilarityReport {
+  return reportWorkflow(report) === "image-similarity" && "matches" in report && "query" in report;
+}
+
 function reportWorkflow(report: StudioReport): string | undefined {
   return report.workflow ?? report.use_case;
 }

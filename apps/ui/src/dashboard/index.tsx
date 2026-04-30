@@ -5,6 +5,7 @@ import { Panel } from "../shared/primitives";
 import {
   isSongAnalysisReport,
   isSubtitleGenerationReport,
+  isImageSimilarityReport,
   isVideoRedCarsReport,
   isYoutubeCollectionReport,
   isYoutubeVideoReport,
@@ -15,7 +16,7 @@ import {
   VideoRedCarsSignalsDashboard,
 } from "../redCars";
 import { SongDashboard, SongMusicPanel, SongSignals } from "../song";
-import type { StudioReport } from "../types";
+import type { ImageSimilarityReport, StudioReport } from "../types";
 import { SubtitleDashboard } from "./subtitle";
 import {
   VideoDataDashboard,
@@ -41,8 +42,9 @@ export function ReportDashboard({ report, mode, runId, layout, bindingSummaries 
   const redCarsReport = isVideoRedCarsReport(report) ? report : null;
   const collectionReport = isYoutubeCollectionReport(report) ? report : null;
   const videoReport = isYoutubeVideoReport(report) ? report : null;
+  const imageSimilarityReport = isImageSimilarityReport(report) ? report : null;
 
-  if (!songReport && !subtitleReport && !redCarsReport && !collectionReport && !videoReport) {
+  if (!songReport && !subtitleReport && !redCarsReport && !collectionReport && !videoReport && !imageSimilarityReport) {
     return (
       <section className="min-w-0 space-y-4">
         <Panel title="Unsupported report">
@@ -53,6 +55,13 @@ export function ReportDashboard({ report, mode, runId, layout, bindingSummaries 
   }
 
   if (mode === "result") {
+    if (imageSimilarityReport) {
+      return (
+        <section className="min-w-0 space-y-4">
+          <ImageSimilarityDashboard report={imageSimilarityReport} />
+        </section>
+      );
+    }
     return (
       <section className="min-w-0 space-y-4">
         <ResultPageEditor
@@ -64,6 +73,10 @@ export function ReportDashboard({ report, mode, runId, layout, bindingSummaries 
         />
       </section>
     );
+  }
+
+  if (imageSimilarityReport) {
+    return <ImageSimilarityDashboard report={imageSimilarityReport} />;
   }
 
   if (songReport) {
@@ -115,4 +128,42 @@ export function ReportDashboard({ report, mode, runId, layout, bindingSummaries 
   }
 
   return null;
+}
+
+function ImageSimilarityDashboard({ report }: { report: ImageSimilarityReport }) {
+  return (
+    <section className="min-w-0 space-y-4">
+      <Panel
+        title="Image Similarity"
+        description={`${report.source.candidates} candidates from ${report.source.data_source_name}`}
+      >
+        <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
+          <div>
+            <div className="overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50">
+              <img src={report.query.data_url} alt={report.query.name} className="aspect-square w-full object-contain" />
+            </div>
+            <div className="mt-2 text-xs text-zinc-500">
+              {report.query.name} · {report.query.width}x{report.query.height}
+            </div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            {report.matches.map((match) => (
+              <article key={`${match.rank}-${match.id}`} className="rounded-lg border border-zinc-200 bg-white p-3">
+                <div className="overflow-hidden rounded-md border border-zinc-200 bg-zinc-50">
+                  <img src={match.image_url} alt={match.title} className="aspect-square w-full object-contain" />
+                </div>
+                <div className="mt-3 flex items-center justify-between gap-2">
+                  <h3 className="truncate text-sm font-semibold text-zinc-950">{match.title}</h3>
+                  <span className="shrink-0 rounded-md bg-zinc-950 px-2 py-1 text-xs font-medium text-white">
+                    {(match.score * 100).toFixed(1)}%
+                  </span>
+                </div>
+                <div className="mt-1 text-xs text-zinc-500">Rank {match.rank}</div>
+              </article>
+            ))}
+          </div>
+        </div>
+      </Panel>
+    </section>
+  );
 }

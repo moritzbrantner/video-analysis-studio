@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "nodes": [
     {
       "id": "react-page",
@@ -50,6 +50,60 @@
           "input_surface": "file",
           "runtime_validation": "external_input"
         }
+      ]
+    },
+    {
+      "id": "image-source",
+      "title": "Image Source",
+      "package_name": "@video-analysis-studio/ui",
+      "category": "ingest",
+      "ui_owned": true,
+      "outputs": [
+        {
+          "id": "image",
+          "label": "Query Image",
+          "kind": "image_file",
+          "exposable_input": true,
+          "input_surface": "file",
+          "runtime_validation": "external_input"
+        }
+      ]
+    },
+    {
+      "id": "image-catalog-source",
+      "title": "Image Data Source",
+      "package_name": "@video-analysis-studio/ui",
+      "category": "data",
+      "ui_owned": true,
+      "outputs": [
+        { "id": "images", "label": "Image Catalog", "kind": "object" }
+      ]
+    },
+    {
+      "id": "image-similarity",
+      "title": "Image Similarity",
+      "package_name": "@video-analysis-studio/ui",
+      "category": "data",
+      "ui_owned": true,
+      "inputs": [
+        { "id": "query", "label": "Query Image", "kind": "image_file" },
+        { "id": "images", "label": "Image Catalog", "kind": "object" }
+      ],
+      "outputs": [
+        { "id": "matches", "label": "Top 3 Matches", "kind": "json_report" }
+      ]
+    },
+    {
+      "id": "dashboard",
+      "title": "Report Dashboard",
+      "package_name": "@video-analysis-studio/ui",
+      "category": "ui",
+      "ui_owned": true,
+      "inputs": [
+        { "id": "report", "label": "Report", "kind": "json_report" }
+      ],
+      "outputs": [
+        { "id": "view", "label": "Dashboard", "kind": "object" }
       ]
     },
     {

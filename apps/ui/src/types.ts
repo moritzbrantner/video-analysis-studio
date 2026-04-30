@@ -190,6 +190,35 @@ export interface VideoRedCarsReport {
   video: VideoRedCarsVideoReport;
 }
 
+export interface ImageSimilarityQueryReport {
+  name: string;
+  width: number;
+  height: number;
+  data_url: string;
+}
+
+export interface ImageSimilarityMatchReport {
+  rank: number;
+  id: string;
+  title: string;
+  image_url: string;
+  score: number;
+  source_id: string;
+  source_name: string;
+}
+
+export interface ImageSimilarityReport {
+  workflow?: "image-similarity" | string;
+  use_case?: "image-similarity" | string;
+  source: {
+    data_source_id: string;
+    data_source_name: string;
+    candidates: number;
+  };
+  query: ImageSimilarityQueryReport;
+  matches: ImageSimilarityMatchReport[];
+}
+
 export type TranscriptionEngine =
   | "whisper_cpp"
   | "whisper"
@@ -561,7 +590,8 @@ export type StudioReport =
   | VideoRedCarsReport
   | YoutubeCollectionReport
   | SongAnalysisReport
-  | SubtitleGenerationReport;
+  | SubtitleGenerationReport
+  | ImageSimilarityReport;
 
 export interface CollectionTableRow {
   id: string;

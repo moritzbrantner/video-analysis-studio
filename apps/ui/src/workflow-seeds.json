@@ -1,5 +1,18 @@
 {
   "starterTemplates": {
+    "image-similarity": {
+      "nodes": [
+        { "id": "image-source", "x": 80, "y": 180 },
+        { "id": "image-catalog-source", "x": 80, "y": 360 },
+        { "id": "image-similarity", "x": 470, "y": 260 },
+        { "id": "dashboard", "x": 860, "y": 260 }
+      ],
+      "edges": [
+        { "source": "image-source", "sourcePortId": "image", "target": "image-similarity", "targetPortId": "query" },
+        { "source": "image-catalog-source", "sourcePortId": "images", "target": "image-similarity", "targetPortId": "images" },
+        { "source": "image-similarity", "sourcePortId": "matches", "target": "dashboard", "targetPortId": "report" }
+      ]
+    },
     "youtube-video": {
       "nodes": [
         { "id": "react-page", "x": 80, "y": 120 },
