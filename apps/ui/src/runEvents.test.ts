@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import type { RunEvent } from "../src/api/client";
-import { appendRunEvent, normalizeRunEvents } from "../src/runEvents";
+import type { RunEvent } from "./api/client";
+import { appendRunEvent, normalizeRunEvents } from "./runEvents";
 
 function progressEvent(progress: number, timestamp: string): RunEvent {
   return {

@@ -219,6 +219,15 @@ interface CollectionManifestPreviewState {
 
 type DataSourceEntry = DataSourceRecord;
 
+type AdapterOperationKind = "map" | "filter" | "reduce" | "flat_map" | "group_by" | "pick" | "omit" | "custom";
+
+interface AdapterTransformStep {
+  id: string;
+  operation: AdapterOperationKind;
+  expression: string;
+  enabled?: boolean;
+}
+
 interface ImageSimilarityRunRequest {
   source: { kind: "pasted_image"; name: string; data_url: string };
   data_source_id: string;
@@ -1719,6 +1728,8 @@ function App() {
                   activateWorkflowDefinition(workflowId);
                   navigateToPage("workflow", { workflowId });
                 }}
+                typeDefinitions={typeDefinitions}
+                onTypeDefinitionsChange={setTypeDefinitions}
               />
             ) : page === "types" ? (
               <TypeLibraryPage
@@ -2324,6 +2335,7 @@ interface WorkflowNodeData extends Record<string, unknown> {
   adapterNode?: boolean;
   adapterInputSchema?: DataSourceSchema;
   adapterOutputSchema?: DataSourceSchema;
+  adapterSteps?: AdapterTransformStep[];
 }
 
 type WorkflowNodeModel = Node<WorkflowNodeData, "workflow">;
@@ -3405,6 +3417,13 @@ const adapterWorkflowNodes: WorkflowNodeModel[] = [
     adapterNode: true,
     adapterInputSchema: { type: "any" },
     adapterOutputSchema: { type: "any" },
+    adapterSteps: [
+      {
+        id: "custom-result",
+        operation: "custom",
+        expression: "return input;",
+      },
+    ],
     tags: ["adapter", "typed", "schema", "reshape", "transform"],
   }),
   workflowNode("object-adapter", 0, 0, {
@@ -3418,6 +3437,13 @@ const adapterWorkflowNodes: WorkflowNodeModel[] = [
     adapterNode: true,
     adapterInputSchema: { type: "object", properties: [] },
     adapterOutputSchema: { type: "object", properties: [] },
+    adapterSteps: [
+      {
+        id: "map-object",
+        operation: "custom",
+        expression: "return {\n  ...input,\n};",
+      },
+    ],
     tags: ["adapter", "object", "mapping", "fields", "reshape"],
   }),
 ];
@@ -4352,13 +4378,18 @@ function WorkflowBuilder({
     [dataSources, nodes, setEdges, setNodes],
   );
 
-  const updateWorkflowNodeAdapterSchemas = useCallback(
-    (nodeId: string, inputSchema: DataSourceSchema, outputSchema: DataSourceSchema) => {
+  const updateWorkflowNodeAdapter = useCallback(
+    (
+      nodeId: string,
+      inputSchema: DataSourceSchema,
+      outputSchema: DataSourceSchema,
+      steps: AdapterTransformStep[],
+    ) => {
       const nextNodes = nodes.map((node) =>
         node.id === nodeId && node.data.adapterNode
           ? {
               ...node,
-              data: workflowNodeDataWithAdapter(node.data, inputSchema, outputSchema),
+              data: workflowNodeDataWithAdapter(node.data, inputSchema, outputSchema, steps),
             }
           : node,
       );
@@ -5193,7 +5224,7 @@ function WorkflowBuilder({
           onDeleteSelected={() => deleteWorkflowNodes(selectedNodeIds)}
           onUpdateSelectedGroup={updateGroupDetails}
           onUpdateSelectedDataSource={updateWorkflowNodeDataSource}
-          onUpdateSelectedAdapter={updateWorkflowNodeAdapterSchemas}
+          onUpdateSelectedAdapter={updateWorkflowNodeAdapter}
           onToggleSelectedGroupOpen={() => {
             const groupNode = selectedNodes.length === 1 && selectedNodes[0].data.group ? selectedNodes[0] : null;
             if (groupNode) {
@@ -5951,7 +5982,12 @@ function WorkflowDetailsPanel({
   onDeleteSelected: () => void;
   onUpdateSelectedGroup: (nodeId: string, updates: Pick<WorkflowNodeData, "title" | "description">) => void;
   onUpdateSelectedDataSource: (nodeId: string, dataSourceId: string | null) => void;
-  onUpdateSelectedAdapter: (nodeId: string, inputSchema: DataSourceSchema, outputSchema: DataSourceSchema) => void;
+  onUpdateSelectedAdapter: (
+    nodeId: string,
+    inputSchema: DataSourceSchema,
+    outputSchema: DataSourceSchema,
+    steps: AdapterTransformStep[],
+  ) => void;
   onToggleSelectedGroupOpen: () => void;
   onUngroupSelected: () => void;
   onSaveWorkflowVersion: () => void;
@@ -6855,12 +6891,19 @@ function AdapterNodeSettings({
 }: {
   node: WorkflowNodeModel;
   typeDefinitions: TypeDefinition[];
-  onChange: (nodeId: string, inputSchema: DataSourceSchema, outputSchema: DataSourceSchema) => void;
+  onChange: (
+    nodeId: string,
+    inputSchema: DataSourceSchema,
+    outputSchema: DataSourceSchema,
+    steps: AdapterTransformStep[],
+  ) => void;
 }) {
   const inputSchema = normalizeDataSourceSchema(node.data.adapterInputSchema, { type: "any" });
   const outputSchema = normalizeDataSourceSchema(node.data.adapterOutputSchema, { type: "any" });
+  const steps = normalizeAdapterTransformSteps(node.data.adapterSteps);
   const inputPort = node.data.inputs[0];
   const outputPort = node.data.outputs[0];
+  const updateSteps = (nextSteps: AdapterTransformStep[]) => onChange(node.id, inputSchema, outputSchema, nextSteps);
 
   return (
     <div className="space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
@@ -6879,7 +6922,7 @@ function AdapterNodeSettings({
         <DataSourceSchemaEditor
           schema={inputSchema}
           typeDefinitions={typeDefinitions}
-          onChange={(nextInputSchema) => onChange(node.id, nextInputSchema, outputSchema)}
+          onChange={(nextInputSchema) => onChange(node.id, nextInputSchema, outputSchema, steps)}
         />
       </div>
       <div className="space-y-2">
@@ -6887,11 +6930,234 @@ function AdapterNodeSettings({
         <DataSourceSchemaEditor
           schema={outputSchema}
           typeDefinitions={typeDefinitions}
-          onChange={(nextOutputSchema) => onChange(node.id, inputSchema, nextOutputSchema)}
+          onChange={(nextOutputSchema) => onChange(node.id, inputSchema, nextOutputSchema, steps)}
         />
+      </div>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-[11px] font-semibold uppercase text-zinc-500">Conversion pipeline</div>
+          <button
+            type="button"
+            className="inline-flex h-8 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+            onClick={() => updateSteps([...steps, createAdapterTransformStep("map")])}
+          >
+            <PlusIcon className="h-3.5 w-3.5" />
+            Add Step
+          </button>
+        </div>
+        <div className="space-y-2">
+          {steps.map((step, index) => (
+            <AdapterTransformStepEditor
+              key={step.id}
+              step={step}
+              index={index}
+              canMoveUp={index > 0}
+              canMoveDown={index < steps.length - 1}
+              canRemove={steps.length > 1}
+              onChange={(nextStep) =>
+                updateSteps(steps.map((candidate) => (candidate.id === step.id ? nextStep : candidate)))
+              }
+              onMoveUp={() => updateSteps(moveAdapterTransformStep(steps, index, index - 1))}
+              onMoveDown={() => updateSteps(moveAdapterTransformStep(steps, index, index + 1))}
+              onRemove={() => updateSteps(steps.filter((candidate) => candidate.id !== step.id))}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );
+}
+
+function AdapterTransformStepEditor({
+  step,
+  index,
+  canMoveUp,
+  canMoveDown,
+  canRemove,
+  onChange,
+  onMoveUp,
+  onMoveDown,
+  onRemove,
+}: {
+  step: AdapterTransformStep;
+  index: number;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  canRemove: boolean;
+  onChange: (step: AdapterTransformStep) => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onRemove: () => void;
+}) {
+  const operation = adapterOperationDefinitions.find((definition) => definition.kind === step.operation) ?? adapterOperationDefinitions[0];
+
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-white p-3">
+      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+        <Field label={`Step ${index + 1}`}>
+          <select
+            className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+            value={step.operation}
+            onChange={(event) => {
+              const nextOperation = event.target.value as AdapterOperationKind;
+              onChange({ ...step, operation: nextOperation, expression: adapterOperationTemplate(nextOperation) });
+            }}
+          >
+            {adapterOperationDefinitions.map((definition) => (
+              <option key={definition.kind} value={definition.kind}>
+                {definition.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <div className="flex items-end gap-1">
+          <button
+            type="button"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50 disabled:opacity-40"
+            onClick={onMoveUp}
+            disabled={!canMoveUp}
+            title="Move step up"
+            aria-label="Move step up"
+          >
+            <ChevronUpIcon className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50 disabled:opacity-40"
+            onClick={onMoveDown}
+            disabled={!canMoveDown}
+            title="Move step down"
+            aria-label="Move step down"
+          >
+            <ChevronDownIcon className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-zinc-300 bg-white text-rose-700 hover:bg-rose-50 disabled:opacity-40"
+            onClick={onRemove}
+            disabled={!canRemove}
+            title="Remove step"
+            aria-label="Remove step"
+          >
+            <CloseIcon className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+      <p className="mt-2 text-xs leading-5 text-zinc-500">{operation.detail}</p>
+      <textarea
+        className="mt-3 min-h-24 w-full resize-y rounded-lg border border-zinc-300 bg-zinc-950 px-3 py-2 font-mono text-xs leading-5 text-zinc-50 outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+        value={step.expression}
+        spellCheck={false}
+        onChange={(event) => onChange({ ...step, expression: event.target.value })}
+      />
+    </div>
+  );
+}
+
+const adapterOperationDefinitions: Array<{ kind: AdapterOperationKind; label: string; detail: string }> = [
+  {
+    kind: "map",
+    label: "Map",
+    detail: "Runs once per array item. Use item, index, and input; return the converted item.",
+  },
+  {
+    kind: "filter",
+    label: "Filter",
+    detail: "Runs once per array item. Use item, index, and input; return true to keep the item.",
+  },
+  {
+    kind: "reduce",
+    label: "Reduce",
+    detail: "Runs once per array item. Use accumulator, item, index, and input; return the next accumulator.",
+  },
+  {
+    kind: "flat_map",
+    label: "Flat Map",
+    detail: "Runs once per array item. Return an array of replacement items to flatten into the result.",
+  },
+  {
+    kind: "group_by",
+    label: "Group By",
+    detail: "Runs once per array item. Return the grouping key to build a keyed object.",
+  },
+  {
+    kind: "pick",
+    label: "Pick",
+    detail: "Return an array of object keys to keep on each object or on the root object.",
+  },
+  {
+    kind: "omit",
+    label: "Omit",
+    detail: "Return an array of object keys to remove from each object or from the root object.",
+  },
+  {
+    kind: "custom",
+    label: "Custom",
+    detail: "Runs once for the current value. Use input and return the final converted value.",
+  },
+];
+
+function normalizeAdapterTransformSteps(value: unknown): AdapterTransformStep[] {
+  if (!Array.isArray(value)) {
+    return [createAdapterTransformStep("custom")];
+  }
+  const steps = value.filter(isAdapterTransformStep).map((step) => ({
+    id: step.id,
+    operation: step.operation,
+    expression: step.expression,
+    ...(step.enabled === false ? { enabled: false } : {}),
+  }));
+  return steps.length > 0 ? steps : [createAdapterTransformStep("custom")];
+}
+
+function createAdapterTransformStep(operation: AdapterOperationKind): AdapterTransformStep {
+  return {
+    id: createAdapterTransformStepId(),
+    operation,
+    expression: adapterOperationTemplate(operation),
+  };
+}
+
+function createAdapterTransformStepId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `adapter-step-${crypto.randomUUID()}`;
+  }
+  return `adapter-step-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function adapterOperationTemplate(operation: AdapterOperationKind): string {
+  switch (operation) {
+    case "map":
+      return "return item;";
+    case "filter":
+      return "return true;";
+    case "reduce":
+      return "return accumulator;";
+    case "flat_map":
+      return "return [item];";
+    case "group_by":
+      return "return item.category ?? \"default\";";
+    case "pick":
+      return "return [\"id\", \"title\"];";
+    case "omit":
+      return "return [\"debug\"];";
+    case "custom":
+      return "return input;";
+  }
+}
+
+function moveAdapterTransformStep(
+  steps: AdapterTransformStep[],
+  fromIndex: number,
+  toIndex: number,
+): AdapterTransformStep[] {
+  if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= steps.length || toIndex >= steps.length) {
+    return steps;
+  }
+  const nextSteps = [...steps];
+  const [step] = nextSteps.splice(fromIndex, 1);
+  nextSteps.splice(toIndex, 0, step);
+  return nextSteps;
 }
 
 function DataSourceSchemaEditor({
@@ -7797,6 +8063,9 @@ function cloneWorkflowNodeData(data: WorkflowNodeData): WorkflowNodeData {
   }
   if (isDataSourceSchema(data.adapterOutputSchema)) {
     cloned.adapterOutputSchema = normalizeDataSourceSchema(data.adapterOutputSchema, { type: "any" });
+  }
+  if (data.adapterNode || data.adapterSteps) {
+    cloned.adapterSteps = normalizeAdapterTransformSteps(data.adapterSteps);
   }
   return cloned;
 }
@@ -10640,6 +10909,9 @@ function isWorkflowNodeData(value: unknown): value is WorkflowNodeData {
   const adapterNodeValid = value.adapterNode === undefined || typeof value.adapterNode === "boolean";
   const adapterInputSchemaValid = value.adapterInputSchema === undefined || isDataSourceSchema(value.adapterInputSchema);
   const adapterOutputSchemaValid = value.adapterOutputSchema === undefined || isDataSourceSchema(value.adapterOutputSchema);
+  const adapterStepsValid =
+    value.adapterSteps === undefined ||
+    (Array.isArray(value.adapterSteps) && value.adapterSteps.every(isAdapterTransformStep));
   return (
     typeof value.title === "string" &&
     typeof value.packageName === "string" &&
@@ -10661,7 +10933,31 @@ function isWorkflowNodeData(value: unknown): value is WorkflowNodeData {
     dataSourceTypeValid &&
     adapterNodeValid &&
     adapterInputSchemaValid &&
-    adapterOutputSchemaValid
+    adapterOutputSchemaValid &&
+    adapterStepsValid
+  );
+}
+
+function isAdapterTransformStep(value: unknown): value is AdapterTransformStep {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    isAdapterOperationKind(value.operation) &&
+    typeof value.expression === "string" &&
+    (value.enabled === undefined || typeof value.enabled === "boolean")
+  );
+}
+
+function isAdapterOperationKind(value: unknown): value is AdapterOperationKind {
+  return (
+    value === "map" ||
+    value === "filter" ||
+    value === "reduce" ||
+    value === "flat_map" ||
+    value === "group_by" ||
+    value === "pick" ||
+    value === "omit" ||
+    value === "custom"
   );
 }
 
@@ -11758,6 +12054,7 @@ function workflowNodeDataWithAdapter(
   data: WorkflowNodeData,
   inputSchema: DataSourceSchema,
   outputSchema: DataSourceSchema,
+  steps: AdapterTransformStep[] = normalizeAdapterTransformSteps(data.adapterSteps),
 ): WorkflowNodeData {
   const normalizedInput = normalizeDataSourceSchema(inputSchema, { type: "any" });
   const normalizedOutput = normalizeDataSourceSchema(outputSchema, { type: "any" });
@@ -11769,6 +12066,7 @@ function workflowNodeDataWithAdapter(
     adapterNode: true,
     adapterInputSchema: normalizedInput,
     adapterOutputSchema: normalizedOutput,
+    adapterSteps: normalizeAdapterTransformSteps(steps),
   };
 }
 
@@ -15688,6 +15986,22 @@ function PanelExpandIcon({ className }: { className?: string }) {
       <rect x="3.5" y="4" width="13" height="12" rx="1.5" />
       <path d="M8 4v12" strokeLinecap="round" />
       <path d="m10.5 7 3 3-3 3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ChevronUpIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className={className}>
+      <path d="m5.5 12 4.5-4 4.5 4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ChevronDownIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className={className}>
+      <path d="m5.5 8 4.5 4 4.5-4" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

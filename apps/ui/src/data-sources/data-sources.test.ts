@@ -1,14 +1,18 @@
 import { describe, expect, test } from "bun:test";
 
-import { dataSourceDeleteBlockers } from "../src/data-sources/derivations";
-import { collectDataSourceReferences } from "../src/data-sources/references";
+import { dataSourceDeleteBlockers } from "./derivations";
+import { collectDataSourceReferences } from "./references";
 import {
   defaultDataSourcePopulationMode,
   parseImportedDataSourcesJson,
   dataSourcePopulationOptions,
-} from "../src/data-sources/types";
-import { workflowTypesAssignable } from "../src/workflowTypeSpec";
-import { parseWorkflowTypeScriptType } from "../src/workflowTypeScript";
+} from "./types";
+import {
+  createTypeDefinitionFromSource,
+  parseWorkflowTypeSourceWithDefinitions,
+} from "../type-library/page";
+import { workflowTypesAssignable } from "../workflowTypeSpec";
+import { parseWorkflowTypeScriptType } from "../workflowTypeScript";
 
 describe("data source import parsing", () => {
   test("converts legacy schema payloads into workflow type specs", () => {
@@ -155,5 +159,21 @@ describe("data source creation helpers", () => {
     const derived = parseWorkflowTypeScriptType("{ score: number; [key: string]: number }");
 
     expect(workflowTypesAssignable(parent, derived)).toBe(true);
+  });
+
+  test("custom source contracts can reuse saved type definitions", () => {
+    const catalogItem = createTypeDefinitionFromSource([], "CatalogItem", "{ id: string; score: number }");
+
+    expect(parseWorkflowTypeSourceWithDefinitions("CatalogItem[]", [catalogItem])).toEqual({
+      type: "array",
+      items: {
+        type: "object",
+        properties: [
+          { name: "id", value: { type: "string" }, required: true },
+          { name: "score", value: { type: "number" }, required: true },
+        ],
+        additional_properties: false,
+      },
+    });
   });
 });

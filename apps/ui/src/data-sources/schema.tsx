@@ -4,15 +4,23 @@ import type { WorkflowTypeSpec } from "../api/client";
 import { formatWorkflowTypeSpec, formatWorkflowTypeSpecJson, isWorkflowTypeSpec } from "../workflowTypeSpec";
 import { formatWorkflowTypeScriptType, parseWorkflowTypeScriptType } from "../workflowTypeScript";
 import { cn } from "../shared/utils";
+import {
+  parseWorkflowTypeSourceWithDefinitions,
+  type TypeDefinition,
+} from "../type-library/page";
 
 type WorkflowTypeEditorMode = "typescript" | "json";
 
 export function WorkflowTypeEditor({
   value,
   onChange,
+  onSourceChange,
+  typeDefinitions = [],
 }: {
   value: WorkflowTypeSpec;
   onChange: (value: WorkflowTypeSpec, jsonError: string | null) => void;
+  onSourceChange?: (source: string) => void;
+  typeDefinitions?: TypeDefinition[];
 }) {
   const [mode, setMode] = useState<WorkflowTypeEditorMode>("typescript");
   const [text, setText] = useState(() => formatWorkflowTypeScriptType(value));
@@ -32,7 +40,9 @@ export function WorkflowTypeEditor({
 
   const parseText = (nextText: string): WorkflowTypeSpec => {
     if (mode === "typescript") {
-      return parseWorkflowTypeScriptType(nextText);
+      return typeDefinitions.length > 0
+        ? parseWorkflowTypeSourceWithDefinitions(nextText, typeDefinitions)
+        : parseWorkflowTypeScriptType(nextText);
     }
     const nextValue = JSON.parse(nextText) as unknown;
     if (!isWorkflowTypeSpec(nextValue)) {
@@ -77,6 +87,7 @@ export function WorkflowTypeEditor({
         onChange={(event) => {
           const nextText = event.target.value;
           setText(nextText);
+          onSourceChange?.(nextText);
           try {
             const nextValue = parseText(nextText);
             setError(null);

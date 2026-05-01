@@ -5,7 +5,7 @@ import {
   encodeWorkflowSharePayload,
   workflowShareTokenFromUrl,
   workflowShareUrl,
-} from "../src/workflowShare";
+} from "./workflowShare";
 
 describe("workflow sharing helpers", () => {
   test("share payloads round-trip through encoded tokens", async () => {

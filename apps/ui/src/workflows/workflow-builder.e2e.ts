@@ -5,8 +5,8 @@ import {
   graphCounts,
   openWorkflowBuilder,
   savedVersionCount,
-} from "./helpers";
-import { encodeWorkflowSharePayload, workflowShareUrl } from "../src/workflowShare";
+} from "./workflow.e2e-support";
+import { encodeWorkflowSharePayload, workflowShareUrl } from "../workflowShare";
 
 test.describe("workflow builder interactions", () => {
   test("search, add, and delete component updates graph counts", async ({ page }) => {

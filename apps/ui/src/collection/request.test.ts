@@ -3,8 +3,8 @@ import { describe, expect, test } from "bun:test";
 import {
   buildYoutubeCollectionManifestRequest,
   filterYoutubeCollectionManifest,
-} from "../src/collection/request";
-import type { YoutubeCollectionManifest } from "../src/types";
+} from "./request";
+import type { YoutubeCollectionManifest } from "../types";
 
 describe("collection request helpers", () => {
   test("buildYoutubeCollectionManifestRequest maps collection form fields", () => {

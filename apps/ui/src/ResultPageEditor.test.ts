@@ -9,7 +9,7 @@ import {
   type DashboardLayout,
   type DashboardWidgetId,
   type ReportKind,
-} from "../src/ResultPageEditor";
+} from "./ResultPageEditor";
 
 describe("dashboard layout helpers", () => {
   test("song report options include song-compatible widgets", () => {

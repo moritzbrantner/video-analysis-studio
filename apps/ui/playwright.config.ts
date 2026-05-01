@@ -6,7 +6,8 @@ const e2eBaseUrl = `http://${runtimeConfig.ui.e2eHost}:${runtimeConfig.ui.e2ePor
 const e2eCommand = `bun run dev -- --host ${runtimeConfig.ui.e2eHost} --port ${runtimeConfig.ui.e2ePort}`;
 
 export default defineConfig({
-  testDir: "./e2e",
+  testDir: "./src",
+  testMatch: "**/*.e2e.ts",
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,

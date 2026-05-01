@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
-import type { WorkflowTypeSpec } from "../src/api/client";
+import type { WorkflowTypeSpec } from "./api/client";
 import {
   formatWorkflowTypeSpec,
   formatWorkflowTypeSpecJson,
   validateWorkflowValue,
   workflowTypeSignature,
   workflowTypesAssignable,
-} from "../src/workflowTypeSpec";
+} from "./workflowTypeSpec";
 
 describe("workflow type compatibility", () => {
   test("semantic strings widen to plain strings but not the reverse", () => {

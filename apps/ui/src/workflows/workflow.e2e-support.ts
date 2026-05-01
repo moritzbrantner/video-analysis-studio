@@ -1,5 +1,5 @@
 import { expect, type Page, type Route } from "@playwright/test";
-import { studioApiBaseUrl } from "../../../scripts/runtime-config.mjs";
+import { studioApiBaseUrl } from "../../../../scripts/runtime-config.mjs";
 
 const apiBaseUrl = studioApiBaseUrl();
 

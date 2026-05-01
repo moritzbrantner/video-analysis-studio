@@ -122,7 +122,7 @@ export function TypeLibraryPage({ workflowLibrary, definitions, onDefinitionsCha
     try {
       const peers = definitions.filter((definition) => definition.id !== activeId);
       return {
-        spec: parseWorkflowTypeScriptType(combinedDefinitionSource(peers, name, draftSource), name),
+        spec: parseNamedTypeDefinition(peers, name, draftSource),
         error: null,
       };
     } catch (error) {
@@ -559,12 +559,71 @@ function combinedDefinitionSource(peers: TypeDefinition[], name: string, source:
   );
 }
 
+export function parseNamedTypeDefinition(definitions: TypeDefinition[], name: string, source: string): WorkflowTypeSpec {
+  return parseWorkflowTypeScriptType(combinedDefinitionSource(definitions, name, source), name);
+}
+
+export function parseWorkflowTypeSourceWithDefinitions(source: string, definitions: TypeDefinition[]): WorkflowTypeSpec {
+  const localName = declaredTypeName(source) ?? "__DataSourceType";
+  const localSource = sourceForDefinition(localName, source);
+  return parseWorkflowTypeScriptType(
+    [...definitions.map((definition) => sourceForDefinition(definition.name, definition.source)), localSource].join(
+      "\n\n",
+    ),
+    localName,
+  );
+}
+
+export function createTypeDefinitionFromSource(
+  definitions: TypeDefinition[],
+  name: string,
+  source: string,
+): TypeDefinition {
+  const trimmedName = name.trim();
+  const nameError = validateTypeName(trimmedName);
+  if (nameError) {
+    throw new Error(nameError);
+  }
+  if (definitions.some((definition) => definition.name === trimmedName)) {
+    throw new Error(`Type "${trimmedName}" already exists.`);
+  }
+  const spec = parseNamedTypeDefinition(definitions, trimmedName, source);
+  const now = new Date().toISOString();
+  return {
+    id: nextDefinitionId(),
+    name: trimmedName,
+    source: source.trim(),
+    spec,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+export function nextAvailableTypeName(definitions: TypeDefinition[], base = "DataSourceType"): string {
+  const existing = new Set(definitions.map((definition) => definition.name));
+  if (!existing.has(base)) {
+    return base;
+  }
+  for (let index = 2; index < 10_000; index += 1) {
+    const candidate = `${base}${index}`;
+    if (!existing.has(candidate)) {
+      return candidate;
+    }
+  }
+  return `${base}${Date.now()}`;
+}
+
 function sourceForDefinition(name: string, source: string): string {
   const trimmed = source.trim() || "unknown";
   if (/^(export\s+)?(type|interface)\s/.test(trimmed)) {
     return trimmed;
   }
   return `type ${name} = ${trimmed};`;
+}
+
+function declaredTypeName(source: string): string | null {
+  const match = /^(?:export\s+)?(?:type|interface)\s+([A-Za-z_$][A-Za-z0-9_$]*)\b/.exec(source.trim());
+  return match?.[1] ?? null;
 }
 
 function validateTypeName(value: string): string | null {

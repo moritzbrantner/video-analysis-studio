@@ -7,7 +7,7 @@ import {
   openRunPage,
   selectRunWorkflow,
   workflowPickerOptions,
-} from "./helpers";
+} from "./workflow.e2e-support";
 
 test.describe("example workflow runs", () => {
   test.beforeEach(async ({ page }) => {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { workflowGraphHasCycle, workflowGraphWouldCreateCycle } from "../src/workflowGraph";
+import { workflowGraphHasCycle, workflowGraphWouldCreateCycle } from "./workflowGraph";
 
 describe("workflow graph cycle detection", () => {
   test("allows forward edges in an acyclic graph", () => {

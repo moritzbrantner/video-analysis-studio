@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { formatWorkflowTypeScriptType, parseWorkflowTypeScriptType } from "../src/workflowTypeScript";
+import { formatWorkflowTypeScriptType, parseWorkflowTypeScriptType } from "./workflowTypeScript";
 
 describe("workflow TypeScript type parsing", () => {
   test("parses primitives, arrays, tuples, and unions", () => {

@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import ts from "typescript";
-import type { WorkflowTypeSpec } from "../src/api/client";
-import { workflowTypesAssignable } from "../src/workflowTypeSpec";
+import type { WorkflowTypeSpec } from "./api/client";
+import { workflowTypesAssignable } from "./workflowTypeSpec";
 
 type PortType =
   | "run_request"
@@ -140,7 +140,7 @@ const allowedTones = new Set([
   "zinc",
 ]);
 
-const workflowSource = readFileSync(join(import.meta.dir, "../src/main.tsx"), "utf8");
+const workflowSource = readFileSync(join(import.meta.dir, "main.tsx"), "utf8");
 const workflowCatalogJsonSource = readFileSync(
   join(import.meta.dir, "../../../crates/studio-core/src/workflow_catalog.json"),
   "utf8",
@@ -149,7 +149,7 @@ const workflowCatalogDefinition = JSON.parse(workflowCatalogJsonSource) as {
   version: number;
   nodes: Array<{ id: string }>;
 };
-const workflowSeedJsonSource = readFileSync(join(import.meta.dir, "../src/workflow-seeds.json"), "utf8");
+const workflowSeedJsonSource = readFileSync(join(import.meta.dir, "workflow-seeds.json"), "utf8");
 const workflowSeedDefinitions = JSON.parse(workflowSeedJsonSource) as WorkflowSeedDefinitionsFixture;
 const sourceFile = ts.createSourceFile("main.tsx", workflowSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const topLevelConstants = collectTopLevelConstants(sourceFile);

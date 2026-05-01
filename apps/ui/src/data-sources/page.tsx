@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type Dispatch, type ReactNode, type SetStateAction, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   DataSourceDerivationInput,
@@ -9,7 +9,18 @@ import type {
 } from "../api/client";
 import { Badge, EmptyState, Panel, StatCard } from "../shared/primitives";
 import { cn } from "../shared/utils";
-import { formatWorkflowTypeSpec, workflowTypesAssignable } from "../workflowTypeSpec";
+import {
+  formatWorkflowTypeSpec,
+  isWorkflowTypeSpec,
+  workflowTypeSignature,
+  workflowTypesAssignable,
+} from "../workflowTypeSpec";
+import { formatWorkflowTypeScriptType } from "../workflowTypeScript";
+import {
+  createTypeDefinitionFromSource,
+  nextAvailableTypeName,
+  type TypeDefinition,
+} from "../type-library/page";
 import {
   childDataSources,
   dataSourceDeleteBlockers,
@@ -58,6 +69,8 @@ interface DataSourcesPageProps {
     request: DataSourceDerivationInput,
   ) => Promise<DataSourceRecord>;
   onOpenWorkflow?: (workflowId: string) => void;
+  typeDefinitions?: TypeDefinition[];
+  onTypeDefinitionsChange?: Dispatch<SetStateAction<TypeDefinition[]>>;
 }
 
 export function DataSourcesPage({
@@ -71,6 +84,8 @@ export function DataSourcesPage({
   onDeleteDataSource,
   onCreateDataSourceDerivation,
   onOpenWorkflow,
+  typeDefinitions = [],
+  onTypeDefinitionsChange,
 }: DataSourcesPageProps) {
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -533,6 +548,8 @@ export function DataSourcesPage({
                 setCreateDraft((current) => ({ ...current, type: value }));
                 setCreateTypeError(jsonError);
               }}
+              typeDefinitions={typeDefinitions}
+              onTypeDefinitionsChange={onTypeDefinitionsChange}
               onSelectKind={selectCreateKind}
               onBack={() => setCreateStep("schema")}
               onCancel={cancelCreateForm}
@@ -630,12 +647,16 @@ export function DataSourcesPage({
                 </Field>
               </div>
 
-              <WorkflowTypeEditor
+              <TypeContractPicker
                 value={draft.type}
                 onChange={(value, jsonError) => {
                   setDraft((current) => ({ ...current, type: value }));
                   setTypeError(jsonError);
                 }}
+                kind={draft.kind}
+                typeDefinitions={typeDefinitions}
+                onTypeDefinitionsChange={onTypeDefinitionsChange}
+                key={`edit-${activeRecord.id}`}
               />
 
               <Field label="Tags">
@@ -778,12 +799,16 @@ export function DataSourcesPage({
                         }
                       />
                     </Field>
-                    <WorkflowTypeEditor
+                    <TypeContractPicker
                       value={derivationDraft.type}
                       onChange={(value, jsonError) => {
                         setDerivationDraft((current) => (current ? { ...current, type: value } : current));
                         setDerivationTypeError(jsonError);
                       }}
+                      kind={effectiveDataSourceKind(activeRecord, byId)}
+                      typeDefinitions={typeDefinitions}
+                      onTypeDefinitionsChange={onTypeDefinitionsChange}
+                      key={`derivation-${activeRecord.id}`}
                     />
                     <Field label="Tags">
                       <input
@@ -843,6 +868,8 @@ function CreateDataSourceWizard({
   onTagTextChange,
   onPopulationModeChange,
   onTypeChange,
+  typeDefinitions,
+  onTypeDefinitionsChange,
   onSelectKind,
   onBack,
   onCancel,
@@ -858,6 +885,8 @@ function CreateDataSourceWizard({
   onTagTextChange: (value: string) => void;
   onPopulationModeChange: (mode: DataSourcePopulationMode) => void;
   onTypeChange: (value: DataSourceUpsert["type"], jsonError: string | null) => void;
+  typeDefinitions: TypeDefinition[];
+  onTypeDefinitionsChange?: Dispatch<SetStateAction<TypeDefinition[]>>;
   onSelectKind: (kind: DataSourceKind) => void;
   onBack: () => void;
   onCancel: () => void;
@@ -897,7 +926,14 @@ function CreateDataSourceWizard({
               </button>
             ))}
           </div>
-          <WorkflowTypeEditor value={draft.type} onChange={onTypeChange} />
+          <TypeContractPicker
+            value={draft.type}
+            onChange={onTypeChange}
+            kind={draft.kind}
+            typeDefinitions={typeDefinitions}
+            onTypeDefinitionsChange={onTypeDefinitionsChange}
+            key={`create-${draft.kind}`}
+          />
         </div>
       </Panel>
 
@@ -1040,6 +1076,270 @@ function CreateDataSourceWizard({
       </div>
     </div>
   );
+}
+
+type TypeContractSelection = `preset:${string}` | `type:${string}` | "custom";
+
+interface TypeContractPreset {
+  id: string;
+  label: string;
+  description: string;
+  spec: DataSourceUpsert["type"];
+}
+
+function TypeContractPicker({
+  value,
+  onChange,
+  kind,
+  typeDefinitions,
+  onTypeDefinitionsChange,
+}: {
+  value: DataSourceUpsert["type"];
+  onChange: (value: DataSourceUpsert["type"], jsonError: string | null) => void;
+  kind: DataSourceKind;
+  typeDefinitions: TypeDefinition[];
+  onTypeDefinitionsChange?: Dispatch<SetStateAction<TypeDefinition[]>>;
+}) {
+  const presets = useMemo(() => typeContractPresets(kind), [kind]);
+  const [selection, setSelection] = useState<TypeContractSelection>(() =>
+    contractSelectionForSpec(value, presets, typeDefinitions),
+  );
+  const [customSource, setCustomSource] = useState(() => formatWorkflowTypeScriptType(value));
+  const [definitionName, setDefinitionName] = useState(() =>
+    nextAvailableTypeName(typeDefinitions, "DataSourceType"),
+  );
+  const [message, setMessage] = useState<string | null>(null);
+  const activeLibraryType = typeDefinitions.find((definition) => workflowTypeSignature(definition.spec) === workflowTypeSignature(value));
+
+  const selectContract = (nextSelection: TypeContractSelection) => {
+    setSelection(nextSelection);
+    setMessage(null);
+    if (nextSelection === "custom") {
+      setCustomSource(formatWorkflowTypeScriptType(value));
+      return;
+    }
+    if (nextSelection.startsWith("preset:")) {
+      const preset = presets.find((candidate) => `preset:${candidate.id}` === nextSelection);
+      if (preset) {
+        onChange(preset.spec, null);
+        setCustomSource(formatWorkflowTypeScriptType(preset.spec));
+      }
+      return;
+    }
+    const definition = typeDefinitions.find((candidate) => `type:${candidate.id}` === nextSelection);
+    if (definition) {
+      onChange(definition.spec, null);
+      setCustomSource(definition.source);
+    }
+  };
+
+  const saveCustomDefinition = () => {
+    if (!onTypeDefinitionsChange) {
+      setMessage("Type library is not available in this view.");
+      return;
+    }
+    try {
+      const source = sourceForSavedCustomDefinition(customSource, value);
+      const definition = createTypeDefinitionFromSource(typeDefinitions, definitionName, source);
+      onTypeDefinitionsChange((current) => [...current, definition]);
+      setSelection(`type:${definition.id}`);
+      setDefinitionName(nextAvailableTypeName([...typeDefinitions, definition], "DataSourceType"));
+      onChange(definition.spec, null);
+      setMessage(`Saved ${definition.name}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-zinc-950">Type Contract</div>
+          <div className="mt-1 text-xs text-zinc-600">
+            {activeLibraryType ? `${formatWorkflowTypeSpec(value)} · ${activeLibraryType.name}` : formatWorkflowTypeSpec(value)}
+          </div>
+        </div>
+        {message ? <div className="text-xs text-zinc-500">{message}</div> : null}
+      </div>
+
+      <Field label="Contract Preset">
+        <select
+          className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+          value={selection}
+          onChange={(event) => selectContract(event.target.value as TypeContractSelection)}
+        >
+          <optgroup label="Basic presets">
+            {presets.map((preset) => (
+              <option key={preset.id} value={`preset:${preset.id}`}>
+                {preset.label}
+              </option>
+            ))}
+          </optgroup>
+          {typeDefinitions.length > 0 ? (
+            <optgroup label="Saved type definitions">
+              {typeDefinitions.map((definition) => (
+                <option key={definition.id} value={`type:${definition.id}`}>
+                  {definition.name}
+                </option>
+              ))}
+            </optgroup>
+          ) : null}
+          <option value="custom">Custom definition</option>
+        </select>
+      </Field>
+
+      {selection.startsWith("preset:") ? (
+        <PresetDescription selection={selection} presets={presets} />
+      ) : null}
+
+      {selection === "custom" ? (
+        <div className="space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+          <WorkflowTypeEditor
+            value={value}
+            onChange={onChange}
+            onSourceChange={setCustomSource}
+            typeDefinitions={typeDefinitions}
+          />
+          <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+            <Field label="Save As Type Definition">
+              <input
+                className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 font-mono text-sm outline-none focus:border-zinc-950 focus:ring-2 focus:ring-zinc-950/10"
+                value={definitionName}
+                onChange={(event) => setDefinitionName(event.target.value)}
+                placeholder="DataSourceType"
+                spellCheck={false}
+              />
+            </Field>
+            <div className="flex items-end">
+              <button
+                type="button"
+                className="inline-flex h-10 items-center justify-center rounded-lg border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={saveCustomDefinition}
+                disabled={!onTypeDefinitionsChange}
+              >
+                Save Type
+              </button>
+            </div>
+          </div>
+          {typeDefinitions.length > 0 ? (
+            <div className="text-xs text-zinc-500">
+              Saved type names are available in the TypeScript editor and can be loaded from the preset menu.
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PresetDescription({
+  selection,
+  presets,
+}: {
+  selection: TypeContractSelection;
+  presets: TypeContractPreset[];
+}) {
+  const preset = selection.startsWith("preset:")
+    ? presets.find((candidate) => `preset:${candidate.id}` === selection)
+    : null;
+  if (!preset) {
+    return null;
+  }
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
+      {preset.description}
+    </div>
+  );
+}
+
+function contractSelectionForSpec(
+  spec: DataSourceUpsert["type"],
+  presets: TypeContractPreset[],
+  typeDefinitions: TypeDefinition[],
+): TypeContractSelection {
+  const signature = workflowTypeSignature(spec);
+  const definition = typeDefinitions.find((candidate) => workflowTypeSignature(candidate.spec) === signature);
+  if (definition) {
+    return `type:${definition.id}`;
+  }
+  const preset = presets.find((candidate) => workflowTypeSignature(candidate.spec) === signature);
+  return preset ? `preset:${preset.id}` : "custom";
+}
+
+function typeContractPresets(kind: DataSourceKind): TypeContractPreset[] {
+  const presets: TypeContractPreset[] = [
+    {
+      id: "kind-default",
+      label: `${dataSourceKindLabel(kind)} default`,
+      description: "Use the standard loose contract for this source kind.",
+      spec: defaultDataSourceType(kind),
+    },
+    {
+      id: "any-json",
+      label: "Any JSON",
+      description: "Accept any valid JSON value when the exact shape is not important yet.",
+      spec: { type: "any" },
+    },
+    {
+      id: "text",
+      label: "Plain text",
+      description: "A single string payload for notes, prompts, transcripts, or templates.",
+      spec: { type: "string" },
+    },
+    {
+      id: "record",
+      label: "Open record",
+      description: "A JSON object with named fields and room for extra properties.",
+      spec: { type: "object", properties: [], additional_properties: true, semantic: "data_record" },
+    },
+    {
+      id: "record-list",
+      label: "List of records",
+      description: "An array of JSON objects, useful for CSV rows, API item lists, or catalogs.",
+      spec: {
+        type: "array",
+        items: { type: "object", properties: [], additional_properties: true, semantic: "data_record" },
+      },
+    },
+  ];
+  return uniquePresets(presets);
+}
+
+function uniquePresets(presets: TypeContractPreset[]): TypeContractPreset[] {
+  const seen = new Set<string>();
+  return presets.filter((preset) => {
+    const signature = workflowTypeSignature(preset.spec);
+    if (seen.has(signature)) {
+      return false;
+    }
+    seen.add(signature);
+    return true;
+  });
+}
+
+function sourceForSavedCustomDefinition(source: string, spec: DataSourceUpsert["type"]): string {
+  const trimmed = source.trim();
+  try {
+    if (isWorkflowTypeSpec(JSON.parse(trimmed))) {
+      return sourceForFormattedSpec(spec);
+    }
+  } catch {
+    // Not JSON mode; keep treating it as TypeScript input.
+  }
+  const alias = /^(?:export\s+)?type\s+[A-Za-z_$][A-Za-z0-9_$]*\s*=\s*([\s\S]*?);?\s*$/.exec(trimmed);
+  if (alias) {
+    return alias[1].trim().replace(/;$/, "").trim();
+  }
+  if (trimmed && !/^(?:export\s+)?interface\s+/.test(trimmed)) {
+    return trimmed;
+  }
+  return sourceForFormattedSpec(spec);
+}
+
+function sourceForFormattedSpec(spec: DataSourceUpsert["type"]): string {
+  const formatted = formatWorkflowTypeScriptType(spec).trim();
+  return formatted.replace(/^(?:export\s+)?type\s+[A-Za-z_$][A-Za-z0-9_$]*\s*=\s*/, "").replace(/;$/, "").trim();
 }
 
 function isDerivedOriginRecord<T extends { origin: DataSourceOrigin }>(

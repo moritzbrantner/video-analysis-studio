@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { isLikelyAudioOnly, mediaCandidatesForReport } from "../src/media";
-import type { YoutubeVideoReport } from "../src/types";
+import { isLikelyAudioOnly, mediaCandidatesForReport } from ".";
+import type { YoutubeVideoReport } from "../types";
 
 describe("media helpers", () => {
   test("isLikelyAudioOnly detects common audio extensions", () => {
