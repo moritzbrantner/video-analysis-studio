@@ -114,6 +114,13 @@ export function createTauriClient(): WorkflowClient {
       const { convertFileSrc } = await import("@tauri-apps/api/core");
       return convertFileSrc(path);
     },
+    dataSourceMediaUrl: async (path) => {
+      if (!path.trim()) {
+        return null;
+      }
+      const { convertFileSrc } = await import("@tauri-apps/api/core");
+      return convertFileSrc(path);
+    },
     subscribeRunEvents: async (runId, onEvent) => {
       const { listen } = await import("@tauri-apps/api/event");
       return listen<RunEvent>("workflow://run-event", (event) => {

@@ -140,6 +140,12 @@ export function createHttpClient(baseUrl = import.meta.env.VITE_STUDIO_API_URL ?
       }
       return `${baseUrl}/api/runs/${runId}/media?path=${encodeURIComponent(path)}`;
     },
+    dataSourceMediaUrl: async (path) => {
+      if (!path.trim()) {
+        return null;
+      }
+      return `${baseUrl}/api/data-source-media?path=${encodeURIComponent(path)}`;
+    },
     subscribeRunEvents: async (runId, onEvent) => {
       const source = new EventSource(`${baseUrl}/api/runs/${runId}/events`);
       source.addEventListener("run-event", (event) => {

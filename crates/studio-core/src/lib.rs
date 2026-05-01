@@ -15,10 +15,11 @@ mod workflow_support;
 mod youtube;
 
 pub use data_sources::{
-    data_source_catalog_path, editable_inline_body, migrate_legacy_data_sources,
-    validate_data_source_id, DataSourceCatalog, DataSourceDerivationInput,
-    DataSourceDerivationKind, DataSourceKind, DataSourceOrigin, DataSourceRecord, DataSourceUpsert,
-    DATA_SOURCE_CATALOG_FORMAT, DATA_SOURCE_CATALOG_VERSION,
+    data_source_catalog_path, data_sources_with_defaults, editable_inline_body, folder_image_paths,
+    migrate_legacy_data_sources, validate_data_source_id, DataSourceCatalog,
+    DataSourceDerivationInput, DataSourceDerivationKind, DataSourceKind, DataSourceOrigin,
+    DataSourceRecord, DataSourceUpsert, DATA_SOURCE_CATALOG_FORMAT, DATA_SOURCE_CATALOG_VERSION,
+    LINUX_PICTURES_DATA_SOURCE_ID,
 };
 pub use error::{Result, StudioError};
 pub use red_cars::{run_video_red_cars_workflow, VideoRedCarsRunRequest};

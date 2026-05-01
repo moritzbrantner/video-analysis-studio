@@ -9,8 +9,8 @@ use tokio::sync::{broadcast, Mutex};
 use uuid::Uuid;
 
 use crate::data_sources::{
-    data_source_catalog_path, DataSourceCatalog, DataSourceDerivationInput, DataSourceRecord,
-    DataSourceUpsert,
+    data_source_catalog_path, data_sources_with_defaults, DataSourceCatalog,
+    DataSourceDerivationInput, DataSourceRecord, DataSourceUpsert,
 };
 use crate::error::{Result, StudioError};
 use crate::red_cars::{run_video_red_cars_workflow, VideoRedCarsRunRequest};
@@ -783,7 +783,9 @@ impl RunManager {
 
     pub async fn list_data_sources(&self) -> Result<Vec<DataSourceRecord>> {
         let _guard = self.inner.data_sources.lock().await;
-        Ok(self.load_data_source_catalog()?.data_sources)
+        Ok(data_sources_with_defaults(
+            self.load_data_source_catalog()?.data_sources,
+        ))
     }
 
     pub async fn create_data_source(&self, input: DataSourceUpsert) -> Result<DataSourceRecord> {
@@ -791,7 +793,7 @@ impl RunManager {
         let mut catalog = self.load_data_source_catalog()?;
         let record = catalog.create(input)?;
         self.save_data_source_catalog(&catalog)?;
-        Ok(record)
+        Ok(hydrate_data_source_record(record))
     }
 
     pub async fn update_data_source(
@@ -803,7 +805,7 @@ impl RunManager {
         let mut catalog = self.load_data_source_catalog()?;
         let record = catalog.update(current_id, input)?;
         self.save_data_source_catalog(&catalog)?;
-        Ok(record)
+        Ok(hydrate_data_source_record(record))
     }
 
     pub async fn delete_data_source(&self, id: &str) -> Result<()> {
@@ -823,7 +825,7 @@ impl RunManager {
         let mut catalog = self.load_data_source_catalog()?;
         let record = catalog.create_derivation(parent_id, input)?;
         self.save_data_source_catalog(&catalog)?;
-        Ok(record)
+        Ok(hydrate_data_source_record(record))
     }
 
     async fn update_run(
@@ -1007,6 +1009,14 @@ fn hydrate_run_states(run_store: &RunStore) -> HashMap<RunId, RunState> {
         );
     }
     runs
+}
+
+fn hydrate_data_source_record(record: DataSourceRecord) -> DataSourceRecord {
+    let record_id = record.id.clone();
+    data_sources_with_defaults(vec![record.clone()])
+        .into_iter()
+        .find(|candidate| candidate.id == record_id)
+        .unwrap_or(record)
 }
 
 fn push_event_history(history: &mut VecDeque<RunEvent>, event: RunEvent) {

@@ -2798,7 +2798,7 @@ const initialWorkflowNodes: WorkflowNodeModel[] = [
   workflowNode("image-catalog-source", 0, 980, {
     title: "Image Data Source",
     packageName: "@video-analysis-studio/ui",
-    description: "Reads image URLs or data URLs from a workspace data source.",
+    description: "Reads image files, image URLs, or data URLs from a workspace data source.",
     tone: "slate",
     inputs: [],
     outputs: [port("images", "image catalog", "object_value")],
@@ -12996,7 +12996,7 @@ function ImageSimilarityRunControls({
 
         {validationMessage || dataSources.length === 0 ? (
           <p className="text-sm text-rose-600">
-            {validationMessage ?? "Create a JSON or TXT data source with image URLs or data URLs."}
+            {validationMessage ?? "Create a folder, JSON, or TXT data source with images, image URLs, or data URLs."}
           </p>
         ) : null}
         <button
@@ -14275,7 +14275,7 @@ async function runImageSimilarityWorkflow(
     imageSources.find((candidate) => candidate.id === form.imageDataSourceId) ??
     imageSources[0];
   if (!source) {
-    throw new Error("Create a JSON data source with image URLs or data URLs before running image similarity.");
+    throw new Error("Create a folder, JSON, or TXT data source with images, image URLs, or data URLs before running image similarity.");
   }
   const candidates = imageCandidatesFromDataSource(source);
   const query = await loadImageElement(form.imageDataUrl);
@@ -14287,7 +14287,7 @@ async function runImageSimilarityWorkflow(
           const image = await loadImageElement(candidate.imageUrl);
           const feature = imageFeatureFromElement(image.image);
           return {
-            candidate,
+            candidate: { ...candidate, imageUrl: image.src },
             score: imageFeatureSimilarity(queryFeature, feature),
           };
         } catch {
@@ -14419,16 +14419,34 @@ function imageTitleFromUrl(value: string, fallback: string): string {
   return last ? decodeURIComponent(last).replace(/\.[^.]+$/, "") : fallback;
 }
 
-function loadImageElement(src: string): Promise<{ image: HTMLImageElement; width: number; height: number }> {
+async function loadImageElement(src: string): Promise<{ image: HTMLImageElement; width: number; height: number; src: string }> {
+  const imageSrc = await resolveImageElementSrc(src);
   return new Promise((resolve, reject) => {
     const image = new Image();
-    if (!src.startsWith("data:")) {
+    if (/^https?:\/\//i.test(imageSrc)) {
       image.crossOrigin = "anonymous";
     }
-    image.onload = () => resolve({ image, width: image.naturalWidth, height: image.naturalHeight });
+    image.onload = () => resolve({ image, width: image.naturalWidth, height: image.naturalHeight, src: imageSrc });
     image.onerror = () => reject(new Error("Image failed to load."));
-    image.src = src;
+    image.src = imageSrc;
   });
+}
+
+async function resolveImageElementSrc(src: string): Promise<string> {
+  const trimmed = src.trim();
+  if (!isLocalImagePath(trimmed)) {
+    return trimmed;
+  }
+  return (await getWorkflowClient().dataSourceMediaUrl(trimmed)) ?? trimmed;
+}
+
+function isLocalImagePath(value: string): boolean {
+  return (
+    looksLikeImageReference(value) &&
+    (/^(\/|~\/|\.\.?\/)/.test(value) || /^[a-z]:[\\/]/i.test(value)) &&
+    !value.startsWith("data:") &&
+    !/^https?:\/\//i.test(value)
+  );
 }
 
 function imageFeatureFromElement(image: HTMLImageElement): number[] {

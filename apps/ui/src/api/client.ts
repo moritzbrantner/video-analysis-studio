@@ -114,6 +114,7 @@ export interface WorkflowClient {
   getSongAnalysisReport(runId: string): Promise<SongAnalysisReport>;
   getSubtitleGenerationReport(runId: string): Promise<SubtitleGenerationReport>;
   mediaUrl(runId: string | null, path: string): Promise<string | null>;
+  dataSourceMediaUrl(path: string): Promise<string | null>;
   cancelRun(runId: string): Promise<void>;
   subscribeRunEvents?(runId: string, onEvent: (event: RunEvent) => void): Promise<() => void>;
 }

@@ -74,6 +74,7 @@ pub fn build_app_with_options(manager: RunManager, options: ApiOptions) -> Route
             "/api/data-sources/{id}/derivations",
             post(create_data_source_derivation),
         )
+        .route("/api/data-source-media", get(get_data_source_media))
         .route(
             "/api/youtube/collection-manifests",
             post(discover_collection_manifest),
@@ -408,6 +409,31 @@ async fn get_run_media(
     Ok(response.into_response())
 }
 
+async fn get_data_source_media(
+    State(state): State<AppState>,
+    Query(query): Query<MediaQuery>,
+    request: axum::http::Request<Body>,
+) -> Result<Response, MediaRouteError> {
+    let requested = canonical_local_path(&query.path).ok_or(MediaRouteError::NotFound)?;
+    let data_sources = state.manager.list_data_sources().await?;
+
+    if !data_sources
+        .iter()
+        .any(|record| data_source_allows_media_path(record, &requested))
+    {
+        return Err(MediaRouteError::Forbidden);
+    }
+    if !requested.exists() || !is_supported_image_path(&requested) {
+        return Err(MediaRouteError::NotFound);
+    }
+
+    let response = match ServeFile::new(requested).oneshot(request).await {
+        Ok(response) => response,
+        Err(error) => match error {},
+    };
+    Ok(response.into_response())
+}
+
 fn sse_event(event: RunEvent) -> Event {
     Event::default()
         .event("run-event")
@@ -451,7 +477,7 @@ impl IntoResponse for MediaRouteError {
             MediaRouteError::Forbidden => (
                 StatusCode::FORBIDDEN,
                 Json(ErrorResponse {
-                    error: "media path is not referenced by this run report".to_string(),
+                    error: "media path is not allowed".to_string(),
                 }),
             )
                 .into_response(),
@@ -535,6 +561,51 @@ fn canonical_report_path(run: &RunRecord, value: &str) -> Option<PathBuf> {
     candidates
         .into_iter()
         .find_map(|candidate| candidate.canonicalize().ok())
+}
+
+fn data_source_allows_media_path(record: &DataSourceRecord, requested: &PathBuf) -> bool {
+    if record.kind != studio_core::DataSourceKind::Folder {
+        return false;
+    }
+    let Some(root) = canonical_local_path(&record.location) else {
+        return false;
+    };
+    requested.starts_with(root) && is_supported_image_path(requested)
+}
+
+fn canonical_local_path(value: &str) -> Option<PathBuf> {
+    let path = expand_home_path(FsPath::new(value.trim()));
+    if path.as_os_str().is_empty() {
+        return None;
+    }
+    path.canonicalize().ok()
+}
+
+fn expand_home_path(path: &FsPath) -> PathBuf {
+    let value = path.to_string_lossy();
+    if value == "~" {
+        return std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| path.to_path_buf());
+    }
+    if let Some(rest) = value.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    path.to_path_buf()
+}
+
+fn is_supported_image_path(path: &FsPath) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "avif" | "svg"
+            )
+        })
+        .unwrap_or(false)
 }
 
 impl IntoResponse for ApiError {
@@ -918,8 +989,7 @@ mod tests {
             .await
             .unwrap();
         let records: Vec<studio_core::DataSourceRecord> = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].id, "song_catalog");
+        assert!(records.iter().any(|record| record.id == "song_catalog"));
 
         let update_response = app
             .clone()

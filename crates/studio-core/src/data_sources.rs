@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -12,6 +12,8 @@ use crate::{
 
 pub const DATA_SOURCE_CATALOG_FORMAT: &str = "video-analysis.dataSources";
 pub const DATA_SOURCE_CATALOG_VERSION: u32 = 2;
+pub const LINUX_PICTURES_DATA_SOURCE_ID: &str = "linux-pictures";
+const MAX_FOLDER_IMAGE_CANDIDATES: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -358,6 +360,34 @@ struct DerivedRecordOptions {
 
 pub fn data_source_catalog_path(data_dir: &Path) -> PathBuf {
     data_dir.join("data-sources").join("catalog.json")
+}
+
+pub fn data_sources_with_defaults(records: Vec<DataSourceRecord>) -> Vec<DataSourceRecord> {
+    let mut records: Vec<DataSourceRecord> = records
+        .into_iter()
+        .map(hydrate_folder_data_source)
+        .collect();
+    if !records
+        .iter()
+        .any(|record| record.id == LINUX_PICTURES_DATA_SOURCE_ID)
+    {
+        if let Some(record) = default_linux_pictures_data_source() {
+            records.push(record);
+        }
+    }
+    records.sort_by(|left, right| left.id.cmp(&right.id));
+    records
+}
+
+pub fn folder_image_paths(path: &Path) -> Vec<String> {
+    let root = expand_home(path);
+    if !root.is_dir() {
+        return Vec::new();
+    }
+    let mut images = Vec::new();
+    collect_folder_image_paths(&root, &mut images);
+    images.sort();
+    images
 }
 
 pub fn validate_data_source_id(value: &str) -> Result<()> {
@@ -770,6 +800,110 @@ fn normalize_tag(tag: &str) -> String {
     tag.trim().to_lowercase()
 }
 
+fn hydrate_folder_data_source(mut record: DataSourceRecord) -> DataSourceRecord {
+    if record.kind == DataSourceKind::Folder && !record.location.trim().is_empty() {
+        record.body = folder_body(&record.location);
+    }
+    record
+}
+
+fn default_linux_pictures_data_source() -> Option<DataSourceRecord> {
+    #[cfg(target_os = "linux")]
+    {
+        let home = std::env::var_os("HOME")?;
+        let pictures_dir = PathBuf::from(home).join("Pictures");
+        if !pictures_dir.is_dir() {
+            return None;
+        }
+        let now = Utc
+            .with_ymd_and_hms(1970, 1, 1, 0, 0, 0)
+            .single()
+            .unwrap_or_else(Utc::now);
+        Some(DataSourceRecord {
+            id: LINUX_PICTURES_DATA_SOURCE_ID.to_string(),
+            name: "Pictures".to_string(),
+            kind: DataSourceKind::Folder,
+            value_type: WorkflowTypeSpec::Object {
+                properties: Vec::new(),
+                additional_properties: true,
+                additional_property_value: None,
+                semantic: Some(WorkflowSemanticKind::DataBucket),
+            },
+            location: pictures_dir.to_string_lossy().to_string(),
+            description: "Default Linux Pictures folder.".to_string(),
+            tags: vec!["images".to_string(), "default".to_string()],
+            body: folder_body(&pictures_dir.to_string_lossy()),
+            origin: DataSourceOrigin::Root,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+fn folder_body(location: &str) -> String {
+    serde_json::to_string(&folder_image_paths(Path::new(location)))
+        .unwrap_or_else(|_| "[]".to_string())
+}
+
+fn collect_folder_image_paths(root: &Path, images: &mut Vec<String>) {
+    if images.len() >= MAX_FOLDER_IMAGE_CANDIDATES {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    let mut dirs = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            dirs.push(path);
+        } else if is_supported_image_path(&path) {
+            images.push(path.to_string_lossy().to_string());
+            if images.len() >= MAX_FOLDER_IMAGE_CANDIDATES {
+                return;
+            }
+        }
+    }
+    dirs.sort();
+    for dir in dirs {
+        collect_folder_image_paths(&dir, images);
+        if images.len() >= MAX_FOLDER_IMAGE_CANDIDATES {
+            return;
+        }
+    }
+}
+
+fn is_supported_image_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "avif" | "svg"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn expand_home(path: &Path) -> PathBuf {
+    let value = path.to_string_lossy();
+    if value == "~" {
+        return std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| path.to_path_buf());
+    }
+    if let Some(rest) = value.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    path.to_path_buf()
+}
+
 fn default_type_for_kind(kind: DataSourceKind) -> WorkflowTypeSpec {
     match kind {
         DataSourceKind::Json | DataSourceKind::Other => WorkflowTypeSpec::Any,
@@ -934,6 +1068,36 @@ mod tests {
             )
             .unwrap();
         assert!(catalog.delete("parent").is_err());
+    }
+
+    #[test]
+    fn folder_data_sources_are_hydrated_with_image_paths() {
+        let dir = tempdir().unwrap();
+        let nested = dir.path().join("nested");
+        fs::create_dir(&nested).unwrap();
+        fs::write(dir.path().join("first.jpg"), b"image").unwrap();
+        fs::write(nested.join("second.png"), b"image").unwrap();
+        fs::write(dir.path().join("notes.txt"), b"text").unwrap();
+
+        let records = data_sources_with_defaults(vec![DataSourceRecord {
+            id: "images".to_string(),
+            name: "Images".to_string(),
+            kind: DataSourceKind::Folder,
+            value_type: default_type_for_kind(DataSourceKind::Folder),
+            location: dir.path().to_string_lossy().to_string(),
+            description: String::new(),
+            tags: Vec::new(),
+            body: String::new(),
+            origin: DataSourceOrigin::Root,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }]);
+
+        let record = records.iter().find(|record| record.id == "images").unwrap();
+        let image_paths: Vec<String> = serde_json::from_str(&record.body).unwrap();
+        assert_eq!(image_paths.len(), 2);
+        assert!(image_paths.iter().any(|path| path.ends_with("first.jpg")));
+        assert!(image_paths.iter().any(|path| path.ends_with("second.png")));
     }
 
     #[test]
