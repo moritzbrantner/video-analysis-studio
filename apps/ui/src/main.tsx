@@ -133,7 +133,7 @@ import {
   workflowShareUrl,
 } from "./workflowShare";
 import { workflowGraphHasCycle, workflowGraphWouldCreateCycle } from "./workflowGraph";
-import { appLocationFromPath, pathForAppPage, type AppPage } from "./app/routing";
+import { appLocationFromPath, pathForAppPage, pathForTypeDefinitionPage, type AppPage } from "./app/routing";
 
 type WorkflowKindId =
   | "youtube-video"
@@ -360,6 +360,9 @@ function App() {
   const [page, setPage] = useState<AppPage>(() =>
     typeof window === "undefined" ? "analysis" : appLocationFromPath(window.location.pathname).page,
   );
+  const [activeTypeRouteId, setActiveTypeRouteId] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : appLocationFromPath(window.location.pathname).typeId,
+  );
   const [viewMode, setViewMode] = useState<ViewMode>("home");
   const [runStatus, setRunStatus] = useState<CliRun["status"]>("pending");
   const [lastRun, setLastRun] = useState<CliRun | null>(null);
@@ -505,6 +508,7 @@ function App() {
     const onPopState = () => {
       const nextLocation = appLocationFromPath(window.location.pathname);
       setPage(nextLocation.page);
+      setActiveTypeRouteId(nextLocation.typeId);
       setPendingWorkflowShareToken(workflowShareTokenFromUrl(window.location.href));
       const nextWorkflowId = nextLocation.workflowId;
       if (!nextWorkflowId) {
@@ -580,14 +584,16 @@ function App() {
     if (typeof window === "undefined") {
       return;
     }
-    const expectedPath = pathForAppPage(page, activeWorkflow.id);
+    const expectedPath =
+      page === "types" ? pathForTypeDefinitionPage(activeTypeRouteId) : pathForAppPage(page, activeWorkflow.id);
     if (window.location.pathname !== expectedPath) {
       window.history.replaceState({}, "", expectedPath);
     }
-  }, [activeWorkflow.id, page]);
+  }, [activeTypeRouteId, activeWorkflow.id, page]);
 
   const navigateToPage = useCallback((nextPage: AppPage, options?: { workflowId?: string | null; history?: "push" | "replace" }) => {
     setPage(nextPage);
+    setActiveTypeRouteId(null);
     if (typeof window === "undefined") {
       return;
     }
@@ -597,6 +603,19 @@ function App() {
       window.history[method]({}, "", nextPath);
     }
   }, [activeWorkflow.id]);
+
+  const navigateToTypeDefinition = useCallback((typeId: string | null, options?: { history?: "push" | "replace" }) => {
+    setPage("types");
+    setActiveTypeRouteId(typeId);
+    if (typeof window === "undefined") {
+      return;
+    }
+    const nextPath = pathForTypeDefinitionPage(typeId);
+    if (window.location.pathname !== nextPath) {
+      const method = options?.history === "replace" ? "replaceState" : "pushState";
+      window.history[method]({}, "", nextPath);
+    }
+  }, []);
 
   const loadSampleReport = useCallback(() => {
     setReport(sampleReport);
@@ -1736,6 +1755,8 @@ function App() {
                 workflowLibrary={workflowLibrary}
                 definitions={typeDefinitions}
                 onDefinitionsChange={setTypeDefinitions}
+                selectedDefinitionId={activeTypeRouteId}
+                onDefinitionRouteChange={navigateToTypeDefinition}
               />
             ) : page === "settings" ? (
               <SettingsPage
@@ -9932,21 +9953,216 @@ function placeholderRunRequest(
 
 function loadSavedWorkflowBlocks(): SavedWorkflowBlock[] {
   if (typeof window === "undefined") {
-    return [];
+    return defaultSavedWorkflowBlocks();
   }
   try {
     const raw = window.localStorage.getItem(savedWorkflowBlocksStorageKey);
     if (!raw) {
-      return [];
+      return defaultSavedWorkflowBlocks();
     }
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) {
-      return [];
+      return defaultSavedWorkflowBlocks();
     }
-    return parsed.filter(isSavedWorkflowBlock).map(normalizeSavedWorkflowBlock).filter(savedWorkflowBlockHasValidGraph);
+    const blocks = parsed.filter(isSavedWorkflowBlock).map(normalizeSavedWorkflowBlock).filter(savedWorkflowBlockHasValidGraph);
+    return withDevSavedWorkflowBlockSeeds(blocks);
   } catch {
-    return [];
+    return defaultSavedWorkflowBlocks();
   }
+}
+
+function defaultSavedWorkflowBlocks(): SavedWorkflowBlock[] {
+  return withDevSavedWorkflowBlockSeeds([]);
+}
+
+function withDevSavedWorkflowBlockSeeds(blocks: SavedWorkflowBlock[]): SavedWorkflowBlock[] {
+  if (!devFixturesEnabled()) {
+    return blocks;
+  }
+  const existingIds = new Set(blocks.map((block) => block.id));
+  const existingNames = new Set(blocks.map((block) => block.name));
+  const missingSeeds = devSavedWorkflowBlockSeeds()
+    .map(normalizeSavedWorkflowBlock)
+    .filter(savedWorkflowBlockHasValidGraph)
+    .filter((block) => !existingIds.has(block.id) && !existingNames.has(block.name));
+  return missingSeeds.concat(blocks);
+}
+
+function devFixturesEnabled(): boolean {
+  return import.meta.env.DEV && import.meta.env.VITE_DISABLE_DEV_SEEDS !== "1";
+}
+
+function devSavedWorkflowBlockSeeds(): SavedWorkflowBlock[] {
+  const createdAt = "2026-05-02T00:00:00.000Z";
+  const clipCandidateType: WorkflowTypeSpec = {
+    type: "object",
+    properties: [
+      { name: "clipId", value: { type: "string" }, required: true },
+      { name: "startSeconds", value: { type: "number" }, required: true },
+      { name: "endSeconds", value: { type: "number" }, required: true },
+      { name: "transcript", value: { type: "string" }, required: false },
+      { name: "confidence", value: { type: "number" }, required: true },
+    ],
+    additional_properties: false,
+  };
+  const reviewedClipType: WorkflowTypeSpec = {
+    type: "object",
+    properties: [
+      { name: "clip", value: clipCandidateType, required: true },
+      { name: "reviewer", value: { type: "string" }, required: true },
+      { name: "accepted", value: { type: "boolean" }, required: true },
+      { name: "notes", value: { type: "array", items: { type: "string" } }, required: false },
+    ],
+    additional_properties: false,
+  };
+  const httpExperimentRequestType: WorkflowTypeSpec = {
+    type: "object",
+    properties: [
+      { name: "url", value: { type: "string" }, required: true },
+      { name: "method", value: { type: "string" }, required: true },
+      {
+        name: "headers",
+        value: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: [
+              { name: "name", value: { type: "string" }, required: true },
+              { name: "value", value: { type: "string" }, required: true },
+            ],
+            additional_properties: false,
+          },
+        },
+        required: false,
+      },
+      { name: "body", value: { type: "string" }, required: false },
+    ],
+    additional_properties: false,
+  };
+
+  const clipFixtureOutput = port("clip", "clip candidate", "object_value", { valueType: clipCandidateType });
+  const clipReviewInput = port("clip", "clip candidate", "object_value", { valueType: clipCandidateType });
+  const clipReviewOutput = port("review", "reviewed clip", "object_value", { valueType: reviewedClipType });
+  const endpointOutput = port("url", "endpoint URL", "string_value");
+  const requestUrlInput = port("url", "URL", "string_value");
+  const requestOutput = port("request", "experiment request", "http_request", { valueType: httpExperimentRequestType });
+  const clientInput = port("request", "HTTP request", "http_request", { valueType: httpExperimentRequestType });
+  const clientOutput = port("body", "response body", "data_value");
+
+  return [
+    {
+      id: "dev-clip-review-block",
+      name: "Dev Clip Review Block",
+      kind: "youtube-video",
+      createdAt,
+      category: "Pipeline",
+      tags: ["dev", "custom-type", "review"],
+      nodes: [
+        {
+          id: "dev-clip-fixture",
+          position: { x: 0, y: 0 },
+          data: {
+            title: "Dev Clip Fixture",
+            packageName: "dev-fixtures",
+            description: "Emits a typed clip candidate for custom type and adapter experiments.",
+            category: "Generator",
+            tone: "cyan",
+            inputs: [],
+            outputs: [clipFixtureOutput],
+            tags: ["dev", "fixture", "clip"],
+          },
+        },
+        {
+          id: "dev-review-annotator",
+          position: { x: 360, y: 0 },
+          data: {
+            title: "Dev Review Annotator",
+            packageName: "dev-review",
+            description: "Wraps a clip candidate with reviewer notes and acceptance status.",
+            category: "Pipeline",
+            tone: "violet",
+            inputs: [clipReviewInput],
+            outputs: [clipReviewOutput],
+            tags: ["dev", "review", "custom-type"],
+          },
+        },
+      ],
+      edges: [
+        {
+          source: "dev-clip-fixture",
+          sourceHandle: handleId("out", clipFixtureOutput),
+          target: "dev-review-annotator",
+          targetHandle: handleId("in", clipReviewInput),
+        },
+      ],
+    },
+    {
+      id: "dev-http-experiment-block",
+      name: "Dev HTTP Experiment Block",
+      kind: "youtube-video",
+      createdAt,
+      category: "API",
+      tags: ["dev", "http", "custom-type"],
+      nodes: [
+        {
+          id: "dev-endpoint-url",
+          position: { x: 0, y: 0 },
+          data: {
+            title: "Dev Endpoint URL",
+            packageName: "dev-fixtures",
+            description: "Provides a placeholder URL for HTTP request experiments.",
+            category: "Generator",
+            tone: "sky",
+            inputs: [],
+            outputs: [endpointOutput],
+            tags: ["dev", "url", "http"],
+          },
+        },
+        {
+          id: "dev-request-builder",
+          position: { x: 360, y: 0 },
+          data: {
+            title: "Dev Request Builder",
+            packageName: "fetch",
+            description: "Builds a typed request object from the fixture URL.",
+            category: "API",
+            tone: "rose",
+            inputs: [requestUrlInput],
+            outputs: [requestOutput],
+            tags: ["dev", "request", "http"],
+          },
+        },
+        {
+          id: "dev-http-client",
+          position: { x: 720, y: 0 },
+          data: {
+            title: "Dev HTTP Client",
+            packageName: "fetch",
+            description: "Represents the request execution step and exposes a generic response body.",
+            category: "API",
+            tone: "amber",
+            inputs: [clientInput],
+            outputs: [clientOutput],
+            tags: ["dev", "client", "http"],
+          },
+        },
+      ],
+      edges: [
+        {
+          source: "dev-endpoint-url",
+          sourceHandle: handleId("out", endpointOutput),
+          target: "dev-request-builder",
+          targetHandle: handleId("in", requestUrlInput),
+        },
+        {
+          source: "dev-request-builder",
+          sourceHandle: handleId("out", requestOutput),
+          target: "dev-http-client",
+          targetHandle: handleId("in", clientInput),
+        },
+      ],
+    },
+  ];
 }
 
 function persistSavedWorkflowBlocks(blocks: SavedWorkflowBlock[]) {
@@ -11286,6 +11502,8 @@ function WorkflowNode({ id, data, selected, isConnectable }: NodeProps) {
 
   return (
     <div
+      data-testid="workflow-node"
+      data-node-title={nodeData.title}
       className={classNames(
         inlineLayout
           ? "w-[240px]"
@@ -11417,6 +11635,8 @@ function InlineWorkflowNode({
 
   return (
     <div
+      data-testid="workflow-inline-node"
+      data-node-title={data.title}
       className={classNames(
         "relative flex h-12 items-center gap-2 rounded-lg px-3",
         workflowHeaderClass(data.tone),
@@ -11581,7 +11801,7 @@ function MinimizedPortHandles({
   const height = Math.max(40, rowCount * 16 + 16);
 
   return (
-    <div className="relative border-t border-zinc-100 bg-white" style={{ height }}>
+    <div data-testid="workflow-minimized-ports" className="relative border-t border-zinc-100 bg-white" style={{ height }}>
       <div className="pointer-events-none absolute inset-x-3 top-1/2 flex -translate-y-1/2 items-center justify-between text-[10px] font-semibold uppercase text-zinc-500">
         <span>{inputs.length} in</span>
         <span>{outputs.length} out</span>
@@ -11699,6 +11919,9 @@ function PortRow({
 
   return (
     <div
+      data-testid="workflow-port"
+      data-port-direction={direction}
+      data-port-label={port.label}
       className={classNames(
         "relative rounded-md border px-2 py-1.5",
         isInput ? "pl-3" : "pr-3",

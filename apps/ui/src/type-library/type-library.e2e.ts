@@ -35,6 +35,41 @@ test.describe("type library", () => {
       name: "PlaywrightClip",
       source,
     });
+    await expect(page).toHaveURL(/\/types\/[^/]+$/);
+  });
+
+  test("opens overview and individual type pages", async ({ page }) => {
+    await seedTypeDefinitions(page, [
+      {
+        id: "clip-type",
+        name: "ClipType",
+        source: "{ id: string; score: number; }",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      {
+        id: "review-type",
+        name: "ReviewType",
+        source: "{ clip: ClipType; reviewed: boolean; }",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ]);
+
+    await page.goto("/types");
+    await expect(page).toHaveURL(/\/types$/);
+    await expect(page.getByRole("heading", { name: "Type Overview" })).toBeVisible();
+    await expect(page.getByRole("link", { name: /ClipType/ })).toBeVisible();
+
+    await page.getByRole("link", { name: /ReviewType/ }).click();
+    await expect(page).toHaveURL(/\/types\/review-type$/);
+    await expect(page.getByRole("button", { name: "All Types" })).toBeVisible();
+    await expect(editorPanel(page).getByRole("heading", { name: "Edit ReviewType" })).toBeVisible();
+    await expect(page.getByText("/types/review-type")).toBeVisible();
+
+    await page.getByRole("button", { name: "All Types" }).click();
+    await expect(page).toHaveURL(/\/types$/);
+    await expect(page.getByRole("heading", { name: "Type Overview" })).toBeVisible();
   });
 
   test("changes an existing type", async ({ page }) => {

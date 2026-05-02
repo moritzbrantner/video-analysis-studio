@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 
 import type { WorkflowTypeSpec } from "../api/client";
 import { Badge, EmptyState, Panel, StatCard } from "../shared/primitives";
@@ -11,6 +11,7 @@ import {
 import { formatWorkflowTypeScriptType, parseWorkflowTypeScriptType } from "../workflowTypeScript";
 
 export const typeLibraryStorageKey = "video-analysis.typeLibrary.v1";
+const devTypeDefinitionTimestamp = "2026-05-02T00:00:00.000Z";
 
 export interface StoredTypeDefinition {
   id: string;
@@ -23,6 +24,49 @@ export interface StoredTypeDefinition {
 export interface TypeDefinition extends StoredTypeDefinition {
   spec: WorkflowTypeSpec;
 }
+
+const devTypeDefinitionSeeds: StoredTypeDefinition[] = [
+  {
+    id: "dev-clip-review-candidate",
+    name: "DevClipReviewCandidate",
+    source: `{
+  clipId: string;
+  startSeconds: number;
+  endSeconds: number;
+  transcript?: string;
+  confidence: number;
+}`,
+    createdAt: devTypeDefinitionTimestamp,
+    updatedAt: devTypeDefinitionTimestamp,
+  },
+  {
+    id: "dev-reviewed-clip",
+    name: "DevReviewedClip",
+    source: `{
+  clip: DevClipReviewCandidate;
+  reviewer: string;
+  accepted: boolean;
+  notes?: string[];
+}`,
+    createdAt: devTypeDefinitionTimestamp,
+    updatedAt: devTypeDefinitionTimestamp,
+  },
+  {
+    id: "dev-http-experiment-request",
+    name: "DevHttpExperimentRequest",
+    source: `{
+  url: string;
+  method: string;
+  headers?: {
+    name: string;
+    value: string;
+  }[];
+  body?: string;
+}`,
+    createdAt: devTypeDefinitionTimestamp,
+    updatedAt: devTypeDefinitionTimestamp,
+  },
+];
 
 interface TypeUsage {
   workflowId: string;
@@ -63,6 +107,8 @@ interface TypeLibraryPageProps {
   workflowLibrary: TypeLibraryWorkflowLibrary;
   definitions: TypeDefinition[];
   onDefinitionsChange: Dispatch<SetStateAction<TypeDefinition[]>>;
+  selectedDefinitionId?: string | null;
+  onDefinitionRouteChange?: (definitionId: string | null, options?: { history?: "push" | "replace" }) => void;
 }
 
 const primitiveSnippets = [
@@ -74,10 +120,17 @@ const primitiveSnippets = [
   { label: "Binary", value: 'WorkflowBinary<"video/*", "video_file">' },
 ];
 
-export function TypeLibraryPage({ workflowLibrary, definitions, onDefinitionsChange }: TypeLibraryPageProps) {
-  const [activeId, setActiveId] = useState<string | null>(() => definitions[0]?.id ?? null);
-  const [draftName, setDraftName] = useState(() => definitions[0]?.name ?? nextTypeName(definitions));
-  const [draftSource, setDraftSource] = useState(() => definitions[0]?.source ?? "{\n  id: string;\n}");
+export function TypeLibraryPage({
+  workflowLibrary,
+  definitions,
+  onDefinitionsChange,
+  selectedDefinitionId = null,
+  onDefinitionRouteChange,
+}: TypeLibraryPageProps) {
+  const initialDefinition = definitionFromRoute(definitions, selectedDefinitionId) ?? definitions[0] ?? null;
+  const [activeId, setActiveId] = useState<string | null>(() => initialDefinition?.id ?? null);
+  const [draftName, setDraftName] = useState(() => initialDefinition?.name ?? nextTypeName(definitions));
+  const [draftSource, setDraftSource] = useState(() => initialDefinition?.source ?? "{\n  id: string;\n}");
   const [query, setQuery] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -86,6 +139,30 @@ export function TypeLibraryPage({ workflowLibrary, definitions, onDefinitionsCha
     () => definitions.find((definition) => definition.id === activeId) ?? null,
     [activeId, definitions],
   );
+  const selectedDefinition = useMemo(
+    () => definitionFromRoute(definitions, selectedDefinitionId),
+    [definitions, selectedDefinitionId],
+  );
+
+  useEffect(() => {
+    if (!selectedDefinitionId) {
+      return;
+    }
+    if (!selectedDefinition) {
+      if (activeId !== selectedDefinitionId) {
+        setActiveId(null);
+        setMessage(`Type "${selectedDefinitionId}" was not found.`);
+      }
+      return;
+    }
+    if (activeId === selectedDefinition.id) {
+      return;
+    }
+    setActiveId(selectedDefinition.id);
+    setDraftName(selectedDefinition.name);
+    setDraftSource(selectedDefinition.source);
+    setMessage(null);
+  }, [activeId, selectedDefinition, selectedDefinitionId]);
 
   const definitionNames = useMemo(() => definitions.map((definition) => definition.name), [definitions]);
   const usageIndex = useMemo(() => collectDefinitionUsage(definitions), [definitions]);
@@ -135,6 +212,7 @@ export function TypeLibraryPage({ workflowLibrary, definitions, onDefinitionsCha
     setDraftName(definition.name);
     setDraftSource(definition.source);
     setMessage(null);
+    onDefinitionRouteChange?.(definition.id);
   };
 
   const startNewDefinition = () => {
@@ -142,6 +220,7 @@ export function TypeLibraryPage({ workflowLibrary, definitions, onDefinitionsCha
     setDraftName(nextTypeName(definitions));
     setDraftSource("{\n  id: string;\n}");
     setMessage(null);
+    onDefinitionRouteChange?.(null);
   };
 
   const saveDefinition = () => {
@@ -163,6 +242,7 @@ export function TypeLibraryPage({ workflowLibrary, definitions, onDefinitionsCha
         current.map((definition) => (definition.id === activeDefinition.id ? nextDefinition : definition)),
       );
       setActiveId(nextDefinition.id);
+      onDefinitionRouteChange?.(nextDefinition.id, { history: "replace" });
       setMessage(`Saved ${name}.`);
       return;
     }
@@ -176,6 +256,7 @@ export function TypeLibraryPage({ workflowLibrary, definitions, onDefinitionsCha
     };
     onDefinitionsChange((current) => [...current, nextDefinition]);
     setActiveId(nextDefinition.id);
+    onDefinitionRouteChange?.(nextDefinition.id);
     setMessage(`Created ${name}.`);
   };
 
@@ -193,9 +274,13 @@ export function TypeLibraryPage({ workflowLibrary, definitions, onDefinitionsCha
     }
     const remaining = definitions.filter((definition) => definition.id !== activeDefinition.id);
     onDefinitionsChange(remaining);
+    onDefinitionRouteChange?.(null);
     const nextActive = remaining[0] ?? null;
     if (nextActive) {
-      openDefinition(nextActive);
+      setActiveId(nextActive.id);
+      setDraftName(nextActive.name);
+      setDraftSource(nextActive.source);
+      setMessage(`Deleted ${activeDefinition.name}.`);
     } else {
       setActiveId(null);
       setDraftName(nextTypeName(remaining));
@@ -228,9 +313,25 @@ export function TypeLibraryPage({ workflowLibrary, definitions, onDefinitionsCha
       (usageIndex.usedBy.get(definition.name)?.length ?? 0) === 0 &&
       (workflowUsageIndex.get(definition.name)?.length ?? 0) === 0,
   ).length;
+  const selectedDefinitionMissing = Boolean(selectedDefinitionId && !selectedDefinition);
 
   return (
     <div className="space-y-4">
+      {selectedDefinitionId && (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <button
+            type="button"
+            className="inline-flex h-9 items-center rounded-md border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+            onClick={() => onDefinitionRouteChange?.(null)}
+          >
+            All Types
+          </button>
+          {activeDefinition && (
+            <span className="font-mono text-xs text-zinc-500">/types/{activeDefinition.id}</span>
+          )}
+        </div>
+      )}
+
       <div className="grid gap-3 md:grid-cols-3">
         <StatCard label="Defined" value={definitions.length} detail="Custom contracts" tone="neutral" />
         <StatCard
@@ -241,6 +342,72 @@ export function TypeLibraryPage({ workflowLibrary, definitions, onDefinitionsCha
         />
         <StatCard label="Unused" value={unusedCount} detail="No inbound usage found" tone="amber" />
       </div>
+
+      <Panel
+        title="Type Overview"
+        description="Browse reusable contracts and open a dedicated page for each type."
+        actions={
+          <button
+            type="button"
+            className="inline-flex h-9 items-center rounded-md border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+            onClick={startNewDefinition}
+          >
+            Create Type
+          </button>
+        }
+      >
+        {definitions.length === 0 ? (
+          <EmptyState>No types defined</EmptyState>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {definitions.map((definition) => {
+              const usedBy = usageIndex.usedBy.get(definition.name) ?? [];
+              const uses = usageIndex.uses.get(definition.name) ?? [];
+              const workflowUsages = workflowUsageIndex.get(definition.name) ?? [];
+              const isSelected = activeId === definition.id;
+              return (
+                <a
+                  key={definition.id}
+                  href={`/types/${encodeURIComponent(definition.id)}`}
+                  className={cn(
+                    "block min-h-32 rounded-lg border p-3 text-left transition",
+                    isSelected
+                      ? "border-zinc-950 bg-zinc-950 text-white"
+                      : "border-zinc-200 bg-white text-zinc-800 hover:border-zinc-300 hover:bg-zinc-50",
+                  )}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    openDefinition(definition);
+                  }}
+                >
+                  <span className="flex items-start justify-between gap-3">
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-semibold">{definition.name}</span>
+                      <span className={cn("mt-1 block truncate font-mono text-xs", isSelected ? "text-zinc-300" : "text-zinc-500")}>
+                        {formatWorkflowTypeSpec(definition.spec)}
+                      </span>
+                    </span>
+                    <Badge tone={usedBy.length + workflowUsages.length > 0 ? "emerald" : "amber"}>
+                      {usedBy.length + workflowUsages.length}
+                    </Badge>
+                  </span>
+                  <span className={cn("mt-3 flex flex-wrap gap-2 text-xs", isSelected ? "text-zinc-300" : "text-zinc-500")}>
+                    <span>{uses.length} dependencies</span>
+                    <span>{usedBy.length} type references</span>
+                    <span>{workflowUsages.length} workflow ports</span>
+                  </span>
+                </a>
+              );
+            })}
+          </div>
+        )}
+      </Panel>
+
+      {selectedDefinitionMissing && (
+        <Panel title="Type Not Found" description="The requested type page does not match a saved type.">
+          <EmptyState>Select a type from the overview or create a new one.</EmptyState>
+        </Panel>
+      )}
 
       <div className="grid gap-4 xl:grid-cols-[360px_1fr]">
         <Panel
@@ -483,21 +650,48 @@ function UsageGroup({ label, values, empty }: { label: string; values: string[];
   );
 }
 
+function definitionFromRoute(definitions: TypeDefinition[], routeId: string | null | undefined): TypeDefinition | null {
+  if (!routeId) {
+    return null;
+  }
+  return definitions.find((definition) => definition.id === routeId || definition.name === routeId) ?? null;
+}
+
 export function loadTypeDefinitions(): TypeDefinition[] {
   if (typeof window === "undefined") {
-    return [];
+    return defaultTypeDefinitions();
   }
   const raw = window.localStorage.getItem(typeLibraryStorageKey);
   if (!raw) {
-    return [];
+    return defaultTypeDefinitions();
   }
   try {
     const parsed = JSON.parse(raw) as { definitions?: StoredTypeDefinition[] };
     const storedDefinitions = Array.isArray(parsed.definitions) ? parsed.definitions.filter(isStoredTypeDefinition) : [];
-    return hydrateTypeDefinitions(storedDefinitions);
+    return hydrateTypeDefinitions(withDevTypeDefinitionSeeds(storedDefinitions));
   } catch {
-    return [];
+    return defaultTypeDefinitions();
   }
+}
+
+function defaultTypeDefinitions(): TypeDefinition[] {
+  return hydrateTypeDefinitions(withDevTypeDefinitionSeeds([]));
+}
+
+function withDevTypeDefinitionSeeds(storedDefinitions: StoredTypeDefinition[]): StoredTypeDefinition[] {
+  if (!devFixturesEnabled()) {
+    return storedDefinitions;
+  }
+  const existingIds = new Set(storedDefinitions.map((definition) => definition.id));
+  const existingNames = new Set(storedDefinitions.map((definition) => definition.name));
+  const missingSeeds = devTypeDefinitionSeeds.filter(
+    (definition) => !existingIds.has(definition.id) && !existingNames.has(definition.name),
+  );
+  return missingSeeds.concat(storedDefinitions);
+}
+
+function devFixturesEnabled(): boolean {
+  return import.meta.env.DEV && import.meta.env.VITE_DISABLE_DEV_SEEDS !== "1";
 }
 
 function hydrateTypeDefinitions(storedDefinitions: StoredTypeDefinition[]): TypeDefinition[] {

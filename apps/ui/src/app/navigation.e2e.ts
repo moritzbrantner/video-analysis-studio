@@ -25,6 +25,11 @@ test("can navigate between core pages and toggle the sidebar", async ({ page }) 
   await expect(page).toHaveURL(/\/data-sources$/);
   await expect(page.getByRole("heading", { name: "Data Sources", level: 1 })).toBeVisible();
 
+  await page.locator('button[aria-label="Types"][title="Types"]').click();
+  await expect(page).toHaveURL(/\/types$/);
+  await expect(page.getByRole("heading", { name: "Types", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Type Overview" })).toBeVisible();
+
   await page.getByLabel("Collapse sidebar").click();
   await expect(page.getByLabel("Expand sidebar")).toBeVisible();
 

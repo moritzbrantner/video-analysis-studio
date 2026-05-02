@@ -3,6 +3,7 @@ export type AppPage = "analysis" | "runs" | "workflow" | "components" | "data-so
 export interface AppLocation {
   page: AppPage;
   workflowId: string | null;
+  typeId: string | null;
 }
 
 export function appLocationFromPath(pathname: string): AppLocation {
@@ -12,27 +13,29 @@ export function appLocationFromPath(pathname: string): AppLocation {
     return {
       page: "workflow",
       workflowId: decodePathSegment(workflowSegment),
+      typeId: null,
     };
   }
   if (pageSegment === "run" || pageSegment === "runs") {
     return {
       page: "runs",
       workflowId: decodePathSegment(workflowSegment),
+      typeId: null,
     };
   }
   if (pageSegment === "data-sources" || pageSegment === "datasources") {
-    return { page: "data-sources", workflowId: null };
+    return { page: "data-sources", workflowId: null, typeId: null };
   }
   if (pageSegment === "components" || pageSegment === "component-library") {
-    return { page: "components", workflowId: null };
+    return { page: "components", workflowId: null, typeId: null };
   }
   if (pageSegment === "types" || pageSegment === "type-library") {
-    return { page: "types", workflowId: null };
+    return { page: "types", workflowId: null, typeId: decodePathSegment(workflowSegment) };
   }
   if (pageSegment === "settings") {
-    return { page: "settings", workflowId: null };
+    return { page: "settings", workflowId: null, typeId: null };
   }
-  return { page: "analysis", workflowId: null };
+  return { page: "analysis", workflowId: null, typeId: null };
 }
 
 export function pathForAppPage(page: AppPage, workflowId?: string | null): string {
@@ -52,6 +55,10 @@ export function pathForAppPage(page: AppPage, workflowId?: string | null): strin
     case "analysis":
       return "/";
   }
+}
+
+export function pathForTypeDefinitionPage(typeId?: string | null): string {
+  return typeId ? `/types/${encodeURIComponent(typeId)}` : "/types";
 }
 
 function decodePathSegment(value: string | undefined): string | null {
