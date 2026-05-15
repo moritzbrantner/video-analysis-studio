@@ -17,8 +17,19 @@ type PortType =
   | "youtube_collection_url"
   | "video_file"
   | "image_file"
+  | "image_batch"
   | "audio_file"
+  | "audio_waveform"
   | "media_file"
+  | "mask_tensor"
+  | "latent_batch"
+  | "conditioning"
+  | "model_ref"
+  | "vae_ref"
+  | "clip_ref"
+  | "clip_vision_ref"
+  | "upscale_model_ref"
+  | "model_patch_ref"
   | "transcript"
   | "subtitle_file"
   | "collection_manifest"
@@ -671,10 +682,32 @@ function workflowTypeForPortType(type: PortType): WorkflowTypeSpec {
       return { type: "binary", media_type: "video/*", semantic: "video_file" };
     case "image_file":
       return { type: "binary", media_type: "image/*", semantic: "image_file" };
+    case "image_batch":
+      return { type: "object", properties: [], additional_properties: true, semantic: "image_batch" };
     case "audio_file":
       return { type: "binary", media_type: "audio/*", semantic: "audio_file" };
+    case "audio_waveform":
+      return { type: "object", properties: [], additional_properties: true, semantic: "audio_waveform" };
     case "media_file":
       return { type: "binary", semantic: "media_file" };
+    case "mask_tensor":
+      return { type: "object", properties: [], additional_properties: true, semantic: "mask_tensor" };
+    case "latent_batch":
+      return { type: "object", properties: [], additional_properties: true, semantic: "latent_batch" };
+    case "conditioning":
+      return { type: "object", properties: [], additional_properties: true, semantic: "conditioning" };
+    case "model_ref":
+      return { type: "object", properties: [], additional_properties: true, semantic: "model_ref" };
+    case "vae_ref":
+      return { type: "object", properties: [], additional_properties: true, semantic: "vae_ref" };
+    case "clip_ref":
+      return { type: "object", properties: [], additional_properties: true, semantic: "clip_ref" };
+    case "clip_vision_ref":
+      return { type: "object", properties: [], additional_properties: true, semantic: "clip_vision_ref" };
+    case "upscale_model_ref":
+      return { type: "object", properties: [], additional_properties: true, semantic: "upscale_model_ref" };
+    case "model_patch_ref":
+      return { type: "object", properties: [], additional_properties: true, semantic: "model_patch_ref" };
     case "transcript":
       return { type: "object", properties: [], additional_properties: true, semantic: "transcript" };
     case "subtitle_file":

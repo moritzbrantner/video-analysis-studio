@@ -2254,8 +2254,19 @@ type PortPresentationKind =
   | "youtube_collection_url"
   | "video_file"
   | "image_file"
+  | "image_batch"
   | "audio_file"
+  | "audio_waveform"
   | "media_file"
+  | "mask_tensor"
+  | "latent_batch"
+  | "conditioning"
+  | "model_ref"
+  | "vae_ref"
+  | "clip_ref"
+  | "clip_vision_ref"
+  | "upscale_model_ref"
+  | "model_patch_ref"
   | "transcript"
   | "subtitle_file"
   | "collection_manifest"
@@ -2627,8 +2638,19 @@ const portTypes: PortType[] = [
   "youtube_collection_url",
   "video_file",
   "image_file",
+  "image_batch",
   "audio_file",
+  "audio_waveform",
   "media_file",
+  "mask_tensor",
+  "latent_batch",
+  "conditioning",
+  "model_ref",
+  "vae_ref",
+  "clip_ref",
+  "clip_vision_ref",
+  "upscale_model_ref",
+  "model_patch_ref",
   "transcript",
   "subtitle_file",
   "collection_manifest",
@@ -2672,8 +2694,19 @@ const defaultPortTypeColors: PortTypeColors = {
   youtube_collection_url: "#0284c7",
   video_file: "#f59e0b",
   image_file: "#16a34a",
+  image_batch: "#15803d",
   audio_file: "#06b6d4",
+  audio_waveform: "#0e7490",
   media_file: "#0f766e",
+  mask_tensor: "#65a30d",
+  latent_batch: "#7c3aed",
+  conditioning: "#a855f7",
+  model_ref: "#4f46e5",
+  vae_ref: "#6366f1",
+  clip_ref: "#2563eb",
+  clip_vision_ref: "#0ea5e9",
+  upscale_model_ref: "#9333ea",
+  model_patch_ref: "#c026d3",
   transcript: "#4f46e5",
   subtitle_file: "#7c3aed",
   collection_manifest: "#0f766e",
@@ -3411,6 +3444,83 @@ const generatorWorkflowNodes: WorkflowNodeModel[] = [
       port("data", "data", "data_value"),
     ],
     tags: ["generator", "object", "json", "context"],
+  }),
+  workflowNode("audio-model-loader", 0, 0, {
+    title: "Audio Model Loader",
+    packageName: "audio-generation-models",
+    description: "Loads an audio generation checkpoint and exposes the model and VAE handles for downstream synthesis.",
+    category: "Models",
+    tone: "indigo",
+    inputs: [port("checkpoint", "checkpoint", "string_value", { optional: true })],
+    outputs: [
+      port("model", "model", "model_ref"),
+      port("vae", "VAE", "vae_ref"),
+    ],
+    tags: ["audio", "generation", "model", "loader", "checkpoint", "vae"],
+  }),
+  workflowNode("audio-prompt-encoder", 0, 0, {
+    title: "Audio Prompt Encoder",
+    packageName: "audio-generation-conditioning",
+    description: "Encodes positive and optional negative text prompts into conditioning tensors for audio generation.",
+    category: "Audio",
+    tone: "violet",
+    inputs: [
+      port("model", "model", "model_ref"),
+      port("prompt", "prompt", "string_value"),
+      port("negative", "negative prompt", "string_value", { optional: true }),
+    ],
+    outputs: [
+      port("positive", "positive", "conditioning"),
+      port("negative", "negative", "conditioning"),
+    ],
+    tags: ["audio", "generation", "prompt", "conditioning", "text"],
+  }),
+  workflowNode("audio-latent-sampler", 0, 0, {
+    title: "Audio Latent Sampler",
+    packageName: "audio-generation-sampler",
+    description: "Samples latent audio from a model, prompt conditioning, seed, duration, and sampler controls.",
+    category: "Audio",
+    tone: "fuchsia",
+    inputs: [
+      port("model", "model", "model_ref"),
+      port("positive", "positive", "conditioning"),
+      port("negative", "negative", "conditioning", { optional: true }),
+      port("seed", "seed", "number_value", { optional: true }),
+      port("seconds", "seconds", "number_value", { optional: true }),
+      port("steps", "steps", "number_value", { optional: true }),
+      port("cfg", "CFG", "number_value", { optional: true }),
+    ],
+    outputs: [port("samples", "latent audio", "latent_batch")],
+    tags: ["audio", "generation", "sampler", "latent", "seed", "duration"],
+  }),
+  workflowNode("audio-vae-decode", 0, 0, {
+    title: "Audio VAE Decode",
+    packageName: "audio-generation-codecs",
+    description: "Decodes sampled latent audio into a waveform payload that can be previewed or exported.",
+    category: "Audio",
+    tone: "cyan",
+    inputs: [
+      port("samples", "latent audio", "latent_batch"),
+      port("vae", "VAE", "vae_ref"),
+    ],
+    outputs: [port("waveform", "waveform", "audio_waveform")],
+    tags: ["audio", "generation", "vae", "decode", "waveform"],
+  }),
+  workflowNode("audio-export", 0, 0, {
+    title: "Audio Export",
+    packageName: "audio-generation-output",
+    description: "Writes a generated waveform to an audio file and exposes it as a reusable media artifact.",
+    category: "Output",
+    tone: "emerald",
+    inputs: [
+      port("waveform", "waveform", "audio_waveform"),
+      port("filename", "filename template", "template_string", { optional: true }),
+    ],
+    outputs: [
+      port("audio", "audio file", "audio_file"),
+      port("media", "media file", "media_file"),
+    ],
+    tags: ["audio", "generation", "export", "file", "media", "output"],
   }),
   workflowNode("data-source", 0, 0, {
     title: "Data Source",
@@ -10258,10 +10368,32 @@ function workflowTypeForPortType(type: PortType): WorkflowTypeSpec {
       return { type: "binary", media_type: "video/*", semantic: "video_file" };
     case "image_file":
       return { type: "binary", media_type: "image/*", semantic: "image_file" };
+    case "image_batch":
+      return { type: "object", properties: [], additional_properties: true, semantic: "image_batch" };
     case "audio_file":
       return { type: "binary", media_type: "audio/*", semantic: "audio_file" };
+    case "audio_waveform":
+      return { type: "object", properties: [], additional_properties: true, semantic: "audio_waveform" };
     case "media_file":
       return { type: "binary", semantic: "media_file" };
+    case "mask_tensor":
+      return { type: "object", properties: [], additional_properties: true, semantic: "mask_tensor" };
+    case "latent_batch":
+      return { type: "object", properties: [], additional_properties: true, semantic: "latent_batch" };
+    case "conditioning":
+      return { type: "object", properties: [], additional_properties: true, semantic: "conditioning" };
+    case "model_ref":
+      return { type: "object", properties: [], additional_properties: true, semantic: "model_ref" };
+    case "vae_ref":
+      return { type: "object", properties: [], additional_properties: true, semantic: "vae_ref" };
+    case "clip_ref":
+      return { type: "object", properties: [], additional_properties: true, semantic: "clip_ref" };
+    case "clip_vision_ref":
+      return { type: "object", properties: [], additional_properties: true, semantic: "clip_vision_ref" };
+    case "upscale_model_ref":
+      return { type: "object", properties: [], additional_properties: true, semantic: "upscale_model_ref" };
+    case "model_patch_ref":
+      return { type: "object", properties: [], additional_properties: true, semantic: "model_patch_ref" };
     case "transcript":
       return { type: "object", properties: [], additional_properties: true, semantic: "transcript" };
     case "subtitle_file":
@@ -10339,12 +10471,34 @@ function workflowSemanticKindToPortType(semantic: WorkflowSemanticKind | undefin
       return "video_file";
     case "image_file":
       return "image_file";
+    case "image_batch":
+      return "image_batch";
     case "audio_file":
       return "audio_file";
+    case "audio_waveform":
+      return "audio_waveform";
     case "audio_wav":
       return "audio_wav";
     case "media_file":
       return "media_file";
+    case "mask_tensor":
+      return "mask_tensor";
+    case "latent_batch":
+      return "latent_batch";
+    case "conditioning":
+      return "conditioning";
+    case "model_ref":
+      return "model_ref";
+    case "vae_ref":
+      return "vae_ref";
+    case "clip_ref":
+      return "clip_ref";
+    case "clip_vision_ref":
+      return "clip_vision_ref";
+    case "upscale_model_ref":
+      return "upscale_model_ref";
+    case "model_patch_ref":
+      return "model_patch_ref";
     case "transcript":
       return "transcript";
     case "subtitle_file":
@@ -12440,8 +12594,19 @@ function rustPortKindToPortType(kind: RustPortSpec["kind"]): PortType | null {
     youtube_collection_url: "youtube_collection_url",
     video_file: "video_file",
     image_file: "image_file",
+    image_batch: "image_batch",
     audio_file: "audio_file",
+    audio_waveform: "audio_waveform",
     media_file: "media_file",
+    mask_tensor: "mask_tensor",
+    latent_batch: "latent_batch",
+    conditioning: "conditioning",
+    model_ref: "model_ref",
+    vae_ref: "vae_ref",
+    clip_ref: "clip_ref",
+    clip_vision_ref: "clip_vision_ref",
+    upscale_model_ref: "upscale_model_ref",
+    model_patch_ref: "model_patch_ref",
     transcript: "transcript",
     subtitle_file: "subtitle_file",
     scene_list: "scene_result",

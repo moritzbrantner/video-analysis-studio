@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 7,
   "nodes": [
     {
       "id": "react-page",
@@ -235,6 +235,79 @@
       ],
       "outputs": [
         { "id": "segments", "label": "Segments", "kind": "transcript" }
+      ]
+    },
+    {
+      "id": "audio-model-loader",
+      "title": "Audio Model Loader",
+      "package_name": "audio-generation-models",
+      "category": "audio",
+      "inputs": [
+        { "id": "checkpoint", "label": "Checkpoint", "kind": "string", "optional": true }
+      ],
+      "outputs": [
+        { "id": "model", "label": "Model", "kind": "model_ref" },
+        { "id": "vae", "label": "VAE", "kind": "vae_ref" }
+      ]
+    },
+    {
+      "id": "audio-prompt-encoder",
+      "title": "Audio Prompt Encoder",
+      "package_name": "audio-generation-conditioning",
+      "category": "audio",
+      "inputs": [
+        { "id": "model", "label": "Model", "kind": "model_ref" },
+        { "id": "prompt", "label": "Prompt", "kind": "string" },
+        { "id": "negative", "label": "Negative Prompt", "kind": "string", "optional": true }
+      ],
+      "outputs": [
+        { "id": "positive", "label": "Positive", "kind": "conditioning" },
+        { "id": "negative", "label": "Negative", "kind": "conditioning" }
+      ]
+    },
+    {
+      "id": "audio-latent-sampler",
+      "title": "Audio Latent Sampler",
+      "package_name": "audio-generation-sampler",
+      "category": "audio",
+      "inputs": [
+        { "id": "model", "label": "Model", "kind": "model_ref" },
+        { "id": "positive", "label": "Positive", "kind": "conditioning" },
+        { "id": "negative", "label": "Negative", "kind": "conditioning", "optional": true },
+        { "id": "seed", "label": "Seed", "kind": "number", "optional": true },
+        { "id": "seconds", "label": "Seconds", "kind": "number", "optional": true },
+        { "id": "steps", "label": "Steps", "kind": "number", "optional": true },
+        { "id": "cfg", "label": "CFG", "kind": "number", "optional": true }
+      ],
+      "outputs": [
+        { "id": "samples", "label": "Latent Audio", "kind": "latent_batch" }
+      ]
+    },
+    {
+      "id": "audio-vae-decode",
+      "title": "Audio VAE Decode",
+      "package_name": "audio-generation-codecs",
+      "category": "audio",
+      "inputs": [
+        { "id": "samples", "label": "Latent Audio", "kind": "latent_batch" },
+        { "id": "vae", "label": "VAE", "kind": "vae_ref" }
+      ],
+      "outputs": [
+        { "id": "waveform", "label": "Waveform", "kind": "audio_waveform" }
+      ]
+    },
+    {
+      "id": "audio-export",
+      "title": "Audio Export",
+      "package_name": "audio-generation-output",
+      "category": "output",
+      "inputs": [
+        { "id": "waveform", "label": "Waveform", "kind": "audio_waveform" },
+        { "id": "filename", "label": "Filename Template", "kind": "template_string", "optional": true }
+      ],
+      "outputs": [
+        { "id": "audio", "label": "Audio File", "kind": "audio_file" },
+        { "id": "media", "label": "Media File", "kind": "media_file" }
       ]
     }
   ]
