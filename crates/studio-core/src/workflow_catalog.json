@@ -1,5 +1,5 @@
 {
-  "version": 7,
+  "version": 8,
   "nodes": [
     {
       "id": "react-page",
@@ -235,6 +235,64 @@
       ],
       "outputs": [
         { "id": "segments", "label": "Segments", "kind": "transcript" }
+      ]
+    },
+    {
+      "id": "text-model-loader",
+      "title": "Text Model Loader",
+      "package_name": "text-generation-models",
+      "category": "text",
+      "inputs": [
+        { "id": "model", "label": "Model Name", "kind": "string", "optional": true },
+        { "id": "config", "label": "Provider Config", "kind": "run_config", "optional": true }
+      ],
+      "outputs": [
+        { "id": "model", "label": "Text Model", "kind": "model_ref" }
+      ]
+    },
+    {
+      "id": "text-prompt-builder",
+      "title": "Text Prompt Builder",
+      "package_name": "text-generation-prompts",
+      "category": "text",
+      "inputs": [
+        { "id": "instructions", "label": "Instructions", "kind": "template_string" },
+        { "id": "text", "label": "Source Text", "kind": "string", "optional": true },
+        { "id": "context", "label": "Context", "kind": "object", "optional": true }
+      ],
+      "outputs": [
+        { "id": "prompt", "label": "Prompt", "kind": "string" },
+        { "id": "template", "label": "Prompt Template", "kind": "template_string" }
+      ]
+    },
+    {
+      "id": "text-completion",
+      "title": "Text Completion",
+      "package_name": "text-generation-runtime",
+      "category": "text",
+      "inputs": [
+        { "id": "prompt", "label": "Prompt", "kind": "string" },
+        { "id": "model", "label": "Model", "kind": "model_ref", "optional": true },
+        { "id": "parameters", "label": "Parameters", "kind": "run_config", "optional": true }
+      ],
+      "outputs": [
+        { "id": "text", "label": "Generated Text", "kind": "string" },
+        { "id": "response", "label": "Raw Response", "kind": "object" }
+      ]
+    },
+    {
+      "id": "text-json-writer",
+      "title": "Text JSON Writer",
+      "package_name": "text-generation-output",
+      "category": "text",
+      "inputs": [
+        { "id": "text", "label": "Generated Text", "kind": "string" },
+        { "id": "response", "label": "Response", "kind": "object", "optional": true },
+        { "id": "schema", "label": "Schema", "kind": "object", "optional": true }
+      ],
+      "outputs": [
+        { "id": "report", "label": "Text Report", "kind": "json_report" },
+        { "id": "data", "label": "Structured Data", "kind": "object" }
       ]
     },
     {
