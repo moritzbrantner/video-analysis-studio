@@ -9,7 +9,7 @@ pub use audio_analysis_transcription::{
     WhisperCppTranscription,
 };
 pub use text_transcripts::{
-    segment_to_owned_text_segment, TranscriptHeuristicAnalyzer, TranscriptSegment,
+    segment_to_owned_text_segment, write_srt, TranscriptHeuristicAnalyzer, TranscriptSegment,
 };
 
 /// Compatibility bridge for the studio's pre-extraction transcription imports.
