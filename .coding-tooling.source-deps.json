@@ -2,6 +2,7 @@
   "schemaVersion": 1,
   "cargo": {
     "configPath": ".cargo/source-deps.toml",
+    "localOnly": true,
     "patches": [
       {
         "package": "moenarch-audio-analysis-processing",
