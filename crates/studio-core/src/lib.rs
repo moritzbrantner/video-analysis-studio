@@ -80,8 +80,7 @@ pub use youtube::{
     discover_youtube_collection_manifest, run_youtube_collection_workflow,
     run_youtube_video_workflow, AlreadyDownloadedPolicy, ExternalCommandConfig,
     FailedProbeBehavior, LocalFileFilterSpec, ManifestFilterSpec, MetadataDepth,
-    ModelCommandConfig, SourceSpec, TranscriptionConfig, TranscriptionEngine, WhisperCppConfig,
-    WhisperCppModel, YoutubeCollectionManifest, YoutubeCollectionManifestItem,
-    YoutubeCollectionManifestRequest, YoutubeCollectionRunRequest, YoutubeCollectionSource,
-    YoutubeRunOptions, YoutubeRunRequest,
+    ModelCommandConfig, SourceSpec, TranscriptionConfig, TranscriptionEngine,
+    YoutubeCollectionManifest, YoutubeCollectionManifestItem, YoutubeCollectionManifestRequest,
+    YoutubeCollectionRunRequest, YoutubeCollectionSource, YoutubeRunOptions, YoutubeRunRequest,
 };
