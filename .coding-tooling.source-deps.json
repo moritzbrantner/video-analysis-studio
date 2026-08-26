@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "cargo": {
+    "configPath": ".cargo/source-deps.toml",
+    "patches": [
+      {
+        "package": "moenarch-audio-analysis-processing",
+        "git": "https://github.com/moritzbrantner/audio-analysis",
+        "rev": "8dd92cbcc77e5270f471117c59d56e0593ab7e32",
+        "localPath": "../audio-analysis/crates/audio/audio-analysis-processing"
+      },
+      {
+        "package": "moenarch-audio-analysis-recognition",
+        "git": "https://github.com/moritzbrantner/audio-analysis",
+        "rev": "8dd92cbcc77e5270f471117c59d56e0593ab7e32",
+        "localPath": "../audio-analysis/crates/audio/audio-analysis-recognition"
+      },
+      {
+        "package": "moenarch-audio-analysis-transcription",
+        "git": "https://github.com/moritzbrantner/audio-analysis",
+        "rev": "8dd92cbcc77e5270f471117c59d56e0593ab7e32",
+        "localPath": "../audio-analysis/crates/audio/audio-analysis-transcription"
+      },
+      {
+        "package": "moenarch-text-transcripts",
+        "git": "https://github.com/moritzbrantner/nlp-stack",
+        "rev": "057689ca1df031d677f4afd9d65eed181c6fca06",
+        "localPath": "../nlp-stack/crates/text/text-transcripts"
+      },
+      {
+        "package": "moenarch-video-analysis-core",
+        "git": "https://github.com/moritzbrantner/visual-analysis",
+        "rev": "d341c668f1baa14cd3d4e99c8ce8f5d39e43a974",
+        "localPath": "../visual-analysis/crates/video/video-analysis-core"
+      },
+      {
+        "package": "moenarch-video-analysis-data",
+        "git": "https://github.com/moritzbrantner/visual-analysis",
+        "rev": "d341c668f1baa14cd3d4e99c8ce8f5d39e43a974",
+        "localPath": "../visual-analysis/crates/video/video-analysis-data"
+      },
+      {
+        "package": "moenarch-video-analysis-detectors",
+        "git": "https://github.com/moritzbrantner/visual-analysis",
+        "rev": "d341c668f1baa14cd3d4e99c8ce8f5d39e43a974",
+        "localPath": "../visual-analysis/crates/video/video-analysis-detectors"
+      },
+      {
+        "package": "moenarch-video-analysis-ffmpeg",
+        "git": "https://github.com/moritzbrantner/visual-analysis",
+        "rev": "d341c668f1baa14cd3d4e99c8ce8f5d39e43a974",
+        "localPath": "../visual-analysis/crates/video/video-analysis-ffmpeg"
+      },
+      {
+        "package": "moenarch-video-analysis-ingest",
+        "git": "https://github.com/moritzbrantner/visual-analysis",
+        "rev": "d341c668f1baa14cd3d4e99c8ce8f5d39e43a974",
+        "localPath": "../visual-analysis/crates/video/video-analysis-ingest"
+      },
+      {
+        "package": "moenarch-video-analysis-recognition",
+        "git": "https://github.com/moritzbrantner/visual-analysis",
+        "rev": "d341c668f1baa14cd3d4e99c8ce8f5d39e43a974",
+        "localPath": "../visual-analysis/crates/video/video-analysis-recognition"
+      },
+      {
+        "package": "moenarch-video-analysis-segmentation",
+        "git": "https://github.com/moritzbrantner/visual-analysis",
+        "rev": "d341c668f1baa14cd3d4e99c8ce8f5d39e43a974",
+        "localPath": "../visual-analysis/crates/video/video-analysis-segmentation"
+      }
+    ]
+  }
+}
