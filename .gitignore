@@ -1,4 +1,5 @@
 .cargo-target/
+/.cargo/source-deps.toml
 target/
 node_modules/
 dist/

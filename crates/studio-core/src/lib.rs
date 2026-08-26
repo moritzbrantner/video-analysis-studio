@@ -1,3 +1,36 @@
+extern crate self as text_analysis_features;
+extern crate self as text_analysis_transcription;
+
+use std::path::Path;
+
+pub use audio_analysis_transcription::{
+    whisper_cpp_catalog, whisper_cpp_system_info, WhisperCppCatalog, WhisperCppConfig,
+    WhisperCppError, WhisperCppModel, WhisperCppPhase, WhisperCppProgressEvent,
+    WhisperCppTranscription,
+};
+pub use text_transcripts::{
+    segment_to_owned_text_segment, write_srt, TranscriptHeuristicAnalyzer, TranscriptSegment,
+};
+
+/// Compatibility bridge for the studio's pre-extraction transcription imports.
+/// New transcription runtime behavior is owned by `audio-analysis`, while text
+/// transcript data and heuristics are owned by `nlp-stack`.
+pub struct WhisperCppTranscriber(audio_analysis_transcription::NativeWhisperCppTranscriber);
+
+impl WhisperCppTranscriber {
+    pub fn new(config: WhisperCppConfig) -> Self {
+        Self(audio_analysis_transcription::NativeWhisperCppTranscriber::new(config))
+    }
+
+    pub fn transcribe_with_progress(
+        &mut self,
+        input: &Path,
+        progress: &mut dyn FnMut(WhisperCppProgressEvent),
+    ) -> std::result::Result<WhisperCppTranscription, WhisperCppError> {
+        self.0.transcribe_file_with_progress(input, progress)
+    }
+}
+
 mod data_sources;
 mod error;
 mod media;
@@ -47,8 +80,7 @@ pub use youtube::{
     discover_youtube_collection_manifest, run_youtube_collection_workflow,
     run_youtube_video_workflow, AlreadyDownloadedPolicy, ExternalCommandConfig,
     FailedProbeBehavior, LocalFileFilterSpec, ManifestFilterSpec, MetadataDepth,
-    ModelCommandConfig, SourceSpec, TranscriptionConfig, TranscriptionEngine, WhisperCppConfig,
-    WhisperCppModel, YoutubeCollectionManifest, YoutubeCollectionManifestItem,
-    YoutubeCollectionManifestRequest, YoutubeCollectionRunRequest, YoutubeCollectionSource,
-    YoutubeRunOptions, YoutubeRunRequest,
+    ModelCommandConfig, SourceSpec, TranscriptionConfig, TranscriptionEngine,
+    YoutubeCollectionManifest, YoutubeCollectionManifestItem, YoutubeCollectionManifestRequest,
+    YoutubeCollectionRunRequest, YoutubeCollectionSource, YoutubeRunOptions, YoutubeRunRequest,
 };
