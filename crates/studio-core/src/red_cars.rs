@@ -29,8 +29,7 @@ use crate::youtube::{
 };
 
 const DEFAULT_TRACK_IOU: f32 = 0.5;
-const DEFAULT_VEHICLE_DETECTOR_SCRIPT: &str =
-    "../../../rust-packages/scripts/opencv_red_car_detector.py";
+const DEFAULT_VEHICLE_DETECTOR_SCRIPT: &str = "../../scripts/opencv_red_car_detector.py";
 const DEFAULT_TARGET_OBJECT: &str = "car";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
