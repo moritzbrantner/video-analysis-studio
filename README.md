@@ -9,8 +9,9 @@ Product workspace for the YouTube/local-video analysis workflow.
 - `apps/ui`: React/Vite UI used by both browser and desktop.
 - `apps/desktop`: Tauri v2 desktop app wrapping the UI and calling Rust commands directly.
 
-The Rust workflow engine uses reusable analysis crates from the sibling `../rust-packages`
-workspace, while this repo owns the app/API workflow surface and catalog directly.
+The Rust workflow engine consumes reusable analysis capabilities through their
+versioned package coordinates, while this repository owns the app/API workflow
+surface, composition, and catalog directly.
 
 ## Local Development
 
@@ -22,9 +23,12 @@ cargo test --workspace
 bun dev
 ```
 
-`video-analysis-studio` and `../rust-packages` are expected to move together. They share a Rust
-toolchain baseline of `1.95`, and the app-owned workflow catalog lives at
-`crates/studio-core/src/workflow_catalog.json`.
+The repository uses Rust `1.95`, and the app-owned workflow catalog lives at
+`crates/studio-core/src/workflow_catalog.json`. Normal development does not
+require a sibling `rust-packages` checkout. Deliberate cross-repository
+co-development may use task-scoped exact source overrides against the canonical
+capability repository without making those source paths part of the committed
+distribution contract.
 
 During development, run the app with `bun dev`. It reads `config/runtime.json` at startup, starts the localhost API from that config, launches the desktop app against the shared UI dev server on the configured port, waits for that UI to come up, and opens the browser version to the same URL. The default UI dev port remains `8702`.
 
