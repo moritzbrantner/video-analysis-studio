@@ -12,7 +12,7 @@ jobs:
   source-contract:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Verify local-only source graph
         run: |
           jq -e '.schemaVersion == 2 and .cargo.localOnly == true' .coding-tooling.source-deps.json >/dev/null
@@ -29,7 +29,7 @@ jobs:
   frontend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
