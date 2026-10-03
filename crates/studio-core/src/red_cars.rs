@@ -29,7 +29,10 @@ use crate::youtube::{
 };
 
 const DEFAULT_TRACK_IOU: f32 = 0.5;
-const DEFAULT_VEHICLE_DETECTOR_SCRIPT: &str = "../../scripts/opencv_red_car_detector.py";
+// Embedded so installed desktop bundles do not depend on the build-time checkout.
+const DEFAULT_VEHICLE_DETECTOR_SCRIPT: &str =
+    include_str!("../../../scripts/opencv_red_car_detector.py");
+const DEFAULT_VEHICLE_DETECTOR_FILE_NAME: &str = "opencv_red_car_detector.py";
 const DEFAULT_TARGET_OBJECT: &str = "car";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -128,7 +131,7 @@ pub fn run_video_red_cars_workflow(
     ));
     let target_object = normalized_target_object(&request.target_object);
     let downloaded_model = ensure_default_sam_model(progress)?;
-    let detector_config = resolve_vehicle_detector(&request.vehicle_detector)?;
+    let detector_config = resolve_vehicle_detector(&request.vehicle_detector, &work_dir)?;
 
     progress(WorkflowProgress::message(
         "video-red-cars",
@@ -344,7 +347,10 @@ fn default_model_bundle_root() -> PathBuf {
     env::temp_dir().join("video-analysis-models")
 }
 
-fn resolve_vehicle_detector(config: &ExternalCommandConfig) -> Result<ExternalCommandConfig> {
+fn resolve_vehicle_detector(
+    config: &ExternalCommandConfig,
+    work_dir: &Path,
+) -> Result<ExternalCommandConfig> {
     if !config.command.as_os_str().is_empty() {
         return Ok(config.clone());
     }
@@ -358,17 +364,18 @@ fn resolve_vehicle_detector(config: &ExternalCommandConfig) -> Result<ExternalCo
                 "python3 is required for the default red car detector".to_string(),
             )
         })?;
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_VEHICLE_DETECTOR_SCRIPT);
-    if !script.exists() {
-        return Err(StudioError::MissingDependency(format!(
-            "default red car detector script is missing: {}",
-            script.display()
-        )));
-    }
+    let script = write_default_vehicle_detector(work_dir)?;
     Ok(ExternalCommandConfig {
         command,
         args: vec![script.display().to_string()],
     })
+}
+
+fn write_default_vehicle_detector(work_dir: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(work_dir)?;
+    let script = work_dir.join(DEFAULT_VEHICLE_DETECTOR_FILE_NAME);
+    fs::write(&script, DEFAULT_VEHICLE_DETECTOR_SCRIPT)?;
+    Ok(script)
 }
 
 fn accepted_labels_for_target(target_object: &str) -> BTreeSet<String> {
@@ -706,6 +713,25 @@ mod tests {
         };
 
         assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn default_detector_is_materialized_from_embedded_script() {
+        let work_dir = tempfile::tempdir().unwrap();
+        let config = ExternalCommandConfig {
+            command: PathBuf::from("custom-detector"),
+            args: vec!["--flag".to_string()],
+        };
+        assert_eq!(
+            resolve_vehicle_detector(&config, work_dir.path()).unwrap(),
+            config
+        );
+
+        let script = write_default_vehicle_detector(work_dir.path()).unwrap();
+        assert_eq!(
+            fs::read_to_string(script).unwrap(),
+            DEFAULT_VEHICLE_DETECTOR_SCRIPT
+        );
     }
 
     #[test]
