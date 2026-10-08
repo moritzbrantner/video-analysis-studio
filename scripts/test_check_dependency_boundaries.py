@@ -19,7 +19,8 @@ class DependencyBoundaryTests(unittest.TestCase):
             for manifest in ["crates/studio-api/Cargo.toml", "apps/desktop/src-tauri/Cargo.toml"]:
                 path = root / manifest
                 path.parent.mkdir(parents=True)
-                path.write_text('[dependencies]\n' + facade + '\n' + extra)
+                local_facade = facade.replace('../studio-core', '../../../crates/studio-core') if manifest.startswith('apps/') else facade
+                path.write_text('[dependencies]\n' + local_facade + '\n' + extra)
             return subprocess.run(["python3", str(root / "scripts/check_dependency_boundaries.py")], capture_output=True, text=True)
 
     def test_current_facade_is_allowed(self):
@@ -41,6 +42,17 @@ class DependencyBoundaryTests(unittest.TestCase):
 
     def test_renamed_facade_is_allowed(self):
         self.assertEqual(self.check(facade='composition = { package = "studio-core", path = "../studio-core" }').returncode, 0)
+
+    def test_external_facades_are_rejected(self):
+        for facade in ['studio-core = "1"', 'studio-core = { git = "https://example.com/fork" }', 'composition = { package = "studio-core", path = "../fork" }']:
+            with self.subTest(facade=facade):
+                self.assertNotEqual(self.check(facade=facade).returncode, 0)
+
+    def test_workspace_facade_uses_root_relative_path(self):
+        self.assertEqual(self.check(facade='composition.workspace = true', workspace='composition = { package = "studio-core", path = "crates/studio-core" }').returncode, 0)
+        for source in ['git = "https://example.com/fork"', 'path = "crates/fork"']:
+            with self.subTest(source=source):
+                self.assertNotEqual(self.check(facade='composition.workspace = true', workspace='composition = { package = "studio-core", ' + source + ' }').returncode, 0)
 
     def test_missing_facade_is_rejected(self):
         self.assertNotEqual(self.check(facade='serde = "1"').returncode, 0)

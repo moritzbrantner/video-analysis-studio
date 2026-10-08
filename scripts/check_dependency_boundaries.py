@@ -37,6 +37,20 @@ def package_identity(key, value, workspace):
     return value.get("package", key) if isinstance(value, dict) else key
 
 
+def is_local_facade(key, value, workspace, manifest):
+    base = manifest.parent
+    if isinstance(value, dict) and value.get("workspace") is True:
+        value = workspace.get(key, {})
+        base = ROOT
+    return (
+        isinstance(value, dict)
+        and value.get("package", key) == "studio-core"
+        and "git" not in value
+        and isinstance(value.get("path"), str)
+        and (base / value["path"]).resolve() == (ROOT / "crates" / "studio-core").resolve()
+    )
+
+
 def main() -> int:
     violations: list[str] = []
     root = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
@@ -49,12 +63,12 @@ def main() -> int:
                 if package.startswith(FORBIDDEN_PREFIXES):
                     violations.append(f"{manifest.relative_to(ROOT)} [{group}]: direct `{package}` dependency (key `{key}`)")
 
-        runtime_packages = {
-            package_identity(key, value, workspace)
+        local_facade = any(
+            is_local_facade(key, value, workspace, manifest)
             for key, value in data.get("dependencies", {}).items()
-        }
-        if "studio-core" not in runtime_packages:
-            violations.append(f"{manifest.relative_to(ROOT)}: missing `studio-core` façade dependency")
+        )
+        if not local_facade:
+            violations.append(f"{manifest.relative_to(ROOT)}: missing local `studio-core` façade dependency")
 
     if violations:
         print("video-analysis-studio dependency boundary violations:")
