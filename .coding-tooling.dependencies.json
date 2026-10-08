@@ -26,8 +26,8 @@
       "relation": "capability"
     }
   ],
-  "maxExactSourceRepositories": 2,
-  "maxPackagesPerSourceRepository": 5,
+  "maxExactSourceRepositories": 3,
+  "maxPackagesPerSourceRepository": 7,
   "legacyRepositories": {
     "moritzbrantner/rust-packages": "moritzbrantner/visual-analysis"
   },

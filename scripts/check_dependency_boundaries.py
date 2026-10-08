@@ -16,6 +16,7 @@ FORBIDDEN_PREFIXES = (
     "text-transcripts",
     "text-analysis-",
     "video-analysis-",
+    "image-analysis-",
     "moenarch-audio-analysis-",
     "moenarch-text-",
     "moenarch-video-analysis-",

@@ -27,7 +27,7 @@ class DependencyBoundaryTests(unittest.TestCase):
 
     def test_all_dependency_tables_reject_canonical_and_renamed_capabilities(self):
         for table in ["dependencies", "dev-dependencies", "build-dependencies", "target.'cfg(unix)'.dependencies", "target.'cfg(unix)'.dev-dependencies", "target.'cfg(unix)'.build-dependencies"]:
-            for package in ["moenarch-audio-analysis-processing", "moenarch-text-transcripts", "moenarch-video-analysis-core", "text-analysis-core", "text-analysis-transcription"]:
+            for package in ["moenarch-audio-analysis-processing", "moenarch-text-transcripts", "moenarch-video-analysis-core", "text-analysis-core", "text-analysis-transcription", "image-analysis-core", "image-analysis-segmentation"]:
                 with self.subTest(table=table, package=package):
                     extra = ('vision = { package = "' + package + '", version = "1" }') if table == "dependencies" else ('[' + table + ']\nvision = { package = "' + package + '", version = "1" }')
                     result = self.check(extra)
