@@ -17,6 +17,10 @@ jobs:
         run: |
           jq -e '.schemaVersion == 2 and .cargo.localOnly == true' .coding-tooling.source-deps.json >/dev/null
           jq -e '.cargo.patches | length > 0 and all(.[]; (.package | length > 0) and (.git | length > 0) and (.rev | test("^[0-9a-f]{40}$")) and (.localPath | length > 0))' .coding-tooling.source-deps.json >/dev/null
+      - name: Verify capability composition boundaries
+        run: |
+          python3 scripts/test_check_dependency_boundaries.py
+          python3 scripts/check_dependency_boundaries.py
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
