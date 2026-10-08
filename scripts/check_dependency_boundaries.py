@@ -14,6 +14,7 @@ OUTER_MANIFESTS = (
 FORBIDDEN_PREFIXES = (
     "audio-analysis-",
     "text-transcripts",
+    "text-analysis-",
     "video-analysis-",
     "moenarch-audio-analysis-",
     "moenarch-text-",
