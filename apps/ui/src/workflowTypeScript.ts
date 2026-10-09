@@ -1,4 +1,4 @@
-import ts from "typescript";
+import ts from "@typescript/typescript6";
 
 import type { WorkflowObjectProperty, WorkflowSemanticKind, WorkflowTypeSpec } from "./api/client";
 
