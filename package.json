@@ -7,6 +7,7 @@
     "apps/*"
   ],
   "scripts": {
+    "check:architecture": "python3 scripts/check_dependency_boundaries.py",
     "dev": "bun ./scripts/dev.mjs",
     "api:dev": "cargo run -p studio-api -- --data-dir ./studio-data",
     "ui:dev": "bun run --cwd apps/ui dev",
