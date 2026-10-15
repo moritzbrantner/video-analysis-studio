@@ -8,5 +8,8 @@
       ],
       "groupName": "Vite and React plugin"
     }
+  ],
+  "extends": [
+    "github>moritzbrantner/coding-agent-conventions"
   ]
 }
