@@ -50,3 +50,14 @@ jobs:
         run: bun run playwright install --with-deps chromium
       - name: Run UI e2e smoke
         run: bun run --cwd apps/ui test:e2e
+
+  merge-ready:
+    name: merge-ready
+    if: ${{ always() }}
+    needs: ["source-contract", "frontend"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: moritzbrantner/reusable-workflows/.github/actions/merge-ready@b0f25f241d76af2584dfc9e375084ff5c5cb97da
+        with:
+          needs: ${{ toJSON(needs) }}
+          required: '["source-contract", "frontend"]'
