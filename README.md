@@ -23,7 +23,7 @@ cargo test --workspace
 bun dev
 ```
 
-The repository uses Rust `1.95`, and the app-owned workflow catalog lives at
+The repository uses stable Rust, and the app-owned workflow catalog lives at
 `crates/studio-core/src/workflow_catalog.json`. Normal development does not
 require a sibling `rust-packages` checkout. Deliberate cross-repository
 co-development may use task-scoped exact source overrides against the canonical
