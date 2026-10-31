@@ -1,0 +1,157 @@
+import { type WorkflowSemanticKind } from "../api/client";
+import type { DataSourceType, PortType, PortTypeColors } from "./types";
+
+export const portTypes: PortType[] = [
+  "run_request",
+  "run_config",
+  "template_string",
+  "string_value",
+  "number_value",
+  "boolean_value",
+  "array_value",
+  "youtube_url",
+  "youtube_collection_url",
+  "video_file",
+  "image_file",
+  "image_batch",
+  "audio_file",
+  "audio_waveform",
+  "media_file",
+  "mask_tensor",
+  "latent_batch",
+  "conditioning",
+  "model_ref",
+  "vae_ref",
+  "clip_ref",
+  "clip_vision_ref",
+  "upscale_model_ref",
+  "model_patch_ref",
+  "transcript",
+  "subtitle_file",
+  "collection_manifest",
+  "collection_item",
+  "collection_report",
+  "collection_table",
+  "video_metadata",
+  "video_frame",
+  "audio_frame",
+  "audio_wav",
+  "song_fingerprint",
+  "song_match",
+  "music_feature",
+  "scene_result",
+  "video_observation",
+  "model_request",
+  "model_prediction",
+  "transcript_segment",
+  "audio_event",
+  "text_event",
+  "http_request",
+  "http_response",
+  "object_value",
+  "data_value",
+  "data_record",
+  "data_bucket",
+  "json_report",
+  "dashboard_view",
+  "song_catalog",
+];
+
+export const defaultPortTypeColors: PortTypeColors = {
+  run_request: "#52525b",
+  run_config: "#71717a",
+  template_string: "#14b8a6",
+  string_value: "#0891b2",
+  number_value: "#16a34a",
+  boolean_value: "#ca8a04",
+  array_value: "#9333ea",
+  youtube_url: "#0ea5e9",
+  youtube_collection_url: "#0284c7",
+  video_file: "#f59e0b",
+  image_file: "#16a34a",
+  image_batch: "#15803d",
+  audio_file: "#06b6d4",
+  audio_waveform: "#0e7490",
+  media_file: "#0f766e",
+  mask_tensor: "#65a30d",
+  latent_batch: "#7c3aed",
+  conditioning: "#a855f7",
+  model_ref: "#4f46e5",
+  vae_ref: "#6366f1",
+  clip_ref: "#2563eb",
+  clip_vision_ref: "#0ea5e9",
+  upscale_model_ref: "#9333ea",
+  model_patch_ref: "#c026d3",
+  transcript: "#4f46e5",
+  subtitle_file: "#7c3aed",
+  collection_manifest: "#0f766e",
+  collection_item: "#059669",
+  collection_report: "#2563eb",
+  collection_table: "#4f46e5",
+  video_metadata: "#d97706",
+  video_frame: "#10b981",
+  audio_frame: "#06b6d4",
+  audio_wav: "#0891b2",
+  song_fingerprint: "#db2777",
+  song_match: "#be123c",
+  music_feature: "#65a30d",
+  scene_result: "#22c55e",
+  video_observation: "#8b5cf6",
+  model_request: "#a855f7",
+  model_prediction: "#7c3aed",
+  transcript_segment: "#6366f1",
+  audio_event: "#0e7490",
+  text_event: "#d946ef",
+  http_request: "#2563eb",
+  http_response: "#0d9488",
+  object_value: "#db2777",
+  data_value: "#334155",
+  data_record: "#64748b",
+  data_bucket: "#475569",
+  json_report: "#0284c7",
+  dashboard_view: "#2563eb",
+  song_catalog: "#ea580c",
+};
+
+export const dataSourceOutputTypes: DataSourceType[] = portTypes.filter(
+  (type) => type !== "run_request" && type !== "dashboard_view",
+);
+
+export const streamBridgePortDescriptors: Array<{ id: string; label: string; type: PortType }> = [
+  { id: "collection_item", label: "collection items", type: "collection_item" },
+  { id: "video_file", label: "video files", type: "video_file" },
+  { id: "image_file", label: "image files", type: "image_file" },
+  { id: "video_frame", label: "video frames", type: "video_frame" },
+  { id: "audio_frame", label: "audio frames", type: "audio_frame" },
+  { id: "song_fingerprint", label: "fingerprints", type: "song_fingerprint" },
+  { id: "song_match", label: "song matches", type: "song_match" },
+  { id: "music_feature", label: "music features", type: "music_feature" },
+  { id: "scene_result", label: "scenes", type: "scene_result" },
+  { id: "video_observation", label: "observations", type: "video_observation" },
+  { id: "model_request", label: "model requests", type: "model_request" },
+  { id: "model_prediction", label: "predictions", type: "model_prediction" },
+  { id: "transcript_segment", label: "transcript segments", type: "transcript_segment" },
+  { id: "audio_event", label: "audio events", type: "audio_event" },
+  { id: "text_event", label: "text events", type: "text_event" },
+  { id: "http_request", label: "HTTP requests", type: "http_request" },
+  { id: "http_response", label: "HTTP responses", type: "http_response" },
+  { id: "data_value", label: "data values", type: "data_value" },
+  { id: "data_record", label: "records", type: "data_record" },
+  { id: "data_bucket", label: "buckets", type: "data_bucket" },
+];
+
+export function isDataSourceType(value: unknown): value is DataSourceType {
+  return typeof value === "string" && dataSourceOutputTypes.includes(value as DataSourceType);
+}
+
+export function isWorkflowSemanticKind(value: unknown): value is WorkflowSemanticKind {
+  return typeof value === "string";
+}
+
+export function isPortType(value: string | undefined): value is PortType {
+  return portTypes.includes((value ?? "") as PortType);
+}
+
+export function formatPortType(type: PortType, stream = false): string {
+  return `${type.replace(/_/g, " ")}${stream ? " stream" : ""}`;
+}

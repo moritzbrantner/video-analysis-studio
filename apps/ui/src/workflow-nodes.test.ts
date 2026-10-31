@@ -151,7 +151,9 @@ const allowedTones = new Set([
   "zinc",
 ]);
 
-const workflowSource = readFileSync(join(import.meta.dir, "main.tsx"), "utf8");
+const workflowSource = ["workflow-editor/portTypes.ts", "workflow-editor/nodeCatalog.ts"]
+  .map((path) => readFileSync(join(import.meta.dir, path), "utf8"))
+  .join("\n");
 const workflowCatalogJsonSource = readFileSync(
   join(import.meta.dir, "../../../crates/studio-core/src/workflow_catalog.json"),
   "utf8",
@@ -162,7 +164,7 @@ const workflowCatalogDefinition = JSON.parse(workflowCatalogJsonSource) as {
 };
 const workflowSeedJsonSource = readFileSync(join(import.meta.dir, "workflow-seeds.json"), "utf8");
 const workflowSeedDefinitions = JSON.parse(workflowSeedJsonSource) as WorkflowSeedDefinitionsFixture;
-const sourceFile = ts.createSourceFile("main.tsx", workflowSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const sourceFile = ts.createSourceFile("workflow-catalog.ts", workflowSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 const topLevelConstants = collectTopLevelConstants(sourceFile);
 const portTypes = new Set(readStringArrayConstant("portTypes") as PortType[]);
 const streamBridgePortDescriptors = readStreamBridgePortDescriptors();
